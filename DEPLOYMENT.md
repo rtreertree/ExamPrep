@@ -10,37 +10,32 @@ entry point uses the same application and migrations.
    default branch **main**. This folder had no Git history; the first commit preserves
    the existing application. Local secret files, dependencies and generated builds
    are ignored. Do not commit them.
-2. In GitHub Settings → Environments, use **integration** and **production**, each
-   restricted to the branch `main` (no tag rules). These restrictions and the
-   verified production account variable were configured during setup. Add the
-   configuration below through those environments, never through chat or source.
-3. Create a **separate Neon CI project**, with a parent branch named **ci-empty**.
-   Its configured database must have no application tables or users. Do not clone
-   production or point CI at a production project. Give CI a project-scoped Neon
-   API key able to create/read/delete branches and retrieve connection URIs there.
-4. Choose a separate production Neon database. Keep production credentials out of
-   the CI project. Copy its pooled and direct URLs into the production environment.
-   Enable TLS (`sslmode=require` or a stricter verification mode) on both.
-5. Use the active `phonet.app` zone in the connected deployment Cloudflare account.
+2. In GitHub Settings → Environments, use **production**, restricted to the branch
+   `main` (no tag rules). This restriction and the verified account variable were
+   configured during setup. Add the configuration below through that environment,
+   never through chat or source. No integration environment or Neon API key is needed.
+3. Choose a production Neon database separate from local development/test data.
+   Copy its pooled and direct URLs into the production environment. Enable TLS
+   (`sslmode=require` or a stricter verification mode) on both.
+4. Use the active `phonet.app` zone in the connected deployment Cloudflare account.
    The hostname was corrected to `exam.phonet.app` by the owner after account
    inspection; no DNS record was replaced.
    The `production` Wrangler environment attaches the exact requested custom domain
    and lets Cloudflare manage its DNS/certificate. Check for an existing conflicting
    record/service before the initial attachment; never overwrite another service.
-6. Provision the initial Worker/domain with an authorized administrator, or give the
+5. Provision the initial Worker/domain with an authorized administrator, or give the
    initial deployment token the permissions to create the Worker. For ongoing CI,
    use a token scoped to **exam-prep** with Workers **Editor** access; changing the
    custom domain also requires zone **Workers Routes Write** on `phonet.app` only.
    Legacy API-token UI names are **Workers Scripts: Edit** and **Workers Routes:
    Edit**. Add account/zone read access only if required for Wrangler discovery.
    Do not grant unrelated KV, R2, D1, DNS-edit or all-zone permissions.
-7. GitHub Actions is enabled. `main` is protected with the PR CI check
+6. GitHub Actions is enabled. `main` is protected with the PR CI check
    **Typecheck, unit tests, builds and Worker package**, up-to-date branches,
    disabled force pushes/deletion, and owner review for changes. Administrator
    recovery bypass remains available. CODEOWNERS identifies the owner. Environment reviewers are optional; enabling
-   them adds an approval gate to otherwise automatic releases. Keep integration
-   available to scheduled cleanup without a human approval gate.
-8. Push/merge reviewed source to `main`, or select Actions → **Release** → Run
+   them adds an approval gate to otherwise automatic releases.
+7. Push/merge reviewed source to `main`, or select Actions → **Release** → Run
    workflow on **main**. No arbitrary SHA or PR-ref deployment input is accepted.
 
 ## Exact environment configuration
@@ -61,20 +56,8 @@ the release workflow, not another secret or a `VITE_` setting. Do not rotate an
 existing pepper when connecting an existing database: preserve the pepper that
 created its password hashes. Changing it makes those passwords unverifiable.
 
-GitHub **integration** environment:
-
-| Kind | Name | Value/purpose |
-| --- | --- | --- |
-| Secret | `NEON_API_KEY` | API key scoped to the dedicated CI project |
-| Variable | `NEON_PROJECT_ID` | Dedicated CI project ID |
-| Variable | `NEON_PARENT_BRANCH_ID` | ID of that project's empty `ci-empty` branch |
-| Variable | `NEON_DATABASE_NAME` | Database inherited from the empty parent |
-| Variable | `NEON_ROLE_NAME` | Role inherited from the empty parent; can apply migrations and install pgcrypto |
-
-Each run retrieves **its child branch's** pooled/direct URLs and generates fresh
-auth secrets. They are masked before writing the runner environment, never exposed
-as job outputs, and never copied from production. GitHub supplies run/repository
-IDs automatically. No Cloudflare token is needed by integration tests.
+GitHub requires no Neon management API key, CI project, branch IDs or test-database
+secrets. Production connection URLs are still required for persistence and migrations.
 
 Cloudflare production bindings:
 
@@ -84,8 +67,7 @@ Cloudflare production bindings:
 | `BETTER_AUTH_URL` | Production `vars`, exact HTTPS origin above |
 | `DATABASE_URL`, `BETTER_AUTH_SECRET`, `PASSWORD_PEPPER` | Worker secrets uploaded atomically with code from GitHub production secrets |
 
-The direct migration URL, Neon API key and Cloudflare API token are **never Worker
-bindings**. No Hyperdrive, Pages, extra database, OAuth provider or mail service is
+The direct migration URL and Cloudflare API token are **never Worker bindings**. No Hyperdrive, Pages, extra database, OAuth provider or mail service is
 needed. `PORT` applies only to Node. Local `.env`/`.dev.vars` remain ignored and are
 not uploaded. Never enable SQL parameter logging or dump runtime environments.
 
@@ -97,23 +79,7 @@ not uploaded. Never enable SQL parameter logging or dump runtime environments.
   Actions are pinned to verified release commits; Node is 24.14.0 and the existing
   dependency lockfile is retained. Checkout does not persist Git credentials;
   package-manager caches are disabled between trust boundaries.
-- **Trusted `main` only:** after CI passes, create a disposable Neon branch, apply
-  the complete migration chain, then run all five live API tests and all three
-  Chromium workflows sequentially on packaged Node and local Workers/workerd.
-  Tests cover auth/password changes, two-account isolation, strict import/export,
-  persistence/resume, revision conflicts, grading/partial credit, immutable snapshots,
-  source deletion, mistake retries, flashcards, draft recovery and responsive UI.
-  The auth limiter stays enabled. Browser plugin was unavailable locally; the
-  repository's pinned Playwright Chromium suite supplies browser acceptance.
-- Cleanup runs with `always()` after failures. Test suites remove their unique
-  accounts; branch deletion removes the remaining isolated database/session/rate
-  limiter state. Interrupted POST responses are recovered by exact run name.
-  A six-hour scheduled/manual janitor removes only this repository's CI-prefixed,
-  nondefault, unprotected children of the configured parent older than two hours.
-  It paginates and rechecks live metadata before deleting. If Actions is disabled
-  or the API is unavailable, run cleanup manually after restoring access. Neon
-  branch TTL is not assumed: the current API documents access restrictions.
-- **Production:** only after both jobs succeed, rebuild/dry-run, validate configuration,
+- **Production:** only after the CI checks succeed, rebuild/dry-run, validate configuration,
   apply production migrations with the direct URL, run the existing free-tier/password
   readiness guard, then deploy a matching code/secrets version. A failed readiness
   check prevents deployment, including when legacy scrypt credentials remain.
@@ -125,11 +91,16 @@ not uploaded. Never enable SQL parameter logging or dump runtime environments.
   JavaScript, `/history` SPA fallback, `/api/health`, JSON API errors and unauthenticated
   private-response cache policy. Smoke creates no accounts and makes no writes.
 
-Never use `pull_request_target` to execute PR code. Secret-backed acceptance is
-intentionally unavailable to fork and same-repository PR heads; merge only reviewed
-changes to trusted `main` before running it. Do not weaken environment branch rules
-to make a PR integration run possible. Do not run a second Cloudflare Git build
-pipeline that can deploy without these checks.
+GitHub runs no live database integration or browser acceptance tests, creates no Neon
+branches and schedules no branch cleanup. The optional local API/browser suites use
+only an existing dedicated test database connection; no Neon API key is needed.
+Those local checks do not gate deployment. Run them locally when changing auth,
+ownership, persistence, grading or migrations.
+
+Never use `pull_request_target` to execute PR code. Production credentials are
+available only to the production deployment job on trusted `main`; do not weaken
+its environment branch rules. Do not run a second Cloudflare Git build pipeline
+that can deploy without these checks.
 
 ## Origins, routing and previews
 
@@ -145,9 +116,8 @@ must be valid on the production hostname. Nothing is split across CORS origins.
 
 Public PR/branch previews are deliberately **disabled** (`preview_urls: false`;
 production `workers_dev: false`). A version URL would share production resources.
-This implementation uses isolated local Workers in CI instead. To add public previews
-later, create a separate Worker and disposable Neon branch per preview, generate
-independent auth secrets and use that preview's **exact HTTPS origin**; never reuse
+To add public previews later, create a separate Worker and disposable Neon branch
+per preview, generate independent auth secrets and use that preview's **exact HTTPS origin**; never reuse
 production secrets or data. Add close/cancel cleanup before enabling preview URLs.
 
 ## Migrations and rollback
@@ -162,8 +132,8 @@ Use expand → migrate/backfill → contract across separate releases: additive 
 first, code supporting both shapes next, remove old fields only after old code and
 rollback needs are retired. A deploy failure can leave new schema in place; it is
 not undone automatically. Review lock duration and take/verify a Neon recovery
-point before risky changes. The CI empty branch proves fresh installation, not every
-upgrade/backfill against existing production data.
+point before risky changes. CI does not exercise migrations against a database;
+validate schema upgrades and backfills locally against a dedicated test database.
 
 For an application rollback, pause new releases, inspect the currently deployed
 version and schema compatibility, then use an authorized shell:
@@ -204,8 +174,9 @@ auth. Measure deployed authentication and maximum-size import/grading/retry CPU
 before production reliance. Local Docker validation needs a running Docker engine;
 GitHub CI builds the image independently.
 
-Still required: integration's Neon API key/four variables, production's five secrets,
-and production database region for an explicit placement decision.
+Production uses the five secrets listed above. Supply the production database
+region before choosing explicit placement. No Neon management API key is required.
+An older integration environment may contain saved settings, but no workflow uses it.
 The test database was not promoted to production. No production migration or public
 deployment has been performed as part of local validation.
 
@@ -218,5 +189,4 @@ deployment has been performed as part of local validation.
 - [Cloudflare deployment permissions](https://developers.cloudflare.com/workers/authorization/workers/)
 - [Cloudflare rollback limitations](https://developers.cloudflare.com/workers/configuration/versions-and-deployments/rollbacks/)
 - [Prisma 7 configuration and direct migration URL](https://www.prisma.io/docs/guides/upgrade-prisma-orm/v7)
-- [Neon branch creation](https://neon.com/docs/reference/api/branches/create-project-branch), [connection URIs](https://neon.com/docs/reference/api/projects/get-connection-uri), [pagination](https://neon.com/docs/reference/api/branches/list-project-branches)
 - [Better Auth Prisma compatibility](https://better-auth.com/docs/adapters/prisma) and [secure cookies](https://better-auth.com/docs/concepts/cookies)

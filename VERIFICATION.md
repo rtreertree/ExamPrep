@@ -1,5 +1,21 @@
 # Verification — 8 November 2026
 
+## CI without Neon integration — 8 November 2026
+
+At the owner's request, GitHub no longer runs live database/API/browser acceptance,
+provisions Neon branches or schedules branch cleanup. The branch-management helper
+and its tests were removed; production configuration safety tests remain. Release
+now depends only on regular CI before the protected production job. No Neon API key
+or integration environment is required. Local opt-in acceptance suites remain for
+manual verification with a dedicated database connection, without a Neon API key.
+
+Current change validation: TypeScript passed, **99 unit tests passed** (five local
+live-database tests skipped), workflow YAML parsed and `git diff --check` passed.
+No live database tests were run for this removal.
+
+The reports below describe historical checks and the previous pipeline; they are
+not requirements for the current deployment flow. See DEPLOYMENT.md for current setup.
+
 ## GitHub CI/CD follow-up — 8 November 2026
 
 Read every project-owned Markdown file before changes; no applicable AGENTS.md
@@ -20,7 +36,7 @@ test database, and corrected the production hostname to **exam.phonet.app**.
 | Configured-secret scan | Passed; local environment values absent from source |
 | Docker locally | Unavailable: Docker daemon is not running; GitHub CI includes image build |
 | Actual GitHub clean-checkout CI and Docker build | Passed in the initial Release run |
-| Neon branch API automation | Cleanup/credential boundaries covered with mocked API tests; live provisioning requires the integration API key |
+| Neon branch API automation | Removed from the current pipeline at the owner's request |
 
 The new smoke check caught `/api` being served by SPA fallback in an earlier test
 configuration. Both the Worker-first asset route and Worker dispatch now include
@@ -48,8 +64,7 @@ The first real Release run passed all clean-checkout checks and the Docker build
 then stopped at missing `NEON_API_KEY` configuration. Production was skipped before
 migrations or deployment. Cleanup now exits successfully when setup failed before
 a branch was created; both this path and successful branch provisioning/secret
-masking are covered by regression tests. Live branch provisioning remains unverified
-until the dedicated CI project/key is configured.
+masking are covered by regression tests. Branch provisioning was never executed and has now been removed.
 
 The free-tier follow-up at the end of this document supersedes the original password-hashing and paid-tier configuration notes below.
 

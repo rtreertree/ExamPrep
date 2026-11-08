@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 
-# Never cancel a migration or leave a test branch behind on a newer push.
+# Never cancel an active production migration on a newer push.
 concurrency:
   group: exam-prep-production
   cancel-in-progress: false
@@ -18,45 +18,9 @@ jobs:
     if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/ci.yml
 
-  acceptance:
-    name: Neon acceptance on Node and Workers
-    needs: checks
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    environment: integration
-    env:
-      NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
-      NEON_PARENT_BRANCH_ID: ${{ vars.NEON_PARENT_BRANCH_ID }}
-      NEON_DATABASE_NAME: ${{ vars.NEON_DATABASE_NAME }}
-      NEON_ROLE_NAME: ${{ vars.NEON_ROLE_NAME }}
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 24.14.0
-          package-manager-cache: false
-      - name: Create disposable test branch and fresh authentication secrets
-        env:
-          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
-        run: node scripts/neon-ci.mjs create
-      - run: npm ci
-      - run: npm run build
-      - run: npm exec -- playwright install --with-deps chromium
-      - name: Apply migrations to disposable database only
-        run: npm run db:migrate
-      - name: Exercise both runtimes with API and Chromium acceptance
-        run: npm run test:acceptance
-      - name: Delete disposable branch even after a failed test
-        if: always()
-        env:
-          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
-        run: node scripts/neon-ci.mjs cleanup
-
   production:
     name: Migrate, deploy and smoke test production
-    needs: [checks, acceptance]
+    needs: checks
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment:
