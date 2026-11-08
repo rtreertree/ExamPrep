@@ -1,0 +1,11 @@
+node_modules
+.env*
+.dev.vars*
+.git
+.wrangler
+dist
+generated
+test-results
+playwright-report
+design/references
+*.log

@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "title": "Calculus practice",
+  "description": "Review integration and differentiation.",
+  "kind": "exam",
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single_choice",
+      "prompt": "Evaluate $\\int_0^1 x^2\\,dx$.",
+      "options": [
+        {
+          "id": "a",
+          "text": "$\\frac{1}{2}$"
+        },
+        {
+          "id": "b",
+          "text": "$\\frac{1}{3}$"
+        },
+        {
+          "id": "c",
+          "text": "$1$"
+        }
+      ],
+      "answer": "b",
+      "explanation": "An antiderivative is $x^3/3$. Evaluating at the endpoints gives $1/3$."
+    },
+    {
+      "id": "q2",
+      "type": "written",
+      "prompt": "Differentiate $x^3$ using the power rule and show your substitution.",
+      "answer": "Using $\\frac{d}{dx}x^n = nx^{n-1}$ with $n=3$ gives $3x^{3-1}=3x^2$.",
+      "rubric": [
+        {
+          "id": "rule",
+          "description": "State the correct power rule (1 point) and identify $n=3$ (1 point).",
+          "points": 2
+        },
+        {
+          "id": "result",
+          "description": "Substitute to obtain $3x^{3-1}$ (1 point), simplify the exponent to $2$ (1 point), and state the final derivative $3x^2$ (1 point).",
+          "points": 3
+        }
+      ]
+    },
+    {
+      "id": "q3",
+      "type": "written",
+      "prompt": "What is the derivative of a constant function?",
+      "answer": "The derivative is $0$.",
+      "explanation": "A constant function has no change in value as its input changes."
+    }
+  ]
+}

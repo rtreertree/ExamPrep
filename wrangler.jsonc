@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "exam-prep",
+  "main": "server/worker.ts",
+  "compatibility_date": "2026-11-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"],
+  },
+  // Use the account's Workers Free limits; do not request a paid CPU allowance.
+  "minify": true,
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+}

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "title": "Derivative rules",
+  "description": "Recall each rule before revealing its answer.",
+  "kind": "flashcards",
+  "cards": [
+    {
+      "id": "c1",
+      "front": "What is the product rule for differentiable functions $f$ and $g$?",
+      "back": "For differentiable $f$ and $g$:\n\n$$\n\\frac{d}{dx}(fg) = f'g + fg'\n$$"
+    },
+    {
+      "id": "c2",
+      "front": "What is the derivative of a constant function?",
+      "back": "The derivative is $0$ because the function's value does not change."
+    }
+  ]
+}

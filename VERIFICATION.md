@@ -1,0 +1,86 @@
+# Verification — 8 November 2026
+
+The free-tier follow-up at the end of this document supersedes the original password-hashing and paid-tier configuration notes below.
+
+The application was built and exercised against the user-confirmed dedicated Neon test database. No public deployment or production-data modification was performed. Disposable test accounts were confirmed cleaned up after the final run.
+
+| Check | Result |
+| --- | --- |
+| Shared validation, grading, and reversible-storage tests | **82 passed** |
+| Real database API acceptance, packaged Node entry point | **4 passed** |
+| Real database API acceptance, local Cloudflare Worker | **4 passed** |
+| Chromium browser workflows, packaged Node entry point | **3 passed** |
+| Chromium browser workflows, local Cloudflare Worker | **3 passed** |
+| TypeScript checks and production build | Passed |
+| Prisma schema validation and migration status | Passed; initial migration applied to test database |
+| Worker dry-run package and generated binding types | Passed; no deployment |
+| Complete dependency audit | **0 reported vulnerabilities** |
+| Configured-secret scan of source/public/build artifacts | Passed |
+| Both origins: HTML security headers and JSON API routing | Passed |
+| Docker image build/run | **Unavailable: local Docker engine is not running** |
+
+Tested versions include Node 24.14.0, React 19.3.1, Vite 7.3.7, Hono 4.13.17, Prisma/client/Neon adapter 7.10.1, Better Auth 1.7.18, Zod 4.6.7, Wrangler 4.158.0, Vitest 5.1.0, and Playwright 1.65.0. Exact dependencies and transitive resolutions are pinned in the lockfile.
+
+## Behavior exercised
+
+The API suite covers two-account isolation across protected operations, authenticated reads and export, strict duplicate-key rejection, concurrent revision checks, cross-session resume, repeated/concurrent submission, frozen responses, invalid rubric bounds, separate automatic/self-assessed scores, source edits/deletion, immutable snapshots, mistake selection, fresh retry responses, flashcard reveal/early finish/counts, account password changes, session revocation/logout, and private pagination across 31 records. Direct database checks confirm that snapshot/result mutation is rejected. Unusual valid IDs, Unicode, JSON-escaped NUL, isolated surrogate escapes, and storage-escape-like literal text are tested without changing their public content.
+
+The browser flows exercise registration, verified clipboard prompt copying, import by paste and file, validation errors, Markdown/math rendering, draft restore/discard, conflicts and Save as new, manual exam/deck creation, rubric authoring/reordering, export preservation, exam save/refresh/resume, submission, binary assessment and 3/5 rubric credit, mistake retry, flashcard reveal/ratings/summary, history listing/resume/completed review, and explicit sign-out. Failure injection verifies retained inputs after failed saves and expired sessions, plus unavailable device storage. Account switching verifies that another account cannot recover the first account's draft.
+
+The final rubric test types a two-digit award, waits beyond ordinary answer debounce, and confirms that assessment remains pending until the field is left. It also exercises prototype-like question/criterion IDs, invalid formula warnings, and locally scrolling long inline/display formulas at 320 px.
+
+The persistent auth limiter remained enabled throughout. Closely spaced test runs correctly produced HTTP 429; test helpers respect the server's retry interval rather than disabling throttling.
+
+## Browser and visual verification
+
+The Browser plugin was unavailable, so verification used the repository's Playwright Chromium tests against `http://127.0.0.1:8787` (packaged Node) and `http://127.0.0.1:8788` (local Worker). Page title/identity, meaningful content, primary interactions, framework-error absence, and console health were checked. Expected injected failures and server throttling were distinguished from application errors.
+
+The accepted references are `design/references/library-minimal.png`, `flashcards-minimal.png`, `exam-practice.png`, `editor.png`, and `mobile-library.png`, with the written tokens/layout rules in `design.md` taking precedence. Reference images and latest browser screenshots were inspected with `view_image`. Desktop screenshots use the native **1536 × 1024** reference size; responsive checks cover **1280, 768, 390, and 320 px**. Editor and practice also run in short 540 px viewports with focused fields. Reduced motion, keyboard tabs, dialog Escape/dismissal, returned focus, horizontal overflow containment, and formula readability were checked.
+
+| Comparison point | Reference / written rule | Verified implementation or intentional difference |
+| --- | --- | --- |
+| Workspace composition | Open editorial list, narrow sidebar, margin mark | Native lists, 216 px sidebar, shared lime selection; no decorative dashboard cards |
+| Palette/material | Matte charcoal, faint ambient tint, selective frosting | Shared tokens/material recipes; matte questions/cards, frosted navigation/overlays with opaque fallbacks |
+| Typography | Instrument Sans, IBM Plex Mono, KaTeX fonts | Locally bundled fonts/licenses; 64 px desktop / 40 px phone library heading; stable math rendering |
+| Controls | Solid lime primary, outlined secondary, 44 px targets | Shared buttons, fields, menus, tabs, rubric controls; row Practice stays secondary |
+| Focus view | 72 px header, centered study column, stable answer rows | Shared exam/deck frame; maximum 800 px study content and readable local math overflow |
+| Responsive rows | 20 px phone gutters; actions on their own line | No page-wide overflow at 390 or 320 px; full titles remain readable |
+| Real content/copy | Example image lettering/counts are illustrative | Actual imported/manual data and real counts; “Your library”, Import, Create, filters, Library/History/Account preserved |
+| Motion | Quiet reveal with one accessible face; reduced-motion alternative | Midpoint face swap, rating actions after settling, timer cleanup, immediate reduced-motion/short-screen reveal |
+
+Visual fixes made during verification: correct field-label associations, locally served fonts under CSP, larger option formulas, non-mirrored flashcard reveal, and screenshots taken after real rows load and animation settles. Intentional differences from raster concepts follow written geometry/type tokens and actual authored content; no image is used as an application background. The implementation was visually verified against the accepted minimal direction.
+
+Calculated contrast checks include muted text on raised surfaces **5.63:1**, muted text over the brightest ambient gradient **6.31:1**, primary text over composited navigation **16.71:1**, control borders against the highest surface **3.05:1**, and primary action labels **14.83:1**.
+
+Screenshots and temporary browser output were produced outside the repository and removed after inspection. The checked-in browser tests reproduce them in `/tmp`.
+
+## Remaining verification limits
+
+- Docker packaging is delivered, but its image could not be built or launched without a running Docker engine. The actual packaged Node entry point passed the database and browser suites directly.
+- Workers verification used the local workerd runtime and real Neon persistence. No public Worker was deployed; paid-tier production CPU accounting for password hashing was not benchmarked. Secure hashing defaults were retained.
+- Chromium desktop/mobile emulation and reduced motion were exercised. Physical devices, a real mobile software keyboard, assistive-technology sessions, Safari/Firefox, and engines without backdrop-filter support were not available in this run. Short focused-field viewports cover available-space behavior; opaque fallback recipes are present in CSS.
+
+## Free-tier follow-up — 8 November 2026
+
+Removed the paid-only CPU allowance and enabled Worker minification. Better Auth now delegates password hashing/verification to PostgreSQL pgcrypto bcrypt at cost 12 after an HMAC-SHA384/base64 pre-hash using a separate stable `PASSWORD_PEPPER`. This keeps the expensive KDF out of Worker execution and preserves long/Unicode/NUL password input without bcrypt truncation. The pgcrypto migration was applied only to the dedicated test database. Local ignored runtime files received the same generated pepper; no credential values were written to source or documentation.
+
+| Follow-up check | Result |
+| --- | --- |
+| Shared/domain/storage/password unit tests | **98 passed** |
+| Live database API acceptance, packaged Node | **5 passed** |
+| Live database API acceptance, local Worker | **5 passed** |
+| Complete study browser workflow, Node | **1 passed** |
+| Complete study browser workflow, local Worker | **1 passed** |
+| TypeScript and production build | Passed |
+| Minified Worker dry-run package | Passed; **1619 KiB compressed** |
+| Static asset count | **105 files** |
+| Dependency audit after adding pinned JSONC parser | **0 reported vulnerabilities** |
+| Configured-secret scan of source/public/build files | Passed; **190 files** checked |
+| Free-tier deployment readiness | Package/settings/database hashing passed; **blocked by one existing legacy credential** |
+| Real Cloudflare Free CPU enforcement | **Not verified; no public deployment performed** |
+
+New password tests cover parameterized SQL, cost bounds, Unicode normalization, long suffixes, NUL, pepper mismatch, random salts, wrong passwords, sanitized database errors, malformed hash rejection, and compare-and-set migration. Live tests exercise the same account ID and study content before/after migration. Node upgrades a verified legacy credential; Worker refuses it without running scrypt, then accepts the migrated credential. Existing password-change/session-revocation and ownership tests still pass.
+
+The existing non-test account was not modified by test cleanup or reset. Its owner must sign out and sign in once on the updated Node application to migrate it. `npm run cloudflare:check -- --local` correctly reports this remaining requirement; it must not be bypassed for deployment. Production migrations and secret provisioning remain deployment setup steps. Preserve/back up `PASSWORD_PEPPER` and supply the same value to runtimes sharing a database. Old application versions cannot verify the new hash format.
+
+Workers Free retains request, CPU, memory, and other platform quotas; Neon has separate compute/storage quotas. Local workerd/API/browser success does not establish production CPU compliance for every accepted workload. Measure authentication and maximum-size import/grading operations on the target free account before production reliance. Docker image execution and other previously listed unavailable checks were not repeated.
