@@ -10,7 +10,7 @@ test database, and corrected the production hostname to **exam.phonet.app**.
 | --- | --- |
 | Lockfile installation / dependency audit | `npm ci`; 0 reported vulnerabilities |
 | TypeScript, frontend and packaged Node build | Passed |
-| Focused unit tests including deployment safeguards | 102 passed; 5 live tests skipped in ordinary unit execution |
+| Focused unit tests including deployment safeguards | 104 passed; 5 live tests skipped in ordinary unit execution |
 | Live Neon API acceptance | 5 passed on Node; 5 passed on local Worker |
 | Chromium acceptance | All 3 workflows passed on each runtime (6 total) |
 | Frontend/API routing/cache smoke | Passed on Node and Worker after fixing bare `/api` handling |
@@ -19,6 +19,7 @@ test database, and corrected the production hostname to **exam.phonet.app**.
 | YAML syntax and action compatibility | YAML parsed; checkout v6.1.0 and setup-node v6.5.0 release SHAs verified; node24 action runtimes checked |
 | Configured-secret scan | Passed; local environment values absent from source |
 | Docker locally | Unavailable: Docker daemon is not running; GitHub CI includes image build |
+| Actual GitHub clean-checkout CI and Docker build | Passed in the initial Release run |
 | Neon branch API automation | Cleanup/credential boundaries covered with mocked API tests; live provisioning requires the integration API key |
 
 The new smoke check caught `/api` being served by SPA fallback in an earlier test
@@ -33,13 +34,22 @@ removed by the suites; disposable runtime configuration was removed in `finally`
 The folder initially had no Git repository. Its existing contents were preserved
 in an initial commit and connected to the owner's verified empty GitHub repository.
 GitHub integration/production environments are restricted to main, and the verified
-Cloudflare account ID is configured. No production database was used for testing,
+Cloudflare account ID is configured. Main is protected with required PR CI, owner
+review and resolved conversations; force pushes/deletion are disabled (owner
+administrator recovery bypass remains available). No production database was used for testing,
 no production migrations ran, and no public Worker deployment is claimed. Exact
 remaining setup and rollback procedures are in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 The standalone workflow-validator binary could not be downloaded because the
 release host/API returned errors. YAML parsing and actual GitHub workflow execution
 provide the available workflow checks; full actionlint verification is not claimed.
+
+The first real Release run passed all clean-checkout checks and the Docker build,
+then stopped at missing `NEON_API_KEY` configuration. Production was skipped before
+migrations or deployment. Cleanup now exits successfully when setup failed before
+a branch was created; both this path and successful branch provisioning/secret
+masking are covered by regression tests. Live branch provisioning remains unverified
+until the dedicated CI project/key is configured.
 
 The free-tier follow-up at the end of this document supersedes the original password-hashing and paid-tier configuration notes below.
 

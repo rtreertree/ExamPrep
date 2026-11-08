@@ -37,13 +37,13 @@ jobs:
         with:
           node-version: 24.14.0
           package-manager-cache: false
-      - run: npm ci
-      - run: npm run build
-      - run: npm exec -- playwright install --with-deps chromium
       - name: Create disposable test branch and fresh authentication secrets
         env:
           NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
         run: node scripts/neon-ci.mjs create
+      - run: npm ci
+      - run: npm run build
+      - run: npm exec -- playwright install --with-deps chromium
       - name: Apply migrations to disposable database only
         run: npm run db:migrate
       - name: Exercise both runtimes with API and Chromium acceptance

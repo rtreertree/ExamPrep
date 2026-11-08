@@ -34,10 +34,10 @@ entry point uses the same application and migrations.
    Legacy API-token UI names are **Workers Scripts: Edit** and **Workers Routes:
    Edit**. Add account/zone read access only if required for Wrangler discovery.
    Do not grant unrelated KV, R2, D1, DNS-edit or all-zone permissions.
-7. Enable GitHub Actions. Protect `main` with the PR CI check
-   **Typecheck, unit tests, builds and Worker package**, require branches up to date,
-   disable force pushes/deletion, and require review for workflow/migration changes.
-   CODEOWNERS identifies the owner. Environment reviewers are optional; enabling
+7. GitHub Actions is enabled. `main` is protected with the PR CI check
+   **Typecheck, unit tests, builds and Worker package**, up-to-date branches,
+   disabled force pushes/deletion, and owner review for changes. Administrator
+   recovery bypass remains available. CODEOWNERS identifies the owner. Environment reviewers are optional; enabling
    them adds an approval gate to otherwise automatic releases. Keep integration
    available to scheduled cleanup without a human approval gate.
 8. Push/merge reviewed source to `main`, or select Actions → **Release** → Run

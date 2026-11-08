@@ -37,6 +37,18 @@ export function disposable(branch, settings) {
 }
 
 export async function neonCI(command, env = process.env, request = fetch) {
+  const stateFile = join(env.RUNNER_TEMP ?? "/tmp", "examprep-neon-ci.json");
+  let state;
+  if (command === "cleanup") {
+    try {
+      state = JSON.parse(await readFile(stateFile, "utf8"));
+    } catch (error) {
+      // A build/setup failure before creation has nothing to clean up, even if
+      // integration credentials have not been configured yet.
+      if (error.code === "ENOENT") return;
+      throw error;
+    }
+  }
   const settings = ciSettings(env);
   const root = `/projects/${encodeURIComponent(settings.project)}`;
   async function api(method, path, body, allowMissing = false) {
@@ -63,7 +75,6 @@ export async function neonCI(command, env = process.env, request = fetch) {
       );
     return response.json();
   }
-  const stateFile = join(env.RUNNER_TEMP ?? "/tmp", "examprep-neon-ci.json");
   async function verifyParent() {
     const { branch } = await api(
       "GET",
@@ -147,8 +158,6 @@ export async function neonCI(command, env = process.env, request = fetch) {
     Object.assign(urls, {
       BETTER_AUTH_SECRET: randomBytes(48).toString("base64url"),
       PASSWORD_PEPPER: randomBytes(48).toString("base64url"),
-      RUN_DATABASE_TESTS: "1",
-      TEST_DATABASE_CONFIRMED: "1",
     });
     for (const [key, value] of Object.entries(urls)) {
       // Register masks before writing environment values; never use step outputs for secrets.
@@ -157,18 +166,15 @@ export async function neonCI(command, env = process.env, request = fetch) {
       );
       await appendFile(env.GITHUB_ENV, `${key}=${value}\n`);
     }
+    await appendFile(
+      env.GITHUB_ENV,
+      "RUN_DATABASE_TESTS=1\nTEST_DATABASE_CONFIRMED=1\n",
+    );
     console.info(
       "Created isolated Neon branch and fresh test authentication settings.",
     );
   } else if (command === "cleanup" || command === "sweep") {
-    let state;
     if (command === "cleanup") {
-      try {
-        state = JSON.parse(await readFile(stateFile, "utf8"));
-      } catch (error) {
-        if (error.code === "ENOENT") return;
-        throw error;
-      }
       if (
         state.project !== settings.project ||
         state.parent !== settings.parent ||

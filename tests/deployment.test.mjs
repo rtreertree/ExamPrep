@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -21,6 +21,76 @@ const branch = {
   protected: false,
 };
 describe("deployment resource and credential boundaries", () => {
+  it("does not need credentials or API calls when setup failed before branch creation", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "examprep-neon-test-"));
+    const request = vi.fn();
+    try {
+      await expect(
+        neonCI("cleanup", { RUNNER_TEMP: directory }, request),
+      ).resolves.toBeUndefined();
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it("provisions child connection URLs and independent secrets without masking nonsecret flags", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "examprep-neon-test-"));
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const output = join(directory, "environment");
+      await neonCI(
+        "create",
+        {
+          NEON_API_KEY: "fake",
+          NEON_PROJECT_ID: settings.project,
+          NEON_PARENT_BRANCH_ID: settings.parent,
+          GITHUB_REPOSITORY_ID: "123",
+          GITHUB_RUN_ID: "4",
+          GITHUB_RUN_ATTEMPT: "1",
+          GITHUB_ENV: output,
+          NEON_DATABASE_NAME: "test",
+          NEON_ROLE_NAME: "test",
+          RUNNER_TEMP: directory,
+        },
+        async (url, options) => {
+          if (url.endsWith("/br-parent"))
+            return Response.json({ branch: { name: "ci-empty" } });
+          if (options.method === "POST") {
+            expect(JSON.parse(options.body).branch).toEqual({
+              name: branch.name,
+              parent_id: settings.parent,
+            });
+            return Response.json({ branch });
+          }
+          const query = new URL(url).searchParams;
+          expect(query.get("branch_id")).toBe(branch.id);
+          return Response.json({
+            uri: `postgresql://test:fake@ep-ci${query.get("pooled") === "true" ? "-pooler" : ""}.ap-southeast-1.aws.neon.tech/test?sslmode=require`,
+          });
+        },
+      );
+      const values = Object.fromEntries(
+        (await readFile(output, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const i = line.indexOf("=");
+            return [line.slice(0, i), line.slice(i + 1)];
+          }),
+      );
+      expect(() => checkConnections(values)).not.toThrow();
+      expect(values.BETTER_AUTH_SECRET.length).toBeGreaterThanOrEqual(32);
+      expect(values.PASSWORD_PEPPER).not.toBe(values.BETTER_AUTH_SECRET);
+      expect(values.RUN_DATABASE_TESTS).toBe("1");
+      expect(
+        log.mock.calls.filter(([value]) => value.startsWith("::add-mask::")),
+      ).toHaveLength(4);
+      expect(log.mock.calls.flat()).not.toContain("::add-mask::1");
+    } finally {
+      log.mockRestore();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
   it("refuses default, protected, parent, foreign-project-parent and other-repository branches", () => {
     expect(disposable(branch, settings)).toBe(true);
     for (const patch of [
