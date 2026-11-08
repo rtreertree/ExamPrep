@@ -8,9 +8,35 @@
     "directory": "dist/client",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"],
+    "run_worker_first": ["/api", "/api/*"],
   },
   // Use the account's Workers Free limits; do not request a paid CPU allowance.
   "minify": true,
-  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 },
+  },
+  // Uploaded version URLs share resources; never expose production via previews.
+  "preview_urls": false,
+  "secrets": {
+    "required": [
+      "DATABASE_URL",
+      "BETTER_AUTH_SECRET",
+      "PASSWORD_PEPPER",
+      "BETTER_AUTH_URL",
+    ],
+  },
+  "env": {
+    "production": {
+      "name": "exam-prep",
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [{ "pattern": "exam.phonet.app", "custom_domain": true }],
+      "vars": { "BETTER_AUTH_URL": "https://exam.phonet.app" },
+      "secrets": {
+        "required": ["DATABASE_URL", "BETTER_AUTH_SECRET", "PASSWORD_PEPPER"],
+      },
+    },
+  },
 }

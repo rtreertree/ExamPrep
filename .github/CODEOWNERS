@@ -1,0 +1,6 @@
+# Review changes that can access deployment credentials or alter migrations.
+/.github/ @rtreertree
+/scripts/ @rtreertree
+/prisma/ @rtreertree
+/wrangler.jsonc @rtreertree
+/package*.json @rtreertree

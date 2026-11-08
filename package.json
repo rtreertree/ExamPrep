@@ -15,11 +15,14 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "db:migrate": "prisma migrate deploy",
-    "worker:check": "wrangler deploy --dry-run --outdir dist/worker",
+    "db:migrate": "node scripts/migrate.mjs",
+    "worker:check": "wrangler deploy --env=\"\" --dry-run --outdir dist/worker",
     "cloudflare:check": "node --import tsx scripts/free-tier-check.ts",
-    "deploy:worker": "npm run build && npm run worker:check && npm run cloudflare:check && wrangler deploy",
-    "start": "node dist/server.js"
+    "deploy:worker": "npm run build && npm run worker:check && npm run deploy:production",
+    "start": "node dist/server.js",
+    "test:acceptance": "node --import tsx scripts/acceptance.ts",
+    "deploy:production": "node scripts/deploy-production.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "5.3.0",

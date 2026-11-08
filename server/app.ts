@@ -76,6 +76,7 @@ export function createApp(
       c.header("Strict-Transport-Security", "max-age=31536000");
     await next();
   });
+  app.all("/api", (c) => c.json({ error: "API route not found." }, 404));
   app.get("/api/health", (c) =>
     c.json({ status: "ok", runtime: config.RUNTIME ?? "node" }),
   );

@@ -27,7 +27,9 @@ npm run worker:check
 npm run dev:worker
 ```
 
-For an eventual deployment, choose the public HTTPS origin and set those same four settings using `npx wrangler secret put NAME`. Apply reviewed migrations separately from development/CI with the direct connection, then use `npm run deploy:worker` when ready. That command builds, dry-runs the package, and requires `cloudflare:check` to pass before running the actual deployment. The check uses the environment's database and is read-only apart from a transient hashing probe; it refuses remaining old-format credentials. Use `npm run cloudflare:check -- --local` to check an intentional localhost origin. The deployment command was **not** executed in this task; nothing was deployed publicly. `run_worker_first: ["/api/*"]` ensures missing API routes return JSON errors instead of the SPA.
+GitHub CI/CD, exact secrets, domain setup, migration ordering and rollback are documented in [DEPLOYMENT.md](DEPLOYMENT.md). PR checks use no secrets. Reviewed `main` changes run API/browser acceptance on a disposable Neon branch, then the **production** GitHub environment deploys the Worker and assets together. Actions → **Release** also supports manual deployment from `main`. Production migration/deployment scripts are restricted to that job; use the workflow instead of deploying the top-level local Worker configuration.
+
+The release keeps the existing `cloudflare:check` readiness guard. It uses the deployment database and is read-only apart from a transient hashing probe; it refuses remaining old-format credentials. Use `npm run cloudflare:check -- --local` to check an intentional localhost origin. `/api` and `/api/*` reach Hono and never fall back to the SPA. Public version previews are disabled to avoid sharing production resources. No production migration or public deployment was performed during local validation.
 
 The configuration targets **Workers Free**: there is no paid-only CPU setting, the Worker is minified, and static assets bypass application execution. Better Auth still owns registration, sign-in, password changes, sessions, and throttling. Its password callbacks delegate slow hashing to native PostgreSQL `pgcrypto` bcrypt at cost **12**, installed by the second migration. The Worker performs only a small native HMAC-SHA384 pre-hash with a separate secret pepper, then awaits the database. Its 64-character base64 output avoids bcrypt's 72-byte truncation and NUL limitations without truncating Unicode passwords. This follows [OWASP's peppered bcrypt pre-hash recipe](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html#pre-hashing-passwords-with-bcrypt). No plaintext password or pepper is sent to SQL; SQL parameters must still be treated as sensitive. Keep TLS enabled and do not log query parameters.
 
@@ -69,6 +71,11 @@ node --import tsx scripts/compatibility.ts http://127.0.0.1:8787
 npx playwright install chromium
 npm run test:e2e
 ```
+
+For automated startup, API/browser/smoke tests on **both** runtimes, and server
+cleanup, use `TEST_DATABASE_CONFIRMED=1 npm run test:acceptance` after building and
+installing Chromium. This uses ports 8791/8792 and the dedicated test database in
+`.env`; it never overwrites `.dev.vars` or targets the production domain.
 
 The integration and browser suites use unique disposable accounts and delete those accounts and their owned records afterward. They read the ignored `.env` for cleanup, so its database **must match the runtime being tested**. Never run them against production. Keep browser tests sequential because the real persistent auth limiter is enabled. Rapid repeated test runs can correctly hit throttling; allow the 60-second window to expire.
 

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Typecheck, unit tests, builds and Worker package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24.14.0
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run generate
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run worker:check
+      - name: Validate production package without credentials
+        run: npm exec -- wrangler deploy --env production --dry-run --outdir dist/worker-production
+      - name: Build portable Node image
+        run: docker build --tag exam-prep:ci .

@@ -1,5 +1,46 @@
 # Verification — 8 November 2026
 
+## GitHub CI/CD follow-up — 8 November 2026
+
+Read every project-owned Markdown file before changes; no applicable AGENTS.md
+was present. The owner confirmed the ignored local database is still the dedicated
+test database, and corrected the production hostname to **exam.phonet.app**.
+
+| Check | Result |
+| --- | --- |
+| Lockfile installation / dependency audit | `npm ci`; 0 reported vulnerabilities |
+| TypeScript, frontend and packaged Node build | Passed |
+| Focused unit tests including deployment safeguards | 102 passed; 5 live tests skipped in ordinary unit execution |
+| Live Neon API acceptance | 5 passed on Node; 5 passed on local Worker |
+| Chromium acceptance | All 3 workflows passed on each runtime (6 total) |
+| Frontend/API routing/cache smoke | Passed on Node and Worker after fixing bare `/api` handling |
+| Default and production Worker dry runs | Passed; approximately 1619 KiB gzip |
+| Generated Worker environment types | Regenerated from Wrangler configuration |
+| YAML syntax and action compatibility | YAML parsed; checkout v6.1.0 and setup-node v6.5.0 release SHAs verified; node24 action runtimes checked |
+| Configured-secret scan | Passed; local environment values absent from source |
+| Docker locally | Unavailable: Docker daemon is not running; GitHub CI includes image build |
+| Neon branch API automation | Cleanup/credential boundaries covered with mocked API tests; live provisioning requires the integration API key |
+
+The new smoke check caught `/api` being served by SPA fallback in an earlier test
+configuration. Both the Worker-first asset route and Worker dispatch now include
+bare `/api`, and Hono returns a JSON 404 there. Targeted final smoke checks passed
+on both runtimes. All API and browser acceptance tests had already passed; none
+of their failures were ignored. Tests retained real auth throttling, database
+sessions, ownership, snapshots and existing UI behavior. The Browser plugin was
+unavailable; the existing pinned Playwright suite was used. Test accounts were
+removed by the suites; disposable runtime configuration was removed in `finally`.
+
+The folder initially had no Git repository. Its existing contents were preserved
+in an initial commit and connected to the owner's verified empty GitHub repository.
+GitHub integration/production environments are restricted to main, and the verified
+Cloudflare account ID is configured. No production database was used for testing,
+no production migrations ran, and no public Worker deployment is claimed. Exact
+remaining setup and rollback procedures are in [DEPLOYMENT.md](DEPLOYMENT.md).
+
+The standalone workflow-validator binary could not be downloaded because the
+release host/API returned errors. YAML parsing and actual GitHub workflow execution
+provide the available workflow checks; full actionlint verification is not claimed.
+
 The free-tier follow-up at the end of this document supersedes the original password-hashing and paid-tier configuration notes below.
 
 The application was built and exercised against the user-confirmed dedicated Neon test database. No public deployment or production-data modification was performed. Disposable test accounts were confirmed cleaned up after the final run.
