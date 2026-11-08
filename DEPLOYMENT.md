@@ -154,6 +154,16 @@ cutover and any lost writes. Never reset/drop production or automatically run do
 migrations. Fix/revert `main` through review so the next automatic release does not
 undo the rollback. First deployment has no earlier Worker version to restore.
 
+## Diagnosing readiness failures
+
+Migrations use the direct connection; runtime readiness uses the pooled connection.
+A successful migration does not prove that the runtime role/password can connect.
+Readiness failures report the failing stage and safe SQL/Prisma error category.
+Check the production `DATABASE_URL` first for credential/access errors. Missing
+schema/functions after a manual reset require reviewed schema repair; retaining
+migration history can prevent already-applied migrations from recreating objects.
+Never clear more data just to bypass a readiness error.
+
 ## Local reproduction and remaining setup
 
 ```sh

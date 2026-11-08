@@ -1,5 +1,20 @@
 # Verification — 8 November 2026
 
+## Deployment readiness diagnostics — 8 November 2026
+
+A subsequent release passed migrations but failed the runtime database check with
+an overly generic error. The check now identifies its failing stage and translates
+known PostgreSQL/Prisma codes into safe guidance for rejected credentials, missing
+schema/functions, access permissions or connectivity. It never echoes raw driver
+messages, SQL, bound parameters or connection strings. Four unit tests verify the
+classification and secret suppression. TypeScript and 103 unit tests pass.
+
+After the owner's data cleanup, read-only checks of the locally configured database
+confirmed the account/schema and pgcrypto functions exist and no legacy credentials
+remain; the local deployment readiness check passed. This does not establish that
+GitHub's encrypted runtime connection matches the local connection. No database
+reset, schema repair or account mutation was performed during this investigation.
+
 ## CI without Neon integration — 8 November 2026
 
 At the owner's request, GitHub no longer runs live database/API/browser acceptance,

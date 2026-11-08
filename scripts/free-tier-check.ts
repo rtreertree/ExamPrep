@@ -7,6 +7,7 @@ import { neonConfig } from "@neondatabase/serverless";
 import ws from "ws";
 import { connectDatabase } from "../server/db";
 import { PASSWORD_PATTERN, PASSWORD_PREFIX } from "../server/passwords";
+import { readinessError } from "./readiness-error";
 
 neonConfig.webSocketConstructor = ws;
 const local = process.argv.includes("--local");
@@ -112,12 +113,15 @@ try {
 }
 
 let db: ReturnType<typeof connectDatabase> | undefined;
+let databaseStage = "runtime connection";
 try {
   db = connectDatabase(process.env.DATABASE_URL ?? "");
+  databaseStage = "runtime connection/password-hashing probe";
   const probe = await db.$queryRaw<{ supported: boolean }[]>`
     SELECT length(public.crypt('Exam Prep readiness probe', public.gen_salt('bf', 12))) = 60 AS supported
   `;
   check(probe[0]?.supported, "Apply the pgcrypto password-hashing migration.");
+  databaseStage = "credential-table query";
   const rows = await db.$queryRaw<{ count: number }[]>`
     SELECT count(*)::int AS count FROM account WHERE "providerId" = 'credential'
       AND (password IS NULL OR length(password) <> ${PASSWORD_PREFIX.length + 60} OR password !~ ${PASSWORD_PATTERN.source})
@@ -126,10 +130,8 @@ try {
     rows[0]?.count === 0,
     `${rows[0]?.count ?? "Unknown"} credential account(s) still need migration. Each owner must sign in successfully on the Node app before deploying this database to Workers Free.`,
   );
-} catch {
-  failures.push(
-    "Database password readiness check failed. Check connectivity and apply migrations; driver details are intentionally hidden.",
-  );
+} catch (error) {
+  failures.push(readinessError(error, databaseStage));
 } finally {
   await db?.$disconnect();
 }
