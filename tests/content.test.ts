@@ -14,6 +14,40 @@ const deck = JSON.parse(
 );
 const clone = () => structuredClone(exam);
 describe("portable content contract", () => {
+  it.each(["simple", "math", "chem"])(
+    "round trips v1 written answerType %s",
+    (answerType) => {
+      const doc = clone();
+      doc.questions[1].answerType = answerType;
+      doc.questions[1].answer = "$\\ce{SO4^2- + Ba^2+ -> BaSO4 v}$";
+      expect(parseContent(JSON.stringify(doc))).toEqual(doc);
+      expect(validateContent(doc).schemaVersion).toBe(1);
+    },
+  );
+  it("keeps legacy answerType absent", () => {
+    const doc = clone();
+    delete doc.questions[1].answerType;
+    expect(parseContent(JSON.stringify(doc))).toEqual(doc);
+    expect(
+      Object.hasOwn((validateContent(doc) as any).questions[1], "answerType"),
+    ).toBe(false);
+  });
+  it.each([null, "", "Math", "chemical", 1, {}])(
+    "rejects invalid answerType %j",
+    (answerType) => {
+      const doc = clone();
+      doc.questions[1].answerType = answerType;
+      expect(() => validateContent(doc)).toThrow();
+    },
+  );
+  it("does not allow answerType on choices or cards", () => {
+    const doc = clone();
+    doc.questions[0].answerType = "math";
+    expect(() => validateContent(doc)).toThrow();
+    const cards = structuredClone(deck);
+    cards.cards[0].answerType = "chem";
+    expect(() => validateContent(cards)).toThrow();
+  });
   it.each([exam, deck])("round trips every field and array in $kind", (doc) =>
     expect(parseContent(JSON.stringify(validateContent(doc)))).toEqual(doc),
   );

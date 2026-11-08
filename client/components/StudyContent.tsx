@@ -3,6 +3,7 @@ import Markdown from "react-markdown";
 import remarkMath from "remark-math";
 import remarkGfm from "remark-gfm";
 import rehypeKatex from "rehype-katex";
+import "katex/contrib/mhchem";
 const remarkPlugins = [remarkMath, remarkGfm];
 const rehypePlugins: NonNullable<
   Parameters<typeof Markdown>[0]["rehypePlugins"]

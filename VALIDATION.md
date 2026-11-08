@@ -2,6 +2,8 @@
 
 The standalone authoring skill is the authoritative portable contract. Browser and API import/save/export share `shared/content.ts` and `shared/json.ts`. The build generates `public/downloads/examprep.schema.json` with Zod's JSON Schema generator; it is not a separately maintained schema.
 
+Written questions accept optional `answerType: "simple" | "math" | "chem"` in schema version 1. Omission uses the simple text keyboard without adding a field to old files. Answer and response strings retain Markdown with `$...$`/`$$` math delimiters; chemistry supports mhchem `\ce{...}` and `\pu{...}`. This preference does not change self-assessment or rubric grading, and is forbidden on choice questions and flashcards.
+
 The JSON Schema captures strict variants, allowed fields, array bounds, ID patterns, integer rubric points, Unicode string maxima, and optional fields. A schema-only validator cannot enforce every rule. The application additionally checks:
 
 - Exact UTF-8 byte limits including JSON whitespace, fatal UTF-8 decoding, and no byte-order mark.

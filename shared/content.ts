@@ -27,6 +27,11 @@ const text = (max: number, nonblank = true) =>
     })
     .meta({ maxLength: max, ...(nonblank ? { minLength: 1 } : {}) });
 export const contentId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
+export const answerTypeSchema = z.enum(["simple", "math", "chem"]).meta({
+  description:
+    "Preferred written-answer keyboard. Omission behaves as simple. Answers remain Markdown/LaTeX strings; grading is unchanged.",
+});
+export type AnswerType = z.infer<typeof answerTypeSchema>;
 const option = z.strictObject({ id: contentId, text: text(20000) });
 export const criterionSchema = z.strictObject({
   id: contentId,
@@ -46,6 +51,7 @@ const written = z.strictObject({
   type: z.literal("written"),
   prompt: text(20000),
   answer: text(20000),
+  answerType: answerTypeSchema.optional(),
   explanation: text(20000, false).optional(),
   rubric: z.array(criterionSchema).min(1).max(20).optional(),
 });

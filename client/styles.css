@@ -1798,3 +1798,131 @@ progress::-moz-progress-bar {
   overflow-y: hidden;
   vertical-align: middle;
 }
+
+.notation-editor {
+  min-width: 0;
+}
+.notation-editor textarea {
+  display: block;
+}
+.notation-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+.notation-toolbar .button {
+  min-height: 44px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+.notation-toolbar .button > span {
+  font-size: 18px;
+}
+.dialog:has(.formula-composer) {
+  width: min(720px, calc(100% - 32px));
+}
+.formula-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.formula-composer > p {
+  font-size: 14px;
+}
+.formula-visual {
+  min-width: 0;
+}
+.formula-visual math-field {
+  display: block;
+  width: 100%;
+  min-height: 72px;
+  padding: 12px;
+  border: 1px solid var(--control);
+  border-radius: var(--radius);
+  background: var(--canvas);
+  color: var(--text);
+  font-size: 24px;
+  --caret-color: var(--accent);
+  --selection-background-color: #d9f77e40;
+  --smart-fence-color: var(--accent);
+  --contains-highlight-background-color: #d9f77e25;
+}
+.formula-visual math-field::part(menu-toggle) {
+  display: none;
+}
+.formula-visual math-field::part(virtual-keyboard-toggle) {
+  color: var(--secondary);
+}
+.formula-keyboard {
+  min-width: 0;
+  --keyboard-background: var(--surface);
+  --keyboard-border: var(--divider);
+  --keyboard-toolbar-text: var(--secondary);
+  --keyboard-toolbar-text-active: var(--accent);
+  --keyboard-toolbar-background-hover: var(--surface-raised);
+  --keycap-background: var(--surface-raised);
+  --keycap-background-hover: var(--control);
+  --keycap-text: var(--text);
+  --keycap-border: var(--divider);
+  --keycap-border-bottom: var(--control);
+  --keyboard-accent-color: var(--accent);
+  --keycap-text-active: var(--on-accent);
+  --keycap-text-pressed: var(--on-accent);
+  --keycap-height: 44px;
+  --keycap-font-size: 18px;
+}
+.formula-keyboard .MLK__toolbar > .left {
+  overflow-x: auto;
+  min-width: 0;
+  min-height: 44px;
+}
+.formula-keyboard .ML__keyboard {
+  height: var(--_keyboard-height);
+}
+.formula-keyboard [id^="notation-"] .MLK__rows {
+  --keycap-width: min(100px, calc(100cqw / 6));
+}
+.formula-keyboard .MLK__toolbar > .left > div {
+  flex-shrink: 0;
+}
+.formula-display {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+}
+.formula-display input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+.formula-preview {
+  min-width: 0;
+}
+.formula-composer .dialog-footer {
+  margin-top: 0;
+}
+@media (max-width: 767px) {
+  .dialog:has(.formula-composer) {
+    width: 100%;
+    max-height: 100dvh;
+    padding: 20px 12px max(20px, env(safe-area-inset-bottom));
+  }
+  .formula-composer {
+    gap: 12px;
+  }
+  .formula-composer .dialog-footer {
+    bottom: -20px;
+    margin: 0 -12px -20px;
+    padding: 12px;
+  }
+  .formula-keyboard {
+    --keycap-gap: 2px;
+    --keycap-font-size: 16px;
+  }
+  .formula-keyboard .MLK__toolbar > .right {
+    display: none;
+  }
+}

@@ -1,3 +1,4 @@
+import { NotationEditor } from "../components/NotationEditor";
 import { useState } from "react";
 import { Link, useBlocker, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, ArrowRight } from "lucide-react";
@@ -269,11 +270,13 @@ function Practice({ initial }: { initial: Attempt }) {
                       : undefined
                   }
                 >
-                  <textarea
+                  <NotationEditor
+                    key={item.id}
+                    answerType={item.answerType}
                     className="written-answer"
                     readOnly={!inProgress || state.submitting}
                     value={r?.text ?? ""}
-                    onChange={(e) => response({ text: e.target.value }, false)}
+                    onChange={(value) => response({ text: value }, false)}
                   />
                 </Field>
                 {r?.text ? (

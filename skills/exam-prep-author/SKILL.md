@@ -78,8 +78,11 @@ The answer is required even when the student will not see it until submission. G
 | `type` | string | Yes | Exactly `"written"`. |
 | `prompt` | string | Yes | Nonblank Markdown/math, at most 20,000 characters. |
 | `answer` | string | Yes | Nonblank model/reference answer, at most 20,000 characters, with Markdown/math. It is not an exact-match grading key. |
+| `answerType` | string | No | Exactly `"simple"`, `"math"`, or `"chem"`. Selects the preferred answer keyboard. Omission behaves as `"simple"`; preserve omission when round-tripping old files. |
 | `explanation` | string | No | Optional teaching notes, at most 20,000 characters, with Markdown/math. |
 | `rubric` | array | No | 1–20 criterion objects, defined below. Omit for simple Correct/Incorrect self-assessment. |
+
+`answerType` applies only to written questions. `simple` is for text, `math` for equations/symbols, and `chem` for formulas/reactions. Every answer remains a Markdown/LaTeX string; surround formulas with `$...$` or display delimiters. Chemistry supports mhchem, for example `$\ce{2H2 + O2 -> 2H2O}$`, including ions, isotopes, reaction arrows and physical units (`\pu{...}`). The type changes the preferred keyboard, not grading. Mixed prose and formulas are allowed for all three types.
 
 No `options`, accepted-answer lists, regular expressions, tolerance settings, or grading code are allowed. Written questions without a rubric receive 1/0 self-assessed points; neither text matching nor an AI grades them.
 
@@ -141,7 +144,7 @@ Report field paths using JSON Pointer-style paths with zero-based array indexes.
 
 ### Versioning and round-trip rules
 
-This version-1 specification is still a design draft. Once released, changing accepted fields or semantics requires a deliberate versioned contract; never assume readers will ignore unknown properties. Reject unsupported versions with an actionable message rather than interpreting them as version 1.
+The optional `answerType` extension remains in schema version 1. Existing files without it stay valid and retain their source; readers predating this extension may reject the new field. Any future incompatible format change needs an explicit contract decision; never assume readers will ignore unknown properties. Reject unsupported versions with an actionable message rather than interpreting them as version 1.
 
 Import → edit → export → re-import must preserve IDs, array order, Unicode text, math source, optional explanations, and rubrics. JSON whitespace, equivalent JSON escapes, and object-key order may change. Preserve the absence of optional fields when no edit requires adding them. Grading defaults are runtime behavior, not new fields inserted into exported files.
 
@@ -171,6 +174,7 @@ Never export database/user IDs, credentials, timestamps, submitted responses, aw
     {
       "id": "q2",
       "type": "written",
+      "answerType": "math",
       "prompt": "Differentiate $x^3$ using the power rule and show your substitution.",
       "answer": "Using $\\frac{d}{dx}x^n = nx^{n-1}$ with $n=3$ gives $3x^{3-1}=3x^2$.",
       "rubric": [

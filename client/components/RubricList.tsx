@@ -1,3 +1,4 @@
+import { NotationEditor } from "./NotationEditor";
 import { ArrowUp, ArrowDown, Trash2 } from "lucide-react";
 import { freshId, type Criterion } from "../../shared/content";
 import { own } from "../../shared/attempts";
@@ -32,12 +33,12 @@ export function RubricList({
           {mode === "author" ? (
             <>
               <Field label={`Criterion ${i + 1}`}>
-                <textarea
+                <NotationEditor
                   value={c.description}
-                  onChange={(e) =>
+                  onChange={(value) =>
                     onChange?.(
                       criteria.map((r, n) =>
-                        n === i ? { ...r, description: e.target.value } : r,
+                        n === i ? { ...r, description: value } : r,
                       ),
                     )
                   }

@@ -35,3 +35,4 @@ for (const font of ["instrument-sans", "ibm-plex-mono"])
     `public/licenses/${font}.txt`,
   );
 await copyFile("node_modules/katex/LICENSE", "public/licenses/katex.txt");
+await copyFile("node_modules/mathlive/LICENSE.txt", "public/licenses/mathlive.txt");

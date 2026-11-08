@@ -106,6 +106,15 @@
                     "maxLength": 20000,
                     "minLength": 1
                   },
+                  "answerType": {
+                    "type": "string",
+                    "enum": [
+                      "simple",
+                      "math",
+                      "chem"
+                    ],
+                    "description": "Preferred written-answer keyboard. Omission behaves as simple. Answers remain Markdown/LaTeX strings; grading is unchanged."
+                  },
                   "explanation": {
                     "type": "string",
                     "maxLength": 20000

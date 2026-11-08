@@ -9,6 +9,7 @@ import {
   type StudyContent,
   type Question,
   type Card,
+  type AnswerType,
 } from "../../shared/content";
 import { api, ApiError, exportContent, type StudySet } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -27,6 +28,7 @@ import {
 } from "../components/ui";
 import { ContentPreview } from "./Authoring";
 import { RubricList } from "../components/RubricList";
+import { NotationEditor } from "../components/NotationEditor";
 
 type Loaded = { set?: StudySet; draft?: Draft; missing: boolean };
 export function EditorPage() {
@@ -406,10 +408,10 @@ function Editor({
             />
           </Field>
           <Field label="Description (optional)">
-            <textarea
+            <NotationEditor
               rows={2}
               value={content.description ?? ""}
-              onChange={(e) => optional("description", e.target.value)}
+              onChange={(value) => optional("description", value)}
             />
           </Field>
         </div>
@@ -524,7 +526,9 @@ function Editor({
                 </Button>
               </div>
             </div>
-            {item ? <ItemFields item={item} onChange={updateItem} /> : null}
+            {item ? (
+              <ItemFields key={item.id} item={item} onChange={updateItem} />
+            ) : null}
           </section>
           <section
             id="editor-mode-preview"
@@ -577,15 +581,15 @@ function ItemFields({
       <div className="stack">
         <h2>Flashcard</h2>
         <Field label="Front">
-          <textarea
+          <NotationEditor
             value={item.front}
-            onChange={(e) => onChange({ ...item, front: e.target.value })}
+            onChange={(value) => onChange({ ...item, front: value })}
           />
         </Field>
         <Field label="Back">
-          <textarea
+          <NotationEditor
             value={item.back}
-            onChange={(e) => onChange({ ...item, back: e.target.value })}
+            onChange={(value) => onChange({ ...item, back: value })}
           />
         </Field>
         <p className="muted mono">Stable ID: {item.id}</p>
@@ -602,9 +606,9 @@ function ItemFields({
     <div className="stack">
       <h2>{q.type === "written" ? "Written answer" : "Single choice"}</h2>
       <Field label="Question" hint="Markdown and LaTeX are supported.">
-        <textarea
+        <NotationEditor
           value={q.prompt}
-          onChange={(e) => onChange({ ...q, prompt: e.target.value })}
+          onChange={(value) => onChange({ ...q, prompt: value })}
         />
       </Field>
       {q.type === "single_choice" ? (
@@ -613,13 +617,13 @@ function ItemFields({
           {q.options.map((o, i) => (
             <div className="option-editor" key={o.id}>
               <Field label={`Option ${String.fromCharCode(65 + i)}`}>
-                <textarea
+                <NotationEditor
                   value={o.text}
-                  onChange={(e) =>
+                  onChange={(value) =>
                     onChange({
                       ...q,
                       options: q.options.map((option, n) =>
-                        i === n ? { ...option, text: e.target.value } : option,
+                        i === n ? { ...option, text: value } : option,
                       ),
                     })
                   }
@@ -692,10 +696,26 @@ function ItemFields({
         </>
       ) : (
         <>
+          <Field
+            label="Answer type"
+            hint="Choose the preferred keyboard for this written answer."
+          >
+            <select
+              value={q.answerType ?? "simple"}
+              onChange={(event) =>
+                onChange({ ...q, answerType: event.target.value as AnswerType })
+              }
+            >
+              <option value="simple">Simple · text</option>
+              <option value="math">Math · equations and symbols</option>
+              <option value="chem">Chem · formulas and reactions</option>
+            </select>
+          </Field>
           <Field label="Reference answer">
-            <textarea
+            <NotationEditor
               value={q.answer}
-              onChange={(e) => onChange({ ...q, answer: e.target.value })}
+              answerType={q.answerType}
+              onChange={(value) => onChange({ ...q, answer: value })}
             />
           </Field>
           {q.rubric ? (
@@ -726,9 +746,9 @@ function ItemFields({
         </>
       )}
       <Field label="Explanation (optional)">
-        <textarea
+        <NotationEditor
           value={q.explanation ?? ""}
-          onChange={(e) => optionalExplanation(e.target.value)}
+          onChange={optionalExplanation}
         />
       </Field>
       <p className="muted mono">Stable ID: {q.id}</p>

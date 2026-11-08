@@ -30,6 +30,7 @@
       "type": "written",
       "prompt": "Differentiate $x^3$ using the power rule and show your substitution.",
       "answer": "Using $\\frac{d}{dx}x^n = nx^{n-1}$ with $n=3$ gives $3x^{3-1}=3x^2$.",
+      "answerType": "math",
       "rubric": [
         {
           "id": "rule",

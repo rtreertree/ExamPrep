@@ -81,6 +81,12 @@ The integration and browser suites use unique disposable accounts and delete tho
 
 Browser tests expect a running **built** app. Set `TEST_BASE_URL` to the Worker origin to repeat them there; that runtime's `BETTER_AUTH_URL` must match. Screenshots and browser output go to `/tmp`, not source control. Browser plugin availability and executed checks are recorded in [verification notes](VERIFICATION.md).
 
+## Notation input
+
+Text fields include Math keyboard and Chemistry keyboard tools, available on desktop and mobile. Select text or place the cursor inside an existing `$...$`/`$$...$$` formula, open a keyboard, and insert or edit it with the visual field, touch keys, or LaTeX source. The keyboards include fractions, roots, powers, functions, calculus, matrices, vectors, sets, Greek letters, and chemistry; hold keys for variants. The preview uses the same renderer as practice and review. Formulas remain portable Markdown/LaTeX, and mhchem supports reactions, ions, isotopes, and units.
+
+Written questions have an optional `answerType` of `simple`, `math`, or `chem`. Choose it in the editor to highlight the preferred keyboard in authoring and practice. This is an extension to **schema version 1**; files that omit it remain valid and keep the field absent on export. Scoring still uses self-assessment or the marking rubric. Keyboard code and fonts are served locally, and the editor loads when first opened.
+
 ## Implementation notes
 
 - [Portable contract](skills/exam-prep-author/SKILL.md), [generated JSON Schema](public/downloads/examprep.schema.json), and [additional validation](VALIDATION.md). `npm run generate` republishes the skill and extracts/validates its two canonical examples.
