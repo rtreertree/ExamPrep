@@ -20,3 +20,11 @@ Practice records are separate from portable files. The server verifies response 
 Database constraints check metadata consistency and basic state/position invariants. Triggers protect ownership, snapshots, source links, valid transitions, and completed results. Optimistic conditional updates prevent stale saves, and repeated/concurrent submission returns the already frozen result. Retry selection uses the source snapshot, with fresh empty responses and no inherited score.
 
 The application validates file structure and permitted content constructs. It does not verify subject-matter correctness or author-written rubric quality.
+
+## v1 progress boundary
+
+The portable contract stays at schemaVersion 1 with up to 500 items and 20,000 Unicode code points per written response. Attempt response storage is separate from the 2 MiB portable-content limit: all 500 permitted written responses are supported, without imposing that file limit on the answer map. The client sends at most one changed response (or deletion) plus position/revision per progress request. JSON escaping, multibyte Unicode, NUL, isolated surrogates and prototype-like IDs retain their existing lossless behavior. Changes are merged with confirmed server answers under the ownership/status/revision checks; server validation applies to changed responses, preserving frozen-answer and reveal rules. Existing whole-map v1 requests are also validated.
+
+Full document validation runs at study-set write and snapshot creation. A private compact projection stores only item IDs, types, choice answer references and rubric point rules, protected by an immutable metadata trigger after initialization. The progress path structurally validates that versioned projection rather than reparsing Markdown or returning unchanged snapshots. A legacy record crosses full validation once before its projection is stored. No global private-content cache is used. Automatic and self-assessed scoring semantics remain unchanged.
+
+Unexpected API errors emit an allowlisted structured event with request reference, route template, runtime, status, duration and safe category/code. Raw exceptions, answer text, URLs and credentials are excluded; the response and X-Request-ID header share the diagnostic reference.

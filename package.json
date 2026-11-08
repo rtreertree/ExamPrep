@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:e2e:mock": "playwright test --project=mocked",
     "db:migrate": "node scripts/migrate.mjs",
     "worker:check": "wrangler deploy --env=\"\" --dry-run --outdir dist/worker",
     "cloudflare:check": "node --import tsx scripts/free-tier-check.ts",

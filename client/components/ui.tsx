@@ -1,5 +1,7 @@
 import {
   cloneElement,
+  createContext,
+  useContext,
   isValidElement,
   useEffect,
   useId,
@@ -10,6 +12,9 @@ import {
 } from "react";
 import { X, ChevronDown, Check } from "lucide-react";
 import { ApiError } from "../lib/api";
+import { issuesOf, issueLabel } from "../lib/issues";
+import type { Issue } from "../../shared/json";
+export const FieldIssues = createContext<Issue[]>([]);
 export function Button({
   variant = "secondary",
   busy,
@@ -37,25 +42,39 @@ export function Field({
   label,
   hint,
   children,
+  path,
 }: {
+  path?: string;
   label: string;
   hint?: string;
   children: ReactNode;
 }) {
   const id = useId();
-  const control = isValidElement<{ id?: string; "aria-describedby"?: string }>(
-    children,
-  )
+  const issue = useContext(FieldIssues).find((i) => i.path === path);
+  const control = isValidElement<{
+    id?: string;
+    "aria-describedby"?: string;
+    "aria-invalid"?: boolean;
+  }>(children)
     ? cloneElement(children, {
         id,
-        "aria-describedby": hint ? `${id}-hint` : undefined,
+        "aria-describedby":
+          [hint ? `${id}-hint` : "", issue ? `${id}-error` : ""]
+            .filter(Boolean)
+            .join(" ") || undefined,
+        "aria-invalid": !!issue,
       })
     : children;
   return (
-    <div className="field">
+    <div className="field" data-field-path={path}>
       <label htmlFor={id}>{label}</label>
       {control}
       {hint ? <small id={`${id}-hint`}>{hint}</small> : null}
+      {issue ? (
+        <small className="negative" id={`${id}-error`}>
+          {issue.message}
+        </small>
+      ) : null}
     </div>
   );
 }
@@ -78,25 +97,54 @@ export function Notice({
 export function ErrorNotice({
   error,
   retry,
+  onIssue,
 }: {
   error?: Error;
   retry?: () => void;
+  onIssue?: (issue: Issue) => void;
 }) {
-  return error ? (
+  if (!error) return null;
+  const issues = issuesOf(error);
+  return (
     <Notice tone="error">
-      <p>{error.message}</p>
-      {error instanceof ApiError && error.issues ? (
-        <ul>
-          {error.issues.map((i, n) => (
-            <li key={n}>
-              <code>{i.path}</code> {i.message}
-            </li>
-          ))}
-        </ul>
+      <p>
+        {issues.length
+          ? "Some fields need attention before saving."
+          : error.message}
+      </p>
+      {issues.length ? (
+        <>
+          <ul>
+            {issues.map((i, n) => (
+              <li key={n}>
+                {onIssue ? (
+                  <Button variant="quiet" onClick={() => onIssue(i)}>
+                    {issueLabel(i)}
+                  </Button>
+                ) : (
+                  issueLabel(i)
+                )}
+              </li>
+            ))}
+          </ul>
+          <details>
+            <summary>Technical details</summary>
+            <ul>
+              {issues.map((i, n) => (
+                <li key={n}>
+                  <code>{i.path}</code> {i.message}
+                </li>
+              ))}
+            </ul>
+          </details>
+        </>
+      ) : null}
+      {error instanceof ApiError && error.reference ? (
+        <p>Reference: {error.reference}</p>
       ) : null}
       {retry ? <Button onClick={retry}>Retry</Button> : null}
     </Notice>
-  ) : null;
+  );
 }
 export function LoadingRows() {
   return (

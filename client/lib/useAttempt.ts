@@ -1,14 +1,29 @@
 import { useEffect, useRef, useState } from "react";
-import type { Responses } from "../../shared/attempts";
+import {
+  responseChanges,
+  mergeResponses,
+  own,
+  writtenScore,
+  type Responses,
+} from "../../shared/attempts";
 import { api, ApiError, type Attempt } from "./api";
 export function useAttempt(initial: Attempt) {
   const [attempt, setAttempt] = useState(initial);
   const base = useRef(initial);
   const [responses, setResponses] = useState(initial.responses);
-  const [position, setPosition] = useState(initial.position);
+  const firstPending =
+    initial.status === "reviewing" && initial.snapshot.kind === "exam"
+      ? initial.snapshot.questions.findIndex(
+          (q) =>
+            q.type === "written" &&
+            writtenScore(q, own(initial.responses, q.id)) === null,
+        )
+      : -1;
+  const startPosition = firstPending >= 0 ? firstPending : initial.position;
+  const [position, setPosition] = useState(startPosition);
   const desired = useRef({
     responses: initial.responses,
-    position: initial.position,
+    position: startPosition,
     generation: 0,
   });
   const confirmed = useRef(0);
@@ -20,11 +35,13 @@ export function useAttempt(initial: Attempt) {
   const running = useRef<Promise<boolean> | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const blocked = useRef(false);
+  const submittingRef = useRef(false);
   function change(
     nextResponses: Responses,
     nextPosition = desired.current.position,
     immediate: boolean | "manual" = true,
   ) {
+    if (submittingRef.current) return;
     if (base.current.status === "completed") {
       setPosition(nextPosition);
       desired.current.position = nextPosition;
@@ -63,18 +80,33 @@ export function useAttempt(initial: Attempt) {
       try {
         while (confirmed.current < desired.current.generation) {
           const captured = desired.current;
-          const updated = await api<Attempt>(
+          const entries = Object.entries(
+            responseChanges(base.current.responses, captured.responses),
+          );
+          // A single legal response remains far below the request cap, even when
+          // every Unicode character needs JSON escaping. Drain all edits before leaving.
+          const changes = Object.fromEntries(entries.slice(0, 1));
+          const savedResponses = mergeResponses(
+            base.current.responses,
+            changes,
+          );
+          const metadata = await api<Omit<Attempt, "snapshot" | "responses">>(
             `/attempts/${initial.id}/progress`,
             "PATCH",
             {
               revision: base.current.revision,
-              responses: captured.responses,
+              changes,
               position: captured.position,
             },
           );
+          const updated = {
+            ...base.current,
+            ...metadata,
+            responses: savedResponses,
+          };
           base.current = updated;
           setAttempt(updated);
-          confirmed.current = captured.generation;
+          if (entries.length <= 1) confirmed.current = captured.generation;
         }
         setDirty(false);
         setStatus("Saved");
@@ -93,30 +125,58 @@ export function useAttempt(initial: Attempt) {
     running.current = work();
     return running.current;
   }
-  async function submit() {
+  async function moveTo(index: number) {
+    if (submittingRef.current || !(await flush())) return false;
+    // Read desired here, after the wait, never a render-captured response map.
+    change(desired.current.responses, index);
+    return true;
+  }
+  async function submit(): Promise<boolean> {
+    if (submittingRef.current) return false;
+    submittingRef.current = true;
     setSubmitting(true);
     if (!(await flush())) {
+      submittingRef.current = false;
       setSubmitting(false);
-      return;
+      return false;
     }
     setBusy(true);
     setError(undefined);
     try {
       const saved = await api<Attempt>(
-        `/attempts/${initial.id}/submit`,
+        `/attempts/${initial.id}/submit?compact=1`,
         "POST",
         { revision: base.current.revision },
       );
-      base.current = saved;
-      setAttempt(saved);
-      setResponses(saved.responses);
-      desired.current.responses = saved.responses;
+      const updated = {
+        ...base.current,
+        ...saved,
+        responses: base.current.responses,
+      };
+      base.current = updated;
+      setAttempt(updated);
+      setResponses(updated.responses);
+      desired.current.responses = updated.responses;
+      if (updated.status === "reviewing" && updated.snapshot.kind === "exam") {
+        const pending = updated.snapshot.questions.findIndex(
+          (q) =>
+            q.type === "written" &&
+            writtenScore(q, own(updated.responses, q.id)) === null,
+        );
+        if (pending >= 0) {
+          desired.current.position = pending;
+          setPosition(pending);
+        }
+      }
       setStatus("Saved");
+      return true;
     } catch (e) {
       setError(e as Error);
       setStatus("Could not save");
+      return false;
     } finally {
       setBusy(false);
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
@@ -131,6 +191,7 @@ export function useAttempt(initial: Attempt) {
     responses,
     position,
     change,
+    moveTo,
     flush,
     submit,
     dirty,

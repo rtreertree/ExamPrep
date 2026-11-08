@@ -1926,3 +1926,47 @@ progress::-moz-progress-bar {
     display: none;
   }
 }
+
+/* Small v1 flow improvements use the existing visual system. */
+.import-save-actions {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+  padding-block: 12px;
+}
+.completion-count {
+  margin-top: -8px;
+}
+.assessment-queue {
+  margin-block: 16px;
+}
+.field [aria-invalid="true"] {
+  border-color: var(--negative, #a23432);
+}
+.field small.negative {
+  display: block;
+}
+.question-nav .button {
+  white-space: normal;
+  text-align: left;
+}
+.row-actions > .button {
+  white-space: normal;
+}
+@media (max-width: 600px) {
+  .tabs {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .row-actions {
+    flex-wrap: wrap;
+  }
+  .import-save-actions {
+    top: -1px;
+  }
+}
+
+.written-answer[readonly] {
+  min-height: 100px;
+}

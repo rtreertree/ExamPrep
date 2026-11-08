@@ -354,6 +354,9 @@ describe.skipIf(!enabled)(
         first.items.every((s: object) => !Object.hasOwn(s, "content")),
       ).toBe(true);
       expect((await b("/sets?kind=flashcards")).value.items).toHaveLength(0);
+      const found = (await a("/sets?kind=flashcards&search=Pagination%2030")).value;
+      expect(found.items.map((s: { title: string }) => s.title)).toEqual(["Pagination 30"]);
+      expect((await a("/sets?kind=exam&search=Pagination%2030")).value.items).toHaveLength(0);
       const source = documents[0];
       const records = Array.from({ length: 31 }, () => ({
         id: randomUUID(),
@@ -362,6 +365,10 @@ describe.skipIf(!enabled)(
         snapshot: source.content,
       }));
       await db!.attempt.createMany({ data: records });
+      const continued = (await a(`/sets?search=${encodeURIComponent(source.title)}`)).value.items.find((s: { id: string }) => s.id === source.id);
+      expect(records.some(r => r.id === continued.continuation.id)).toBe(true);
+      expect((await a(`/attempts?status=completed&setId=${source.id}`)).value.items).toHaveLength(0);
+      expect((await a(`/attempts?status=attention&setId=${source.id}&search=Pagination`)).value.items).toHaveLength(30);
       const history1 = (await a("/attempts?page=0")).value;
       const history2 = (await a("/attempts?page=1")).value;
       expect(history1.items).toHaveLength(30);

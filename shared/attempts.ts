@@ -23,6 +23,7 @@ export type Result = {
   reviewAgain?: number;
   unreviewed?: number;
 };
+export const MAX_ANSWER_CHARACTERS = 20_000;
 export const revisionSchema = z.number().int().positive();
 const objectInput = z
   .unknown()
@@ -30,11 +31,44 @@ const objectInput = z
     (v) => typeof v === "object" && v !== null && !Array.isArray(v),
     "Must be an object.",
   );
-export const progressSchema = z.strictObject({
-  revision: revisionSchema,
-  position: z.number().int().nonnegative(),
-  responses: objectInput,
-});
+export const progressSchema = z.union([
+  z.strictObject({
+    revision: revisionSchema,
+    position: z.number().int().nonnegative(),
+    changes: objectInput,
+  }),
+  // Keep existing v1 API clients working; new clients send bounded deltas.
+  z.strictObject({
+    revision: revisionSchema,
+    position: z.number().int().nonnegative(),
+    responses: objectInput,
+  }),
+]);
+export type ResponseChanges = Record<string, Response | null>;
+export function responseChanges(
+  old: Responses,
+  next: Responses,
+): ResponseChanges {
+  return Object.fromEntries(
+    [...new Set([...Object.keys(old), ...Object.keys(next)])]
+      .filter(
+        (id) =>
+          own(old, id) !== own(next, id) &&
+          JSON.stringify(own(old, id)) !== JSON.stringify(own(next, id)),
+      )
+      .map((id) => [id, own(next, id) ?? null]),
+  );
+}
+export function mergeResponses(old: Responses, changes: unknown): Responses {
+  if (typeof changes !== "object" || changes === null || Array.isArray(changes))
+    invalid("/changes", "Changed answers must be an object.");
+  const next = Object.assign(Object.create(null), old);
+  for (const [id, value] of Object.entries(changes)) {
+    if (value === null) delete next[id];
+    else next[id] = value;
+  }
+  return next;
+}
 const choiceResponse = z.strictObject({ selectedOptionId: z.string() });
 const writtenResponse = z.strictObject({
   text: z.string(),
@@ -85,8 +119,9 @@ export function validateProgress(
   if (typeof input !== "object" || input === null || Array.isArray(input))
     invalid("/responses", "Responses must be an object.");
   const result: Responses = Object.create(null);
+  const byId = new Map(items.map((item) => [item.id, item]));
   for (const [id, value] of Object.entries(input)) {
-    const item = items.find((item) => item.id === id);
+    const item = byId.get(id);
     if (!item)
       invalid(`/responses/${id}`, "Item does not exist in this snapshot.");
     const schema =
@@ -132,7 +167,7 @@ export function validateProgress(
             "Option does not belong to this question.",
           );
       } else {
-        if (codePoints(r.text!) > 20000)
+        if (codePoints(r.text!) > MAX_ANSWER_CHARACTERS)
           invalid(`/responses/${id}/text`, "Answer exceeds 20,000 characters.");
         if (
           status === "in_progress" &&
@@ -246,4 +281,35 @@ export function mistakes(
       : (writtenScore(q, own(responses, q.id)) ?? 0) < maximum(q),
   );
   return questions.length ? { ...doc, questions } : null;
+}
+
+/** Validate only changed records; unchanged answers already crossed this boundary. */
+export function validateProgressChanges(
+  doc: StudyContent,
+  status: Status,
+  old: Responses,
+  changes: unknown,
+  position: number,
+): Responses {
+  if (typeof changes !== "object" || changes === null || Array.isArray(changes))
+    invalid("/changes", "Changed answers must be an object.");
+  const ids = new Set(
+    (doc.kind === "exam" ? doc.questions : doc.cards).map((i) => i.id),
+  );
+  const before: Responses = Object.create(null),
+    after: Responses = Object.create(null);
+  for (const [id, value] of Object.entries(changes)) {
+    if (!ids.has(id))
+      invalid(`/changes/${id}`, "Item does not exist in this snapshot.");
+    const previous = own(old, id);
+    if (previous) before[id] = previous;
+    if (value !== null) after[id] = value as Response;
+  }
+  const validated = validateProgress(doc, status, before, after, position);
+  return mergeResponses(
+    old,
+    Object.fromEntries(
+      Object.keys(changes).map((id) => [id, own(validated, id) ?? null]),
+    ),
+  );
 }

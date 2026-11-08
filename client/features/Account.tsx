@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { clearDrafts } from "../lib/drafts";
+import { clearDeviceData } from "../lib/deviceCleanup";
 import {
   Button,
   Field,
@@ -14,7 +14,9 @@ import {
 export function AuthForm({
   inline,
   onSuccess,
+  expectedEmail,
 }: {
+  expectedEmail?: string;
   inline?: boolean;
   onSuccess: () => void | Promise<void>;
 }) {
@@ -25,6 +27,17 @@ export function AuthForm({
   const [error, setError] = useState<Error>();
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (
+      expectedEmail &&
+      email.trim().toLowerCase() !== expectedEmail.toLowerCase()
+    ) {
+      setError(
+        new Error(
+          `Sign in as ${expectedEmail} to save these changes. To change accounts, return to your work and download a recovery copy first.`,
+        ),
+      );
+      return;
+    }
     setBusy(true);
     setError(undefined);
     try {
@@ -101,13 +114,41 @@ export function AuthForm({
   );
 }
 export function AuthPage() {
-  const { user, refresh } = useAuth();
+  const { user, refresh, cleanupUser, setCleanupUser } = useAuth();
   const navigate = useNavigate();
+  const [cleanupError, setCleanupError] = useState<Error>();
   if (user) return <Navigate to="/" replace />;
   return (
     <main className="auth-page">
       <div className="auth-form">
         <div className="wordmark">Exam Prep</div>
+        {cleanupUser ? (
+          <Notice tone="warning">
+            <p>
+              You are signed out. Some drafts or AI notes could not be removed
+              from this device. They remain tied to your account. Retry cleanup,
+              or clear this site’s stored data in your browser on a shared
+              device.
+            </p>
+            <Button
+              onClick={async () => {
+                try {
+                  await clearDeviceData(cleanupUser);
+                  setCleanupUser(undefined);
+                } catch {
+                  setCleanupError(
+                    new Error(
+                      "Device cleanup is still unavailable. Your server session has ended.",
+                    ),
+                  );
+                }
+              }}
+            >
+              Retry device cleanup
+            </Button>
+            <ErrorNotice error={cleanupError} />
+          </Notice>
+        ) : null}
         <AuthForm
           onSuccess={async () => {
             await refresh();
@@ -119,7 +160,7 @@ export function AuthPage() {
   );
 }
 export function AccountPage() {
-  const { user, refresh } = useAuth();
+  const { user, refresh, setCleanupUser } = useAuth();
   const navigate = useNavigate();
   const [currentPassword, setCurrent] = useState("");
   const [newPassword, setNew] = useState("");
@@ -151,8 +192,15 @@ export function AccountPage() {
     setBusy(true);
     setError(undefined);
     try {
-      await clearDrafts(user!.id);
+      const userId = user!.id;
       await api("/auth/sign-out", "POST", {});
+      let cleanupFailed = false;
+      try {
+        await clearDeviceData(userId);
+      } catch {
+        cleanupFailed = true;
+      }
+      setCleanupUser(cleanupFailed ? userId : undefined);
       await refresh();
       navigate("/sign-in");
     } catch (e) {
@@ -217,8 +265,10 @@ export function AccountPage() {
         <Dialog title="Sign out?" onClose={() => setConfirm(false)}>
           <p>
             Your saved sets and practice history stay in your account. Local
-            editor drafts will be removed.
+            editor drafts and unfinished AI notes will be removed where device
+            storage is available.
           </p>
+          <ErrorNotice error={error} retry={() => void logout()} />
           <div className="actions">
             <Button onClick={() => setConfirm(false)}>Keep studying</Button>
             <Button variant="primary" busy={busy} onClick={logout}>

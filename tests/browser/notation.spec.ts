@@ -5,6 +5,7 @@ import {
   validateContent,
   type StudyContent,
 } from "../../shared/content";
+import { mergeResponses } from "../../shared/attempts";
 import type { Attempt, StudySet } from "../../client/lib/api";
 
 // Browser plugin not available: use the project's Playwright workflow.
@@ -79,7 +80,12 @@ async function mockAPI(page: Page) {
       response = saved;
     } else if (path === "/api/attempts/notation/progress") {
       const body = route.request().postDataJSON();
-      attempt = { ...attempt, ...body, revision: attempt.revision + 1 };
+      attempt = {
+        ...attempt,
+        position: body.position,
+        responses: mergeResponses(attempt.responses, body.changes),
+        revision: attempt.revision + 1,
+      };
       response = attempt;
     } else if (path === "/api/attempts/notation") response = attempt;
     else throw new Error(`Unexpected API call: ${path}`);
@@ -305,6 +311,7 @@ test("practice saves notation responses and leaves submitted answers read-only",
   ).toBeVisible();
   await noOverflow(page);
   api.attempt().status = "reviewing";
+  api.attempt().responses.math.selfAssessment = "correct";
   await page.reload();
   await expect(page.getByLabel("Your answer", { exact: true })).toHaveAttribute(
     "readonly",

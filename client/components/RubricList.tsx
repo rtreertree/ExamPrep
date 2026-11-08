@@ -6,6 +6,7 @@ import { Button, Field } from "./ui";
 import { StudyContent } from "./StudyContent";
 type Props = {
   criteria: Criterion[];
+  path?: string;
   mode: "author" | "assess" | "review";
   awards?: Record<string, number>;
   onAward?: (id: string, points: number | undefined, commit: boolean) => void;
@@ -14,6 +15,7 @@ type Props = {
 };
 export function RubricList({
   criteria,
+  path,
   mode,
   awards,
   onAward,
@@ -32,7 +34,10 @@ export function RubricList({
         <div className="rubric-row" key={c.id}>
           {mode === "author" ? (
             <>
-              <Field label={`Criterion ${i + 1}`}>
+              <Field
+                path={path ? `${path}/${i}/description` : undefined}
+                label={`Criterion ${i + 1}`}
+              >
                 <NotationEditor
                   value={c.description}
                   onChange={(value) =>
@@ -44,7 +49,10 @@ export function RubricList({
                   }
                 />
               </Field>
-              <Field label="Maximum points">
+              <Field
+                path={path ? `${path}/${i}/points` : undefined}
+                label="Maximum points"
+              >
                 <input
                   type="number"
                   min={1}

@@ -152,7 +152,7 @@ test("complete study workflow, recovery, partial credit, flashcards, responsive 
     "Topic: Calculus",
   );
   await expect(
-    page.getByRole("link", { name: "Download authoring skill" }),
+    page.getByRole("link", { name: "Download required instructions" }),
   ).toHaveAttribute("href", "/downloads/SKILL.md");
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.screenshot({ path: "/tmp/examprep-library.png" });
@@ -188,18 +188,11 @@ test("complete study workflow, recovery, partial credit, flashcards, responsive 
   await page.getByRole("button", { name: "Submit exam", exact: true }).click();
   await page
     .getByRole("dialog")
-    .getByRole("button", { name: "Submit exam", exact: true })
+    .getByRole("button", { name: "Submit and review answers", exact: true })
     .click();
   await expect(
     page.getByRole("heading", { name: "Finish self-assessment" }),
   ).toBeVisible();
-  await page
-    .getByRole("button", { name: "Correct · 1 point", exact: true })
-    .click();
-  await expect(
-    page.getByText("Saved to your account", { exact: true }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Previous", exact: true }).click();
   await page.getByLabel("Points for criterion 1 (maximum 2)").fill("1");
   await page.getByLabel("Points for criterion 1 (maximum 2)").press("Tab");
   await expect(
@@ -210,9 +203,14 @@ test("complete study workflow, recovery, partial credit, flashcards, responsive 
     page.getByRole("heading", { name: "Finish self-assessment" }),
   ).toBeVisible();
   await page.getByLabel("Points for criterion 2 (maximum 3)").press("Tab");
+  await page.getByRole("button", { name: "Next unassessed answer" }).click();
+  await page
+    .getByRole("button", { name: "Correct · 1 point", exact: true })
+    .click();
   await expect(
     page.getByRole("heading", { name: "Exam results", exact: true }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Previous", exact: true }).click();
   await expect(page.getByText("3 / 5 points · self-assessed")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Retry mistakes (1)" }),
@@ -608,7 +606,7 @@ test("multi-digit rubric awards commit on blur; invalid math warns and long form
       .click();
     await page
       .getByRole("dialog")
-      .getByRole("button", { name: "Submit exam", exact: true })
+      .getByRole("button", { name: "Submit and review answers", exact: true })
       .click();
     await expect(
       page.getByRole("heading", { name: "Finish self-assessment" }),

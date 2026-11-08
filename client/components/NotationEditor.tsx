@@ -1,5 +1,5 @@
 import { lazy, Suspense, useRef, useState } from "react";
-import type { AnswerType } from "../../shared/content";
+import { codePoints, type AnswerType } from "../../shared/content";
 import {
   formulaSelection,
   insertFormula,
@@ -18,6 +18,8 @@ type Props = {
   rows?: number;
   className?: string;
   readOnly?: boolean;
+  maxCharacters?: number;
+  "aria-invalid"?: boolean;
 };
 
 export function NotationEditor({
@@ -28,6 +30,8 @@ export function NotationEditor({
   rows,
   className,
   readOnly,
+  maxCharacters = 20_000,
+  "aria-invalid": invalid,
   "aria-describedby": describedBy,
 }: Props) {
   const input = useRef<HTMLTextAreaElement>(null);
@@ -35,6 +39,12 @@ export function NotationEditor({
     type: "math" | "chem";
     selection: FormulaSelection;
   }>();
+  const count = codePoints(value);
+  const [showTools, setShowTools] = useState(false);
+  function close() {
+    setEditing(undefined);
+    requestAnimationFrame(() => input.current?.focus());
+  }
   function open(type: "math" | "chem") {
     const node = input.current!;
     setEditing({
@@ -51,7 +61,11 @@ export function NotationEditor({
       <textarea
         ref={input}
         id={id}
-        aria-describedby={describedBy}
+        aria-describedby={
+          [describedBy, id ? `${id}-count` : ""].filter(Boolean).join(" ") ||
+          undefined
+        }
+        aria-invalid={invalid || count > maxCharacters}
         rows={rows}
         className={className}
         readOnly={readOnly}
@@ -59,23 +73,42 @@ export function NotationEditor({
         onChange={(event) => onChange(event.target.value)}
       />
       {!readOnly ? (
+        <small
+          id={id ? `${id}-count` : undefined}
+          className={count > maxCharacters ? "negative" : "muted"}
+        >
+          {count.toLocaleString()} / {maxCharacters.toLocaleString()} characters
+        </small>
+      ) : null}
+      {!readOnly ? (
         <div
           className="notation-toolbar"
           role="group"
           aria-label="Notation tools"
         >
           <Button
-            variant={answerType === "math" ? "primary" : "quiet"}
-            onClick={() => open("math")}
+            variant="quiet"
+            aria-expanded={showTools}
+            onClick={() => setShowTools(!showTools)}
           >
-            <span aria-hidden="true">∑</span> Math keyboard
+            Symbols
           </Button>
-          <Button
-            variant={answerType === "chem" ? "primary" : "quiet"}
-            onClick={() => open("chem")}
-          >
-            <span aria-hidden="true">H₂O</span> Chemistry keyboard
-          </Button>
+          {showTools || answerType === "math" ? (
+            <Button
+              variant={answerType === "math" ? "primary" : "quiet"}
+              onClick={() => open("math")}
+            >
+              <span aria-hidden="true">∑</span> Math keyboard
+            </Button>
+          ) : null}
+          {showTools || answerType === "chem" ? (
+            <Button
+              variant={answerType === "chem" ? "primary" : "quiet"}
+              onClick={() => open("chem")}
+            >
+              <span aria-hidden="true">H₂O</span> Chemistry keyboard
+            </Button>
+          ) : null}
         </div>
       ) : null}
       {editing && !readOnly ? (
@@ -83,13 +116,13 @@ export function NotationEditor({
           title={
             editing.type === "chem" ? "Chemistry notation" : "Math notation"
           }
-          onClose={() => setEditing(undefined)}
+          onClose={close}
         >
           <Suspense fallback={<p role="status">Loading notation keyboard…</p>}>
             <FormulaComposer
               type={editing.type}
               initial={editing.selection}
-              onCancel={() => setEditing(undefined)}
+              onCancel={close}
               onInsert={(latex, display) => {
                 const next = insertFormula(
                   value,

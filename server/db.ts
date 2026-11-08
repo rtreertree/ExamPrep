@@ -25,6 +25,10 @@ type Delegate<Model, Where, Create, Update, Order> = {
   deleteMany(args: { where: Where }): Promise<{ count: number }>;
 };
 type Tables = {
+  $queryRaw<T = unknown>(
+    query: TemplateStringsArray,
+    ...values: unknown[]
+  ): Promise<T>;
   studySet: Delegate<
     StudySet,
     Prisma.StudySetWhereInput,

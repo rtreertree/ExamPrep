@@ -1,5 +1,5 @@
 import { NotationEditor } from "../components/NotationEditor";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useBlocker, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { itemsOf, type Question } from "../../shared/content";
@@ -22,6 +22,7 @@ import {
   LoadingRows,
   Notice,
   SaveStatus,
+  Tabs,
 } from "../components/ui";
 import { StudyContent } from "../components/StudyContent";
 import { RubricList } from "../components/RubricList";
@@ -59,6 +60,17 @@ function Practice({ initial }: { initial: Attempt }) {
   const [navOpen, setNavOpen] = useState(false);
   const [retryError, setRetryError] = useState<Error>();
   const [retrying, setRetrying] = useState(false);
+  const [navFilter, setNavFilter] = useState("all");
+  const [lastRating, setLastRating] = useState<{
+    id: string;
+    index: number;
+    previous?: Response;
+  }>();
+  const resultHeading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (attempt.status !== "in_progress")
+      requestAnimationFrame(() => resultHeading.current?.focus());
+  }, [attempt.status]);
   useUnsaved(dirty);
   const blocker = useBlocker(dirty);
   function response(
@@ -71,12 +83,11 @@ function Practice({ initial }: { initial: Attempt }) {
     state.change(values, position, immediate);
   }
   async function go(index: number) {
-    if (busy || !(await state.flush())) return;
-    state.change(responses, index);
-    setNavOpen(false);
+    if (await state.moveTo(index)) setNavOpen(false);
   }
   async function rate(rating: "known" | "review_again") {
     if (busy) return;
+    setLastRating({ id: item.id, index: position, previous: r });
     const values = { ...responses, [item.id]: { revealed: true, rating } };
     state.change(values, Math.min(position + 1, items.length - 1));
     await state.flush();
@@ -105,6 +116,68 @@ function Practice({ initial }: { initial: Attempt }) {
     doc.kind === "exam"
       ? doc.questions.filter((q) => !answered(q, own(responses, q.id))).length
       : doc.cards.filter((c) => !own(responses, c.id)?.rating).length;
+  const pending =
+    doc.kind === "exam"
+      ? doc.questions.flatMap((q, i) =>
+          q.type === "written" && writtenScore(q, own(responses, q.id)) === null
+            ? [i]
+            : [],
+        )
+      : [];
+  const writtenAnswered =
+    doc.kind === "exam"
+      ? doc.questions.filter(
+          (q) => q.type === "written" && answered(q, own(responses, q.id)),
+        ).length
+      : 0;
+  const omissions = items.flatMap((it, i) =>
+    (
+      "type" in it
+        ? !answered(it, own(responses, it.id))
+        : !own(responses, it.id)?.rating
+    )
+      ? [i]
+      : [],
+  );
+  const incorrectIds = new Set(
+    eligible ? itemsOf(eligible).map((i) => i.id) : [],
+  );
+  const confirmedPending =
+    attempt.result?.selfAssessed?.pendingCount ?? pending.length;
+  function recoveryDownload() {
+    download(
+      JSON.stringify(
+        {
+          purpose: "Practice recovery copy; not an importable study-set file",
+          attemptId: attempt.id,
+          title: doc.title,
+          confirmedRevision: attempt.revision,
+          position,
+          items: items.map((it) => ({
+            id: it.id,
+            prompt: "prompt" in it ? it.prompt : it.front,
+          })),
+          responses,
+        },
+        null,
+        2,
+      ),
+      "practice-answer-recovery.json",
+    );
+  }
+  function itemState(it: typeof item) {
+    if ("type" in it) {
+      if (!answered(it, own(responses, it.id))) return "Unanswered";
+      if (attempt.status === "reviewing" && it.type === "written")
+        return writtenScore(it, own(responses, it.id)) === null
+          ? "Needs assessment"
+          : "Assessed";
+      if (attempt.status === "completed")
+        return incorrectIds.has(it.id) ? "Needs review" : "Correct";
+      return "Answered";
+    }
+    return own(responses, it.id)?.rating ? "Rated" : "Unreviewed";
+  }
   return (
     <div className="practice-frame">
       <header className="focus-header frosted-navigation">
@@ -137,7 +210,31 @@ function Practice({ initial }: { initial: Attempt }) {
             {items.length}
           </Button>
         </div>
+        <p role="status" className="muted completion-count">
+          {items.length - unanswered}{" "}
+          {doc.kind === "exam" ? "answered" : "rated"} · {unanswered}{" "}
+          {doc.kind === "exam" ? "unanswered" : "unreviewed"}
+        </p>
+        <span className="sr-only" aria-live="polite">
+          {doc.kind === "exam" ? "Question" : "Card"} {position + 1} of{" "}
+          {items.length}.{" "}
+          {attempt.status === "completed"
+            ? "Assessment and saving complete."
+            : ""}
+        </span>
         <ErrorNotice error={state.error} />
+        {state.error ? (
+          <Notice tone="warning">
+            <p>
+              Could not confirm a save. Keep this page open and retry, or
+              download a recovery copy. This copy cannot be imported as a study
+              set.
+            </p>
+            <Button onClick={recoveryDownload}>
+              Download my unsaved answers
+            </Button>
+          </Notice>
+        ) : null}
         {state.conflict ? (
           <Notice tone="warning">
             <p>
@@ -145,16 +242,6 @@ function Practice({ initial }: { initial: Attempt }) {
               them before loading the confirmed progress.
             </p>
             <div className="actions">
-              <Button
-                onClick={() =>
-                  download(
-                    JSON.stringify({ position, responses }, null, 2),
-                    "unsaved-practice.json",
-                  )
-                }
-              >
-                Download my unsaved answers
-              </Button>
               <Button onClick={() => window.location.reload()}>
                 Load confirmed progress
               </Button>
@@ -171,7 +258,7 @@ function Practice({ initial }: { initial: Attempt }) {
         ) : null}
         {!inProgress ? (
           <section className="results-intro">
-            <h1>
+            <h1 ref={resultHeading} tabIndex={-1}>
               {attempt.status === "reviewing"
                 ? "Finish self-assessment"
                 : doc.kind === "exam"
@@ -183,7 +270,54 @@ function Practice({ initial }: { initial: Attempt }) {
                 ? "Your submitted answers are frozen. Compare your written work with the reference answers."
                 : "Your results are saved to your account."}
             </p>
+            <p className="muted">
+              This attempt uses the original version of the set from when you
+              began.
+              {attempt.sourceAttemptId
+                ? " This retry score covers only its subset of items."
+                : ""}
+            </p>
             <ScoreSummary result={attempt.result} />
+            {attempt.status === "reviewing" ? (
+              <div className="assessment-queue">
+                <p role="status">
+                  {writtenAnswered - confirmedPending} of {writtenAnswered}{" "}
+                  written answers assessed. Written score is provisional until
+                  all assessments save.
+                </p>
+                <Button
+                  variant="primary"
+                  disabled={state.submitting || !pending.length}
+                  onClick={() => {
+                    const next =
+                      pending.find((i) => i > position) ?? pending[0];
+                    if (next !== undefined) void go(next);
+                  }}
+                >
+                  Next unassessed answer
+                </Button>
+              </div>
+            ) : null}
+            {attempt.status === "completed" && retryCount ? (
+              <details>
+                <summary>
+                  {retryCount}{" "}
+                  {doc.kind === "exam"
+                    ? "incorrect, partial-credit or unanswered questions"
+                    : "cards to review again"}
+                </summary>
+                <div className="question-nav">
+                  {items.map((it, i) =>
+                    incorrectIds.has(it.id) ? (
+                      <Button key={it.id} onClick={() => void go(i)}>
+                        {doc.kind === "exam" ? "Question" : "Card"} {i + 1} ·{" "}
+                        {itemState(it)}
+                      </Button>
+                    ) : null,
+                  )}
+                </div>
+              </details>
+            ) : null}
             {attempt.status === "completed" ? (
               <div className="actions">
                 <Button
@@ -227,7 +361,7 @@ function Practice({ initial }: { initial: Attempt }) {
             {item.type === "single_choice" ? (
               <fieldset
                 className="answer-options"
-                disabled={!inProgress || busy}
+                disabled={!inProgress || state.submitting}
               >
                 <legend className="sr-only">Choose one answer</legend>
                 {item.options.map((option, i) => (
@@ -274,6 +408,7 @@ function Practice({ initial }: { initial: Attempt }) {
                     key={item.id}
                     answerType={item.answerType}
                     className="written-answer"
+                    rows={inProgress ? undefined : 3}
                     readOnly={!inProgress || state.submitting}
                     value={r?.text ?? ""}
                     onChange={(value) => response({ text: value }, false)}
@@ -301,6 +436,31 @@ function Practice({ initial }: { initial: Attempt }) {
           <>
             {inProgress ? (
               <>
+                <p className="muted">
+                  Rating saves and moves to the next card. “Review again”
+                  selects it for a later retry.
+                </p>
+                {lastRating ? (
+                  <Button
+                    disabled={busy}
+                    onClick={async () => {
+                      const values = {
+                        ...responses,
+                        [lastRating.id]: {
+                          revealed: true,
+                          ...(lastRating.previous?.rating
+                            ? { rating: lastRating.previous.rating }
+                            : {}),
+                        },
+                      };
+                      state.change(values, lastRating.index);
+                      setLastRating(undefined);
+                      await state.flush();
+                    }}
+                  >
+                    Undo last rating
+                  </Button>
+                ) : null}
                 <FlashcardStage
                   key={item.id}
                   card={item}
@@ -337,7 +497,7 @@ function Practice({ initial }: { initial: Attempt }) {
         ) : null}
         <footer className="study-footer">
           <Button
-            disabled={position === 0 || busy}
+            disabled={position === 0 || state.submitting}
             onClick={() => void go(position - 1)}
           >
             <ArrowLeft size={16} />
@@ -352,7 +512,7 @@ function Practice({ initial }: { initial: Attempt }) {
                 variant={
                   inProgress && doc.kind === "exam" ? "primary" : "secondary"
                 }
-                disabled={busy}
+                disabled={state.submitting}
                 onClick={() => void go(position + 1)}
               >
                 Next
@@ -383,25 +543,85 @@ function Practice({ initial }: { initial: Attempt }) {
           title={
             doc.kind === "exam" ? "Submit this exam?" : "Finish this session?"
           }
-          onClose={() => setConfirm(false)}
+          onClose={() => {
+            if (!state.submitting) setConfirm(false);
+          }}
         >
+          <p>
+            {items.length - unanswered}{" "}
+            {doc.kind === "exam" ? "answered" : "rated"}, {unanswered}{" "}
+            {doc.kind === "exam" ? "unanswered" : "unreviewed"}.
+          </p>
           <p>
             {unanswered}{" "}
             {doc.kind === "exam"
               ? "unanswered questions will receive zero. Submitted answers cannot be changed."
               : "unreviewed cards will be included in your summary. Only cards rated Review again appear in a retry."}
           </p>
+          {doc.kind === "exam" &&
+          doc.questions.some((q) => q.type === "written") ? (
+            <p>
+              Single-choice answers are scored automatically. You will mark
+              answered written questions next.
+            </p>
+          ) : null}
+          {omissions.length ? (
+            <details>
+              <summary>
+                {doc.kind === "exam"
+                  ? "Review unanswered questions"
+                  : "Review unreviewed cards"}
+              </summary>
+              <div className="question-nav">
+                {omissions.map((i) => (
+                  <Button
+                    key={items[i].id}
+                    disabled={state.submitting}
+                    onClick={async () => {
+                      if (await state.moveTo(i)) setConfirm(false);
+                    }}
+                  >
+                    {doc.kind === "exam" ? "Question" : "Card"} {i + 1}
+                  </Button>
+                ))}
+              </div>
+            </details>
+          ) : null}
+          {doc.kind === "flashcards" && omissions.length ? (
+            <Button
+              disabled={state.submitting}
+              onClick={async () => {
+                const next =
+                  omissions.find((i) => i > position) ?? omissions[0];
+                if (await state.moveTo(next)) setConfirm(false);
+              }}
+            >
+              Go to next unreviewed card
+            </Button>
+          ) : null}
+          <ErrorNotice error={state.error} />
+          {state.error ? (
+            <Button onClick={recoveryDownload}>Download recovery copy</Button>
+          ) : null}
           <div className="actions">
-            <Button onClick={() => setConfirm(false)}>Keep studying</Button>
+            <Button
+              disabled={state.submitting}
+              onClick={() => setConfirm(false)}
+            >
+              Keep studying
+            </Button>
             <Button
               variant="primary"
               busy={busy}
               onClick={async () => {
-                await state.submit();
-                setConfirm(false);
+                if (await state.submit()) setConfirm(false);
               }}
             >
-              {doc.kind === "exam" ? "Submit exam" : "Finish session"}
+              {doc.kind === "exam"
+                ? doc.questions.some((q) => q.type === "written")
+                  ? "Submit and review answers"
+                  : "Submit exam"
+                : "Finish session"}
             </Button>
           </div>
         </Dialog>
@@ -413,24 +633,45 @@ function Practice({ initial }: { initial: Attempt }) {
           }
           onClose={() => setNavOpen(false)}
         >
-          <div className="question-nav">
-            {items.map((it, i) => (
-              <Button
-                disabled={busy}
-                className={i === position ? "selected" : ""}
-                key={it.id}
-                onClick={() => void go(i)}
-              >
-                {i + 1} ·{" "}
-                {doc.kind === "exam" && "type" in it
-                  ? answered(it, own(responses, it.id))
-                    ? "Answered"
-                    : "Unanswered"
-                  : own(responses, it.id)?.rating
-                    ? "Rated"
-                    : "Unreviewed"}
-              </Button>
-            ))}
+          <Tabs
+            label="Navigation filter"
+            value={navFilter}
+            onChange={setNavFilter}
+            tabs={[
+              { value: "all", label: "All" },
+              {
+                value: "unanswered",
+                label: doc.kind === "exam" ? "Unanswered" : "Unreviewed",
+              },
+              ...(attempt.status === "reviewing"
+                ? [{ value: "pending", label: "Needs assessment" }]
+                : []),
+              ...(attempt.status === "completed"
+                ? [{ value: "mistakes", label: "Needs review" }]
+                : []),
+            ]}
+          />
+          <div
+            className="question-nav"
+            role="tabpanel"
+            id={`navigation-filter-${navFilter}`}
+            aria-label="Filtered items"
+          >
+            {items.map((it, i) =>
+              navFilter === "all" ||
+              (navFilter === "unanswered" && omissions.includes(i)) ||
+              (navFilter === "pending" && pending.includes(i)) ||
+              (navFilter === "mistakes" && incorrectIds.has(it.id)) ? (
+                <Button
+                  disabled={state.submitting}
+                  className={i === position ? "selected" : ""}
+                  key={it.id}
+                  onClick={() => void go(i)}
+                >
+                  {i + 1} · {itemState(it)}
+                </Button>
+              ) : null,
+            )}
           </div>
         </Dialog>
       ) : null}
@@ -442,6 +683,8 @@ function Practice({ initial }: { initial: Attempt }) {
           <p>
             Save your latest progress before leaving, or return to keep working.
           </p>
+          <ErrorNotice error={state.error} />
+          <Button onClick={recoveryDownload}>Download recovery copy</Button>
           <div className="actions">
             <Button onClick={() => blocker.reset()}>Return to practice</Button>
             <Button

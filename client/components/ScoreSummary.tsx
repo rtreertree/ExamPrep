@@ -7,7 +7,11 @@ export function ScoreSummary({ result }: { result: Result | null }) {
         result[key] ? (
           <div className="score-group" key={key}>
             <span className="muted">
-              {key === "automatic" ? "Automatic score" : "Self-assessed score"}
+              {key === "automatic"
+                ? "Automatic score"
+                : result[key]!.pendingCount
+                  ? "Provisional self-assessed score"
+                  : "Self-assessed score"}
             </span>
             <strong>
               {result[key]!.earnedPoints}

@@ -62,6 +62,12 @@ export function FlashcardStage({
           />
         </div>
       </SurfaceLight>
+      {back ? (
+        <details>
+          <summary>Show question</summary>
+          <StudyContent source={card.front} label="revealed card question" />
+        </details>
+      ) : null}
       {flipping ? (
         <p className="muted" role="status">
           Revealing answer…

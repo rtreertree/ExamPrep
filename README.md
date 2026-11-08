@@ -27,7 +27,7 @@ npm run worker:check
 npm run dev:worker
 ```
 
-GitHub CI/CD, exact secrets, domain setup, migration ordering and rollback are documented in [DEPLOYMENT.md](DEPLOYMENT.md). PR checks use no secrets. Reviewed `main` changes deploy the Worker and assets together through the **production** GitHub environment after the regular CI checks pass. GitHub runs no live database integration or browser acceptance tests and requires no Neon API key. Local opt-in acceptance tests remain available using only a dedicated test database connection. Actions → **Release** also supports manual deployment from `main`. Production migration/deployment scripts are restricted to that job; use the workflow instead of deploying the top-level local Worker configuration.
+GitHub CI/CD, exact secrets, domain setup, migration ordering and rollback are documented in [DEPLOYMENT.md](DEPLOYMENT.md). PR checks use no secrets. Reviewed `main` changes deploy the Worker and assets together through the **production** GitHub environment after the regular CI checks pass. GitHub runs simulated-data Chromium browser regressions without secrets. It runs no live database acceptance tests and requires no Neon API key. Local opt-in acceptance tests remain available using only a dedicated test database connection. Actions → **Release** also supports manual deployment from `main`. Production migration/deployment scripts are restricted to that job; use the workflow instead of deploying the top-level local Worker configuration.
 
 The release keeps the existing `cloudflare:check` readiness guard. It uses the deployment database and is read-only apart from a transient hashing probe; it refuses remaining old-format credentials. Use `npm run cloudflare:check -- --local` to check an intentional localhost origin. `/api` and `/api/*` reach Hono and never fall back to the SPA. Public version previews are disabled to avoid sharing production resources. No production migration or public deployment was performed during local validation.
 
@@ -59,6 +59,7 @@ The Node server replaces incoming IP headers with the actual socket address befo
 ```sh
 npm test
 npm run typecheck
+npm run test:e2e:mock
 npm run build
 npm run worker:check
 ```
@@ -79,7 +80,7 @@ installing Chromium. This uses ports 8791/8792 and the dedicated test database i
 
 The integration and browser suites use unique disposable accounts and delete those accounts and their owned records afterward. They read the ignored `.env` for cleanup, so its database **must match the runtime being tested**. Never run them against production. Keep browser tests sequential because the real persistent auth limiter is enabled. Rapid repeated test runs can correctly hit throttling; allow the 60-second window to expire.
 
-Browser tests expect a running **built** app. Set `TEST_BASE_URL` to the Worker origin to repeat them there; that runtime's `BETTER_AUTH_URL` must match. Screenshots and browser output go to `/tmp`, not source control. Browser plugin availability and executed checks are recorded in [verification notes](VERIFICATION.md).
+The simulated-data suite (`npm run test:e2e:mock`) starts its own Vite server on `127.0.0.1:5173` and needs no account or database. Install Chromium with `npx playwright install chromium` first. Use `npx playwright test --project=live` only against a dedicated test database. Live browser tests expect a running **built** app. Set `TEST_BASE_URL` to the Worker origin to repeat them there; that runtime's `BETTER_AUTH_URL` must match. Screenshots and browser output go to `/tmp`, not source control. Browser plugin availability and executed checks are recorded in [verification notes](VERIFICATION.md).
 
 ## Notation input
 
@@ -98,3 +99,11 @@ Written questions have an optional `answerType` of `simple`, `math`, or `chem`. 
 - Fonts and math assets are bundled locally with licenses. There are no AI SDKs, analytics calls, external fonts, or external content/media loads.
 
 Password recovery, email delivery/verification, built-in AI, and the other documented exclusions are not implemented.
+
+## v1 usability and reliability maintenance
+
+The application remains **1.0.0** and portable files remain **schemaVersion 1**. The library resumes the latest unfinished attempt, keeps Start new attempt separate, and supports server-side title search. History filters by status, title and source set. Imports preview one item at a time, with solutions behind a disclosure and explicit Start practice/Edit set destinations after saving. The AI helper has ordered instructions and account-scoped device settings. Editor issues link to their fields, character limits are visible, and unfinished drafts can be downloaded for recovery.
+
+Practice saves changed answers with revision checks, separates completion from position, links to omissions before submission, and guides pending written assessment. Failed saves keep input and offer recovery downloads. Those downloads are **not importable study sets**. Flashcard ratings explain automatic advancement, support undo while active, and never reset reveal state. Sign-out contacts the server independently of device cleanup and reports failed or stalled cleanup accurately.
+
+Before releasing this code, apply the additive `202611080003_attempt_progress` migration through the existing deployment workflow (or `npm run db:migrate` on an intentional local test database). It adds compact immutable scoring metadata and a continuation index; existing attempt snapshots and portable files are preserved. Old attempts are validated before their first metadata upgrade. See [verification notes](VERIFICATION.md) for coverage and remaining external validation.

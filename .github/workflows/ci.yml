@@ -24,6 +24,9 @@ jobs:
       - run: npm run generate
       - run: npm run typecheck
       - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - name: Browser regressions without live accounts
+        run: npm run test:e2e:mock
       - run: npm run build
       - run: npm run worker:check
       - name: Validate production package without credentials

@@ -8,6 +8,7 @@ export type StudySet = {
   revision: number;
   updatedAt: string;
   count?: number;
+  continuation?: Pick<Attempt, "id" | "status" | "position" | "result"> | null;
 };
 export type Attempt = {
   id: string;
@@ -28,6 +29,7 @@ export class ApiError extends Error {
     message: string,
     public status: number,
     public issues?: { path: string; message: string }[],
+    public reference?: string,
   ) {
     super(message);
   }
@@ -55,6 +57,7 @@ export async function api<T>(
     error?: string | { message?: string };
     message?: string;
     issues?: { path: string; message: string }[];
+    reference?: string;
   };
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith("/auth/"))
@@ -65,6 +68,7 @@ export async function api<T>(
         "Request failed. Try again.",
       response.status,
       value.issues,
+      value.reference,
     );
   }
   return value;

@@ -165,3 +165,34 @@ New password tests cover parameterized SQL, cost bounds, Unicode normalization, 
 The existing non-test account was not modified by test cleanup or reset. Its owner must sign out and sign in once on the updated Node application to migrate it. `npm run cloudflare:check -- --local` correctly reports this remaining requirement; it must not be bypassed for deployment. Production migrations and secret provisioning remain deployment setup steps. Preserve/back up `PASSWORD_PEPPER` and supply the same value to runtimes sharing a database. Old application versions cannot verify the new hash format.
 
 Workers Free retains request, CPU, memory, and other platform quotas; Neon has separate compute/storage quotas. Local workerd/API/browser success does not establish production CPU compliance for every accepted workload. Measure authentication and maximum-size import/grading operations on the target free account before production reliance. Docker image execution and other previously listed unavailable checks were not repeated.
+
+## v1 UX and reliability maintenance — 8 November 2026
+
+This maintenance pass addresses review findings T1–T6 and U1–U13 while retaining package version 1.0.0, portable schemaVersion 1, existing grading, authored order and the existing visual system.
+
+| Findings | Change and focused evidence |
+| --- | --- |
+| T1, U7 | Navigation reads the latest desired responses after awaiting saves. Delayed Next, Previous and picker regressions retain later edits across reload. Practice failures offer retry and contextual recovery downloads; editor drafts remain account-scoped. |
+| T2 | Bounded response deltas and compact acknowledgements avoid the full-map request limit. Tests build all 500 maximum-length responses with ASCII, multibyte text and JSON escapes, round-trip storage, and preserve grading/frozen answers/reveal rules. |
+| T3 | Server sign-out happens independently of draft cleanup. Browser checks cover rejected storage, stalled storage, failed server sign-out, successful cleanup, account isolation and accurate cleanup warnings. |
+| T4 | Versioned immutable compact scoring metadata replaces whole-snapshot Markdown validation during progress. Server tests verify ownership, revisions, one-time legacy upgrade and unchanged scoring. Migration adds database protection and continuation lookup indexing. |
+| T5 | Simulated database failure produces a safe structured event and matching response/header reference; sensitive exception content never reaches either output. |
+| T6 | CI installs Chromium and runs the simulated-data browser project; live database acceptance stays separate and sequential. |
+| U1–U4 | Three visible starting paths and a non-persisted sample; ordered external-AI handoff with account-specific recovery and blocked-storage warning; readable validation/repair-copy guidance; one-item import preview and explicit saved destinations. |
+| U5, U12 | Server-side library/history search and filters, latest unfinished continuation, explicit Start new, state-specific History actions, immutable-attempt and retry-subset explanations, linked mistake summaries. Browser checks verify continuation creates no attempt and filters are sent to the API; optional database assertions cover search beyond pagination. |
+| U6 | Inline issues on blur, issue navigation/focus, item markers, Unicode counters including formula insertion, optional IDs, invalid draft recovery and Save and practice after confirmed account persistence. |
+| U8–U10 | Separate completion counts, workflow-specific navigation filters, omission links in submission review, failed-submission recovery, focus on the first pending answer, guided assessment, provisional scores, rubric commit-on-blur/Enter and confirmed completion with explicit zeros. |
+| U11, U13 | Flashcard advancement/retry explanations, Show question, Undo last rating, early-finish review counts; compact Symbols access, retained preferred keyboards, focus returned on notation cancellation, reduced motion and phone viewport checks. |
+
+Local checks: type checking, ordinary tests (125 passed; 5 opt-in live database tests skipped), all 17 simulated-data Chromium browser checks, production build, and Worker dry-run packaging passed. The formula-editor chunk-size warning remains; the editor is still loaded only on demand. Browser plugin not available: the repository's Playwright Chromium workflow uses simulated APIs at http://127.0.0.1:5173. Coverage includes page identity, meaningful content, no framework overlay, runtime/console health, interactions and inspected desktop/phone screenshots. Expected injected HTTP failures are excluded from console-error findings. Notation checks cover 1536 px desktop and 390/320 px touch layouts.
+
+Local validation-only timings (Node, no database/network, averages after warm-up):
+
+| Set | Content bytes | Full content validation | Changed answer | Position only | Written assessment |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Typical, 10 questions | 1,487 | 5.844 ms | 0.346 ms | 0.090 ms | 0.074 ms |
+| Near limit, 500 questions | 2,031,957 | 367.445 ms | 0.211 ms | 0.292 ms | 0.406 ms |
+
+The near-limit projection was 27,456 bytes. Progress timings include structural projection validation and response validation; assessment also includes grading. They exclude database I/O, JSON persistence, request parsing and network latency, and do not establish deployed Worker CPU or memory compliance.
+
+No production migration or deployment was performed. Live database migration/acceptance, deployed latency/CPU/memory, physical-phone software-keyboard behavior, screen-reader testing and task sessions with representative students remain external validation tasks. Browser screenshots, temporary benchmarks and test output live outside source control under /tmp.

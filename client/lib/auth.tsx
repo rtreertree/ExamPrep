@@ -18,13 +18,16 @@ type User = { id: string; email: string };
 const AuthContext = createContext<{
   user: User | null;
   refresh: () => Promise<void>;
-}>({ user: null, refresh: async () => {} });
+  cleanupUser?: string;
+  setCleanupUser: (userId?: string) => void;
+}>({ user: null, refresh: async () => {}, setCleanupUser: () => {} });
 export const useAuth = () => useContext(AuthContext);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error>();
   const [expired, setExpired] = useState(false);
+  const [cleanupUser, setCleanupUser] = useState<string>();
   async function refresh() {
     try {
       setError(undefined);
@@ -56,7 +59,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       </main>
     );
   return (
-    <AuthContext.Provider value={{ user, refresh }}>
+    <AuthContext.Provider
+      value={{ user, refresh, cleanupUser, setCleanupUser }}
+    >
       {children}
       {expired ? (
         <Dialog
@@ -69,6 +74,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           </Notice>
           <AuthForm
             inline
+            expectedEmail={user?.email}
             onSuccess={async () => {
               const session = await api<{ user: User }>("/auth/get-session");
               if (session.user.id !== user?.id) window.location.assign("/");

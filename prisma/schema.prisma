@@ -111,6 +111,8 @@ model Attempt {
   sourceAttemptId String?
   sourceAttempt   Attempt?  @relation("Retries", fields: [sourceAttemptId], references: [id], onDelete: SetNull)
   retries         Attempt[] @relation("Retries")
+  snapshotVersion Int       @default(0)
+  progressContent Json?
   snapshot        Json
   status          String    @default("in_progress")
   responses       Json      @default("{}")

@@ -91,8 +91,8 @@ not uploaded. Never enable SQL parameter logging or dump runtime environments.
   JavaScript, `/history` SPA fallback, `/api/health`, JSON API errors and unauthenticated
   private-response cache policy. Smoke creates no accounts and makes no writes.
 
-GitHub runs no live database integration or browser acceptance tests, creates no Neon
-branches and schedules no branch cleanup. The optional local API/browser suites use
+GitHub runs simulated-data Chromium browser regressions with no production secrets.
+It runs no live database acceptance tests, creates no Neon branches and schedules no branch cleanup. The optional local API/browser suites use
 only an existing dedicated test database connection; no Neon API key is needed.
 Those local checks do not gate deployment. Run them locally when changing auth,
 ownership, persistence, grading or migrations.
@@ -200,3 +200,9 @@ deployment has been performed as part of local validation.
 - [Cloudflare rollback limitations](https://developers.cloudflare.com/workers/configuration/versions-and-deployments/rollbacks/)
 - [Prisma 7 configuration and direct migration URL](https://www.prisma.io/docs/guides/upgrade-prisma-orm/v7)
 - [Better Auth Prisma compatibility](https://better-auth.com/docs/adapters/prisma) and [secure cookies](https://better-auth.com/docs/concepts/cookies)
+
+## v1 attempt-progress maintenance migration
+
+Apply `202611080003_attempt_progress` before starting this version. It adds nullable scoring metadata, its private validation-version marker, database protection against later metadata mutation, and an index for unfinished-attempt continuation. Existing records begin at version 0; application code validates their immutable snapshot before installing version-1 metadata. This marker is internal storage bookkeeping, not a portable-file or product version change. The additive columns permit older application code to continue reading existing records. Keep the migration when rolling application code back; do not drop columns or reset data.
+
+Progress acknowledgements and compact submission acknowledgements omit unchanged snapshot/answer data. Full attempt GETs still return the snapshot and confirmed responses for resume. Existing v1 full-map progress clients remain accepted within the existing request cap; the current client sends one changed answer per request and drains all changes before submission or navigation. Measure complete deployed operations, including database transfer and response storage, at the supported maxima before asserting Worker CPU or memory compliance.

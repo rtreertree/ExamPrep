@@ -10,6 +10,8 @@ import {
   Dialog,
   EmptyState,
   ErrorNotice,
+  Field,
+  Notice,
   LoadingRows,
   Menu,
   PageHeader,
@@ -20,8 +22,11 @@ import { SurfaceLight } from "../components/SurfaceLight";
 export function LibraryPage() {
   const [filter, setFilter] = useState("all");
   const [page, setPage] = useState(0);
+  const [search, setSearch] = useState("");
+  const [saved, setSaved] = useState<StudySet>();
+  const [sample, setSample] = useState(false);
   const resource = useResource<{ items: StudySet[]; hasMore: boolean }>(
-    `/sets?page=${page}${filter !== "all" ? `&kind=${filter}` : ""}`,
+    `/sets?page=${page}${filter !== "all" ? `&kind=${filter}` : ""}&search=${encodeURIComponent(search)}`,
   );
   const [panel, setPanel] = useState<"import" | "ai" | null>(null);
   const [deleting, setDeleting] = useState<StudySet>();
@@ -30,10 +35,21 @@ export function LibraryPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [draftError, setDraftError] = useState(false);
   useEffect(() => {
+    let active = true;
+    setDrafts([]);
+    setDraftError(false);
     accountDrafts(user!.id)
-      .then((d) => setDrafts(d.filter((d) => d.key.startsWith("new:"))))
-      .catch(() => {});
+      .then((d) => {
+        if (active) setDrafts(d);
+      })
+      .catch(() => {
+        if (active) setDraftError(true);
+      });
+    return () => {
+      active = false;
+    };
   }, [user!.id]);
   async function practice(set: StudySet) {
     setBusy(true);
@@ -98,6 +114,38 @@ export function LibraryPage() {
           </>
         }
       />
+      {saved ? (
+        <Notice tone="success">
+          <p>“{saved.title}” is saved to your account.</p>
+          <div className="actions">
+            <Button
+              variant="primary"
+              busy={busy}
+              onClick={() => void practice(saved)}
+            >
+              Start practice
+            </Button>
+            <Link className="button secondary" to={`/sets/${saved.id}/edit`}>
+              Edit set
+            </Link>
+            <Button variant="quiet" onClick={() => setSaved(undefined)}>
+              Dismiss
+            </Button>
+          </div>
+        </Notice>
+      ) : null}
+      <Field label="Search library">
+        <input
+          type="search"
+          value={search}
+          maxLength={200}
+          placeholder="Find a study set by title"
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setPage(0);
+          }}
+        />
+      </Field>
       <Tabs
         label="Study set type"
         value={filter}
@@ -126,11 +174,24 @@ export function LibraryPage() {
           error={error || resource.error}
           retry={resource.error ? resource.refresh : undefined}
         />
+        {draftError ? (
+          <Notice tone="warning">
+            Drafts on this device could not be checked. Device storage may be
+            unavailable. Saved sets and attempts remain in your account.
+          </Notice>
+        ) : null}
         {drafts.length ? (
           <aside className="draft-list">
             <h2>Local drafts</h2>
             {drafts.map((d) => (
-              <Link key={d.key} to={`/new/${d.content.kind}/${d.key.slice(4)}`}>
+              <Link
+                key={d.key}
+                to={
+                  d.key.startsWith("new:")
+                    ? `/new/${d.content.kind}/${d.key.slice(4)}`
+                    : `/sets/${d.key}/edit`
+                }
+              >
                 Continue {d.content.title || "untitled draft"}{" "}
                 <span className="muted">· this device</span>
               </Link>
@@ -146,7 +207,11 @@ export function LibraryPage() {
                 <span className="ordinal">
                   {String(page * 30 + i + 1).padStart(2, "0")}
                 </span>
-                <Link className="set-title" to={`/sets/${set.id}/edit`}>
+                <Link
+                  className="set-title"
+                  aria-description="Edit this study set"
+                  to={`/sets/${set.id}/edit`}
+                >
                   {set.title}
                 </Link>
                 <span className="set-meta">
@@ -155,9 +220,20 @@ export function LibraryPage() {
                     : `Flashcards · ${set.count} cards`}
                 </span>
                 <div className="row-actions">
-                  <Button disabled={busy} onClick={() => void practice(set)}>
-                    Practice <ArrowRight size={17} />
-                  </Button>
+                  {set.continuation ? (
+                    <Link
+                      className="button primary"
+                      to={`/practice/${set.continuation.id}`}
+                    >
+                      {set.continuation.status === "reviewing"
+                        ? `Finish assessment — ${set.continuation.result?.selfAssessed?.pendingCount ?? "some"} remaining`
+                        : `Resume — ${set.kind === "exam" ? "question" : "card"} ${set.continuation.position + 1} of ${set.count}`}
+                    </Link>
+                  ) : (
+                    <Button disabled={busy} onClick={() => void practice(set)}>
+                      Practice <ArrowRight size={17} />
+                    </Button>
+                  )}
                   <Menu
                     label={
                       <>
@@ -166,7 +242,13 @@ export function LibraryPage() {
                       </>
                     }
                   >
-                    <Link to={`/sets/${set.id}/edit`}>Edit</Link>
+                    <button disabled={busy} onClick={() => void practice(set)}>
+                      Start new attempt
+                    </button>
+                    <Link to={`/history?setId=${set.id}`}>
+                      All attempts for this set
+                    </Link>
+                    <Link to={`/sets/${set.id}/edit`}>Edit set</Link>
                     <button
                       onClick={async () => {
                         try {
@@ -193,23 +275,36 @@ export function LibraryPage() {
         ) : !resource.error ? (
           <EmptyState
             title={
-              filter === "all"
-                ? "Your first set starts here."
-                : "No sets here yet."
+              search
+                ? "No matching study sets."
+                : filter === "all"
+                  ? "Your first set starts here."
+                  : "No sets here yet."
             }
             actions={
               <>
                 <Button onClick={() => setPanel("import")}>
                   Import a study set
                 </Button>
+                <Link
+                  className="button secondary"
+                  to={`/new/exam/${crypto.randomUUID()}`}
+                >
+                  Create one manually
+                </Link>
                 <Button variant="quiet" onClick={() => setPanel("ai")}>
-                  Create with your AI
+                  Prepare one with my AI tool
+                </Button>
+                <Button variant="quiet" onClick={() => setSample(true)}>
+                  Preview a sample
                 </Button>
               </>
             }
           >
             <p className="muted">
-              Import your study material or create a set by hand.
+              Import a study set from a file. Create one manually in the editor.
+              Or prepare a file in your own external AI tool and return to
+              import it.
             </p>
           </EmptyState>
         ) : null}
@@ -231,7 +326,11 @@ export function LibraryPage() {
       {panel === "import" ? (
         <ImportPanel
           onClose={() => setPanel(null)}
-          onSaved={() => {
+          onSaved={(set) => {
+            setSaved(set);
+            setSearch("");
+            setFilter("all");
+            setPage(0);
             setPanel(null);
             resource.refresh();
           }}
@@ -241,6 +340,18 @@ export function LibraryPage() {
           onClose={() => setPanel(null)}
           onImport={() => setPanel("import")}
         />
+      ) : null}
+      {sample ? (
+        <Dialog title="A sample study set" onClose={() => setSample(false)}>
+          <p>This preview does not add content to your account.</p>
+          <h3>Quick science check</h3>
+          <p>Question 1: What is the chemical formula for water?</p>
+          <p>A. CO₂ · B. H₂O</p>
+          <details>
+            <summary>Show answer</summary>
+            <p>B. H₂O — two hydrogen atoms and one oxygen atom.</p>
+          </details>
+        </Dialog>
       ) : null}
       {deleting ? (
         <Dialog

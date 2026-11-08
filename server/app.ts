@@ -23,19 +23,30 @@ import {
   progressSchema,
   revisionSchema,
   validateProgress,
+  validateProgressChanges,
   type Responses,
   type Status,
 } from "../shared/attempts";
 
+import {
+  SNAPSHOT_VERSION,
+  progressContent,
+  readProgressContent,
+  readAttemptProgress,
+  metadataOnly,
+} from "./snapshots";
+import { safeDiagnostic } from "./diagnostics";
+
 type Context = {
   Variables: {
+    requestId: string;
+    started: number;
     db: Database;
     userId: string;
     auth: ReturnType<typeof createAuth>;
   };
 };
-const json = (value: unknown) =>
-  JSON.parse(JSON.stringify(encodeStorage(value))) as Prisma.InputJsonValue;
+const json = (value: unknown) => encodeStorage(value) as Prisma.InputJsonValue;
 const schema = <T>(s: z.ZodType<T>, value: unknown): T => {
   const p = s.safeParse(value);
   if (!p.success)
@@ -65,6 +76,9 @@ export function createApp(
 ) {
   const app = new Hono<Context>();
   app.use("*", async (c, next) => {
+    c.set("requestId", crypto.randomUUID());
+    c.set("started", performance.now());
+    c.header("X-Request-ID", c.get("requestId"));
     c.header("Cache-Control", "no-store, private");
     c.header("X-Content-Type-Options", "nosniff");
     c.header("Referrer-Policy", "no-referrer");
@@ -144,14 +158,19 @@ export function createApp(
     const kind = c.req.query("kind");
     if (kind && kind !== "exam" && kind !== "flashcards")
       throw new HTTPException(400, { message: "Invalid kind." });
+    const search = encodeStorage((c.req.query("search") ?? "").slice(0, 200));
     // Project metadata in PostgreSQL: a page must not load thirty 2-MiB documents.
     const sets = await c.get("db").$queryRaw<
       (Omit<StudySet, "content"> & { count: number })[]
     >`
       SELECT id, "userId", title, kind, revision, "createdAt", "updatedAt",
-        COALESCE(jsonb_array_length(content->'questions'), jsonb_array_length(content->'cards')) AS count
+        COALESCE(jsonb_array_length(content->'questions'), jsonb_array_length(content->'cards')) AS count,
+        (SELECT jsonb_build_object('id', a.id, 'status', a.status, 'position', a.position, 'result', a.result)
+          FROM "Attempt" a WHERE a."studySetId" = "StudySet".id AND a."userId" = ${c.get("userId")}
+          AND a.status IN ('in_progress', 'reviewing') ORDER BY a."updatedAt" DESC, a.id ASC LIMIT 1) AS continuation
       FROM "StudySet" WHERE "userId" = ${c.get("userId")}
         AND (${kind ?? null}::text IS NULL OR kind = ${kind ?? null}::text)
+      AND strpos(lower(title), lower(${search})) > 0
       ORDER BY "updatedAt" DESC, id ASC LIMIT 31 OFFSET ${page * 30}
     `;
     return c.json(
@@ -244,11 +263,14 @@ export function createApp(
         where: { id: c.req.param("id"), userId },
       });
       if (!set) throw unavailable();
+      const snapshot = validateContent(decodeStorage(set.content));
       return tx.attempt.create({
         data: {
+          snapshotVersion: SNAPSHOT_VERSION,
+          progressContent: json(progressContent(snapshot)),
           userId,
           studySetId: set.id,
-          snapshot: json(validateContent(decodeStorage(set.content))),
+          snapshot: json(snapshot),
         },
       });
     });
@@ -258,6 +280,15 @@ export function createApp(
     const page = Number(c.req.query("page") ?? 0);
     if (!Number.isInteger(page) || page < 0)
       throw new HTTPException(400, { message: "Invalid page." });
+    const status = c.req.query("status") ?? "all";
+    if (
+      !["all", "attention", "in_progress", "reviewing", "completed"].includes(
+        status,
+      )
+    )
+      throw new HTTPException(400, { message: "Invalid status filter." });
+    const search = encodeStorage((c.req.query("search") ?? "").slice(0, 200));
+    const setId = c.req.query("setId");
     const attempts = await c.get("db").$queryRaw<
       (Omit<Attempt, "snapshot" | "responses"> & {
         title: string;
@@ -268,6 +299,9 @@ export function createApp(
         revision, "startedAt", "updatedAt", "completedAt", snapshot->>'title' AS title,
         snapshot->>'kind' AS kind
       FROM "Attempt" WHERE "userId" = ${c.get("userId")}
+      AND (${status} = 'all' OR status = ${status} OR (${status} = 'attention' AND status <> 'completed'))
+      AND (${setId ?? null}::text IS NULL OR "studySetId" = ${setId ?? null}::text)
+      AND strpos(lower(snapshot->>'title'), lower(${search})) > 0
       ORDER BY "startedAt" DESC, id ASC LIMIT 31 OFFSET ${page * 30}
     `;
     return c.json(
@@ -292,22 +326,44 @@ export function createApp(
     const db = c.get("db");
     const where = { id: c.req.param("id"), userId: c.get("userId") };
     const attempt = await db.$transaction(async (tx) => {
-      const current = await tx.attempt.findFirst({ where });
+      const current = await readAttemptProgress(tx, where.id, where.userId);
       if (!current) throw unavailable();
       if (current.revision !== input.revision) throw conflict();
-      const snapshot = validateContent(decodeStorage(current.snapshot));
-      const responses = validateProgress(
-        snapshot,
-        current.status as Status,
-        decodeStorage(current.responses) as Responses,
-        input.responses,
-        input.position,
-      );
+      let snapshot: StudyContent;
+      if (
+        current.snapshotVersion === SNAPSHOT_VERSION &&
+        current.progressContent
+      )
+        snapshot = readProgressContent(decodeStorage(current.progressContent));
+      else {
+        const legacy = await tx.attempt.findFirstOrThrow({ where });
+        snapshot = progressContent(
+          validateContent(decodeStorage(legacy.snapshot)),
+        );
+      }
+      const responses =
+        "changes" in input
+          ? validateProgressChanges(
+              snapshot,
+              current.status as Status,
+              decodeStorage(current.responses) as Responses,
+              input.changes,
+              input.position,
+            )
+          : validateProgress(
+              snapshot,
+              current.status as Status,
+              decodeStorage(current.responses) as Responses,
+              input.responses,
+              input.position,
+            );
       const scored =
         current.status === "reviewing" ? grade(snapshot, responses) : undefined;
       const changed = await tx.attempt.updateMany({
         where: { ...where, revision: input.revision, status: current.status },
         data: {
+          snapshotVersion: SNAPSHOT_VERSION,
+          progressContent: json(snapshot),
           responses: json(responses),
           position: input.position,
           revision: { increment: 1 },
@@ -321,7 +377,21 @@ export function createApp(
         },
       });
       if (!changed.count) throw conflict();
-      return tx.attempt.findFirstOrThrow({ where });
+      return "changes" in input
+        ? {
+            ...metadataOnly(current),
+            position: input.position,
+            revision: current.revision + 1,
+            ...(scored
+              ? {
+                  status: scored.status,
+                  result: scored.result,
+                  completedAt:
+                    scored.status === "completed" ? new Date() : null,
+                }
+              : {}),
+          }
+        : tx.attempt.findFirstOrThrow({ where });
     });
     return c.json(decodeStorage(attempt));
   });
@@ -332,14 +402,29 @@ export function createApp(
     );
     const db = c.get("db");
     const where = { id: c.req.param("id"), userId: c.get("userId") };
-    const current = await db.attempt.findFirst({ where });
+    const compact = c.req.query("compact") === "1";
+    const current = await readAttemptProgress(db, where.id, where.userId);
     if (!current) throw unavailable();
-    if (current.status !== "in_progress") return c.json(decodeStorage(current));
+    if (current.status !== "in_progress")
+      return c.json(
+        decodeStorage(
+          compact
+            ? metadataOnly(current)
+            : await db.attempt.findFirstOrThrow({ where }),
+        ),
+      );
     if (current.revision !== input.revision) throw conflict();
-    const scored = grade(
-      validateContent(decodeStorage(current.snapshot)),
-      decodeStorage(current.responses) as Responses,
-    );
+    const rules =
+      current.snapshotVersion === SNAPSHOT_VERSION && current.progressContent
+        ? readProgressContent(decodeStorage(current.progressContent))
+        : progressContent(
+            validateContent(
+              decodeStorage(
+                (await db.attempt.findFirstOrThrow({ where })).snapshot,
+              ),
+            ),
+          );
+    const scored = grade(rules, decodeStorage(current.responses) as Responses);
     const changed = await db.attempt.updateMany({
       where: { ...where, status: "in_progress", revision: input.revision },
       data: {
@@ -349,10 +434,12 @@ export function createApp(
         completedAt: scored.status === "completed" ? new Date() : null,
       },
     });
-    const saved = await db.attempt.findFirst({ where });
+    const saved = compact
+      ? await readAttemptProgress(db, where.id, where.userId)
+      : await db.attempt.findFirst({ where });
     if (!saved) throw unavailable();
     if (!changed.count && saved.status === "in_progress") throw conflict();
-    return c.json(decodeStorage(saved));
+    return c.json(decodeStorage(compact ? metadataOnly(saved) : saved));
   });
   app.post("/api/attempts/:id/retry", async (c) => {
     schema(z.strictObject({}), await read(c.req.raw));
@@ -376,6 +463,8 @@ export function createApp(
           studySetId: source.studySetId,
           sourceAttemptId: source.id,
           snapshot: json(snapshot),
+          snapshotVersion: SNAPSHOT_VERSION,
+          progressContent: json(progressContent(snapshot)),
         },
       });
     });
@@ -392,11 +481,22 @@ export function createApp(
       );
     if (error instanceof HTTPException)
       return c.json({ error: error.message }, error.status);
-    // Do not log driver errors: they may include connection strings or study content.
+    const reference = c.get("requestId");
+    console.error(
+      JSON.stringify(
+        safeDiagnostic(error, {
+          requestId: reference,
+          route: c.req.routePath,
+          runtime: config.RUNTIME ?? "node",
+          durationMs: Math.round(performance.now() - c.get("started")),
+        }),
+      ),
+    );
     return c.json(
       {
         error:
-          "The server could not complete this request. Your unsaved changes are still on this device.",
+          "The server could not complete this request. Keep this page open and retry.",
+        reference,
       },
       500,
     );
