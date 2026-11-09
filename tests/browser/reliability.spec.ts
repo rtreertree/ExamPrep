@@ -1,6 +1,15 @@
 import { test, expect, type Page } from "@playwright/test";
-import { grade, validateProgressChanges } from "../../shared/attempts";
-import { validateContent, type StudyContent } from "../../shared/content";
+import {
+  grade,
+  mistakes,
+  unreviewedCards,
+  validateProgressChanges,
+} from "../../shared/attempts";
+import {
+  itemsOf,
+  validateContent,
+  type StudyContent,
+} from "../../shared/content";
 import type { Attempt, StudySet } from "../../client/lib/api";
 
 // Browser plugin not available. Run the repository's Playwright workflow with isolated API fixtures.
@@ -81,6 +90,10 @@ async function fixture(page: Page, doc = written, position = 0) {
     content: structuredClone(doc),
     revision: 1,
     updatedAt: now,
+    course: "",
+    pinned: false,
+    archived: false,
+    lastStudiedAt: null,
     count: doc.kind === "exam" ? doc.questions.length : doc.cards.length,
   };
   let attempt: Attempt = {
@@ -93,8 +106,10 @@ async function fixture(page: Page, doc = written, position = 0) {
     position,
     startedAt: now,
     studySetId: "set",
+    studySetRevision: 1,
     sourceAttemptId: null,
   };
+  let copy: StudySet | undefined;
   const state = {
     signedIn: true,
     userId: "student-a",
@@ -102,10 +117,12 @@ async function fixture(page: Page, doc = written, position = 0) {
     starts: 0,
     submitFailures: 0,
     logoutFailures: 0,
+    listDelay: undefined as Promise<void> | undefined,
     delay: undefined as (() => Promise<void>) | undefined,
     set: () => set,
     attempt: () => attempt,
     requests: [] as string[],
+    retries: [] as { mode?: string; snapshot: StudyContent }[],
   };
   await page.route("**/api/**", async (route) => {
     const req = route.request();
@@ -142,7 +159,8 @@ async function fixture(page: Page, doc = written, position = 0) {
               : content.cards.length,
         };
         value = set;
-      } else
+      } else {
+        await state.listDelay;
         value = {
           items: [
             {
@@ -154,12 +172,30 @@ async function fixture(page: Page, doc = written, position = 0) {
                       position: attempt.position,
                       status: attempt.status,
                       result: attempt.result,
+                      total: itemsOf(attempt.snapshot).length,
+                      isOlderVersion: attempt.studySetRevision !== set.revision,
+                      kind: attempt.snapshot.kind,
                     }
                   : null,
             },
-          ],
+          ].filter(
+            (item) =>
+              item.title
+                .toLowerCase()
+                .includes(
+                  (url.searchParams.get("search") ?? "").toLowerCase(),
+                ) &&
+              (!url.searchParams.get("kind") ||
+                item.kind === url.searchParams.get("kind")) &&
+              (!url.searchParams.has("course") ||
+                item.course === url.searchParams.get("course")) &&
+              item.archived === (url.searchParams.get("archived") === "true"),
+          ),
           hasMore: false,
+          courses: set.course ? [set.course] : [],
+          page: Number(url.searchParams.get("page")),
         };
+      }
     } else if (path === "/api/sets/set") {
       if (req.method() === "PUT") {
         const content = validateContent(req.postDataJSON().content);
@@ -167,19 +203,77 @@ async function fixture(page: Page, doc = written, position = 0) {
           ...set,
           content,
           title: content.title,
+          count: itemsOf(content).length,
           revision: set.revision + 1,
         };
       }
       value = set;
+    } else if (path === "/api/sets/set/organization") {
+      set = { ...set, ...req.postDataJSON() };
+      value = { updated: true };
+    } else if (path === "/api/sets/set/duplicate") {
+      const title = `Copy of ${set.title}`;
+      copy = {
+        ...set,
+        id: "set-copy",
+        title,
+        content: { ...structuredClone(set.content), title },
+        pinned: false,
+        archived: false,
+        lastStudiedAt: null,
+        revision: 1,
+      };
+      value = copy;
+    } else if (path === "/api/sets/set-copy") {
+      value = copy;
     } else if (path === "/api/sets/set/attempts") {
       state.starts++;
       value = { ...attempt, id: "fresh" };
     } else if (path === "/api/attempts")
-      value = { items: [{ ...attempt, title: doc.title }], hasMore: false };
+      value = {
+        items: [{ ...attempt, title: doc.title }].filter(
+          (item) =>
+            item.title
+              .toLowerCase()
+              .includes((url.searchParams.get("search") ?? "").toLowerCase()) &&
+            [
+              null,
+              "all",
+              item.status,
+              item.status === "completed" ? "completed" : "attention",
+            ].includes(url.searchParams.get("status")),
+        ),
+        hasMore: false,
+      };
     else if (path === "/api/attempts/attempt") value = attempt;
     else if (path === "/api/attempts/fresh")
-      value = { ...attempt, id: "fresh", snapshot: set.content };
-    else if (path === "/api/attempts/attempt/progress") {
+      value = {
+        ...attempt,
+        id: "fresh",
+        snapshot: state.retries.at(-1)?.snapshot ?? set.content,
+        responses: {},
+        status: "in_progress",
+        result: null,
+        position: 0,
+      };
+    else if (path === "/api/attempts/attempt/retry") {
+      const { mode } = req.postDataJSON();
+      const snapshot = (mode === "unreviewed" ? unreviewedCards : mistakes)(
+        attempt.snapshot,
+        attempt.responses,
+      );
+      if (!snapshot) throw new Error("Expected a retry subset");
+      state.retries.push({ mode, snapshot });
+      value = {
+        ...attempt,
+        id: "fresh",
+        snapshot,
+        responses: {},
+        status: "in_progress",
+        result: null,
+        position: 0,
+      };
+    } else if (path === "/api/attempts/attempt/progress") {
       const body = req.postDataJSON();
       if (state.delay) await state.delay();
       if (body.revision !== attempt.revision) {
@@ -316,7 +410,9 @@ test("storage failure cannot prevent sign-out; server failure remains in the dia
     page.getByRole("heading", { name: "Welcome back" }),
   ).toBeVisible();
   await expect(
-    page.getByText("You are signed out. Some drafts", { exact: false }),
+    page.getByText("You are signed out. Some local study data", {
+      exact: false,
+    }),
   ).toBeVisible();
   expect(api.signouts).toBe(2);
   expect(api.signedIn).toBe(false);
@@ -478,12 +574,31 @@ test("AI settings survive closing, remain account scoped, and search filters rea
     .click();
   await expect(page.getByLabel("Topic or source material")).toHaveValue("");
   await page.getByRole("button", { name: "Close dialog", exact: true }).click();
-  await page.getByLabel("Search library").fill("beyond page one");
-  await expect
-    .poll(() =>
-      api.requests.some((p) => p.includes("search=beyond%20page%20one")),
-    )
-    .toBe(true);
+  let release!: () => void;
+  api.listDelay = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    await page.getByLabel("Search library").fill("beyond page one");
+    await expect
+      .poll(() =>
+        api.requests.some(
+          (p) =>
+            new URL(p, "http://localhost").searchParams.get("search") ===
+            "beyond page one",
+        ),
+      )
+      .toBe(true);
+    await expect(
+      page.getByRole("link", { name: "Reliable study", exact: true }),
+    ).toBeVisible();
+  } finally {
+    release();
+    api.listDelay = undefined;
+  }
+  await expect(
+    page.getByText("No study sets match this search."),
+  ).toBeVisible();
   await page.goto("/history");
   await page.getByRole("tab", { name: "Needs attention", exact: true }).click();
   await page.getByLabel("Search history").fill("unfinished");
@@ -495,6 +610,124 @@ test("AI settings survive closing, remain account scoped, and search filters rea
       ),
     )
     .toBe(true);
+});
+test("library resumes the saved snapshot and remembers course filters across practice", async ({
+  page,
+}) => {
+  const mocked = await fixture(page, written, 2);
+  await page.goto("/sets/set/edit");
+  await page.getByRole("button", { name: "Remove item", exact: true }).click();
+  await page.getByRole("button", { name: "Remove item", exact: true }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(
+    page.getByText("Saved to your account", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: "← Library", exact: true }).click();
+  await expect(
+    page.getByText("Exam · 1 question", { exact: false }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Attempt uses an earlier set version"),
+  ).toBeVisible();
+  const actions = page
+    .locator("summary")
+    .filter({ hasText: "Actions for Reliable study" });
+  await actions.click();
+  await page.getByRole("button", { name: "Set course", exact: true }).click();
+  await page.getByLabel("Course name").fill("Organic chemistry");
+  await page.getByRole("button", { name: "Save course" }).click();
+  await expect(page.locator(".set-meta")).toContainText("Organic chemistry");
+  await actions.click();
+  await page.getByRole("button", { name: "Pin set" }).click();
+  await expect(page.locator(".set-meta")).toContainText("Pinned");
+  await page.getByText("Library filters", { exact: true }).click();
+  await page
+    .getByLabel("Course", { exact: true })
+    .selectOption("course:Organic chemistry");
+  await page.getByLabel("Sort library").selectOption("studied");
+  await page.getByLabel("Search library").pressSequentially("Reliable");
+  await expect(page).toHaveURL(
+    (url) =>
+      url.searchParams.get("search") === "Reliable" &&
+      url.searchParams.get("course") === "Organic chemistry" &&
+      url.searchParams.get("sort") === "studied",
+  );
+  await expect
+    .poll(() =>
+      mocked.requests
+        .map((path) => new URL(path, "http://localhost"))
+        .filter(
+          (url) =>
+            url.pathname === "/api/sets" && url.searchParams.get("search"),
+        )
+        .map((url) => url.searchParams.get("search")),
+    )
+    .toEqual(["Reliable"]);
+  await page.getByRole("link", { name: "Resume — question 3 of 3" }).click();
+  await expect(
+    page.getByRole("button", { name: "Question 3 of 3" }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: "Library", exact: true }).click();
+  await expect(page.getByLabel("Course", { exact: true })).toHaveValue(
+    "course:Organic chemistry",
+  );
+  await expect(page.getByLabel("Sort library")).toHaveValue("studied");
+  await expect(page.getByLabel("Search library")).toHaveValue("Reliable");
+  await page.screenshot({
+    path: "/tmp/examprep-v1-library-organization-desktop.png",
+    animations: "disabled",
+  });
+  await actions.click();
+  await page.getByRole("button", { name: "Archive set", exact: true }).click();
+  await expect(
+    page.getByRole("link", { name: "Reliable study", exact: true }),
+  ).toHaveCount(0);
+  await page.getByLabel("Show sets").selectOption("archived");
+  await expect(
+    page.getByRole("link", { name: "Reliable study", exact: true }),
+  ).toBeVisible();
+  await actions.click();
+  await page
+    .getByRole("button", { name: "Duplicate set", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Copy of Reliable study", level: 1 }),
+  ).toBeVisible();
+});
+test("editor searches inside answers, duplicates with a new ID and moves directly on mobile", async ({
+  page,
+}) => {
+  const mocked = await fixture(page, mixed);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/sets/set/edit");
+  await page.getByRole("button", { name: "Search questions" }).click();
+  await page.getByLabel("Find a question").fill("Second step");
+  await expect(page.getByText("1 of 4 items match.")).toBeVisible();
+  await page.getByLabel("Selected item", { exact: true }).selectOption("2");
+  await page.getByRole("button", { name: "Duplicate item" }).click();
+  await expect(page.getByText("Item 4 of 5", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Move item to position" }).click();
+  await page.getByLabel("New position").fill("1");
+  await page.getByRole("button", { name: "Move item", exact: true }).click();
+  await expect(page.getByText("Item 1 of 5", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(
+    page.getByText("Saved to your account", { exact: true }),
+  ).toBeVisible();
+  const items = itemsOf(mocked.set().content);
+  const { id, ...original } = items[3];
+  expect(id).toBe("rubric");
+  expect(items[0].id).not.toBe(id);
+  expect(items[0]).toEqual({ ...original, id: items[0].id });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "/tmp/examprep-v1-editor-shortcuts-mobile.png",
+    animations: "disabled",
+  });
 });
 test("flashcard ratings can be undone without resetting reveal state", async ({
   page,
@@ -575,6 +808,10 @@ test("editor locates invalid fields, recovers unfinished content, and saves befo
   await page.getByLabel("Question", { exact: true }).fill("Repaired prompt");
   await page
     .getByRole("button", { name: "Save and practice", exact: true })
+    .click();
+  await page
+    .getByRole("dialog", { name: "Set up practice" })
+    .getByRole("button", { name: "Start practice", exact: true })
     .click();
   await expect(page).toHaveURL(/\/practice\/fresh$/);
   const saved = api.set().content;
@@ -758,4 +995,534 @@ test("formula insertion follows the same Unicode length validation as typed text
     "at most 20000 Unicode characters",
   );
   expect(api.set().revision).toBe(1);
+});
+
+test("removing the correct option requires an explicit replacement and Undo preserves later edits", async ({
+  page,
+}) => {
+  const doc = structuredClone(mixed);
+  if (doc.kind !== "exam" || doc.questions[0].type !== "single_choice")
+    throw new Error("Expected choice");
+  doc.questions[0].options.push({ id: "c", text: "Three" });
+  const api = await fixture(page, doc);
+  await page.goto("/sets/set/edit");
+  await page
+    .getByRole("button", { name: "Remove option 2", exact: true })
+    .click();
+  await expect(page.getByLabel("Correct answer", { exact: true })).toHaveValue(
+    "",
+  );
+  await expect(
+    page.getByText(
+      "The correct option was removed. Select a replacement correct answer.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByLabel("Selected item").locator("option:checked"),
+  ).toContainText("Needs attention");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Some fields need attention",
+  );
+  expect(api.set().revision).toBe(1);
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(page.getByLabel("Correct answer", { exact: true })).toHaveValue(
+    "b",
+  );
+  await expect(page.getByLabel("Option B", { exact: true })).toHaveValue("Two");
+  await page
+    .getByRole("button", { name: "Remove option 2", exact: true })
+    .click();
+  await page.getByLabel("Correct answer", { exact: true }).selectOption("c");
+  await page
+    .getByLabel("Question", { exact: true })
+    .fill("Edited after removal");
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(page.getByLabel("Correct answer", { exact: true })).toHaveValue(
+    "c",
+  );
+  await expect(page.getByLabel("Question", { exact: true })).toHaveValue(
+    "Edited after removal",
+  );
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => api.set().revision).toBe(2);
+  const saved = api.set().content;
+  expect(saved.kind === "exam" && saved.questions[0]).toMatchObject({
+    answer: "c",
+    options: doc.questions[0].options,
+  });
+});
+
+test("Undo restores a complete question at its position and the last rubric criterion", async ({
+  page,
+}) => {
+  const doc = structuredClone(mixed);
+  if (doc.kind !== "exam") throw new Error("Expected exam");
+  doc.questions[2].explanation = "Keep this explanation";
+  const api = await fixture(page, doc);
+  await page.goto("/sets/set/edit");
+  await page
+    .getByRole("button", { name: "03 Show steps", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Remove criterion 2", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Remove criterion 1", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Add marking rubric" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(page.getByLabel("Criterion 2", { exact: true })).toHaveValue(
+    "Second step",
+  );
+  await page.getByRole("button", { name: "Remove item", exact: true }).click();
+  await expect(
+    page.getByText("Question removed.", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Question", { exact: true })
+    .fill("Other edits survive");
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(page.getByLabel("Selected item")).toHaveValue("2");
+  await expect(page.getByLabel("Explanation (optional)")).toHaveValue(
+    "Keep this explanation",
+  );
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => api.set().revision).toBe(2);
+  const saved = api.set().content;
+  expect(saved.kind === "exam" && saved.questions[2]).toEqual(doc.questions[2]);
+  expect(saved.kind === "exam" && saved.questions[1].prompt).toBe(
+    "Other edits survive",
+  );
+});
+
+test("card removal can be undone with unsaved front and back intact", async ({
+  page,
+}) => {
+  await fixture(page, {
+    schemaVersion: 1,
+    kind: "flashcards",
+    title: "Cards",
+    cards: [
+      { id: "a", front: "One", back: "First" },
+      { id: "b", front: "Two", back: "Second" },
+    ],
+  });
+  await page.goto("/sets/set/edit");
+  await page.getByRole("button", { name: "Add card", exact: true }).click();
+  await page.getByLabel("Front", { exact: true }).fill("Unsaved front");
+  await page.getByLabel("Back", { exact: true }).fill("Unsaved back");
+  await page.getByRole("button", { name: "Remove item", exact: true }).click();
+  await expect(page.getByText("Card removed.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(page.getByLabel("Selected item")).toHaveValue("2");
+  await expect(page.getByLabel("Front", { exact: true })).toHaveValue(
+    "Unsaved front",
+  );
+  await expect(page.getByLabel("Back", { exact: true })).toHaveValue(
+    "Unsaved back",
+  );
+});
+
+test("new editor validates visited fields and shows the full summary only after Save", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.goto("/new/exam/validation");
+  await page.getByLabel("Title", { exact: true }).fill("New exam");
+  await page.getByLabel("Description (optional)").focus();
+  await expect(page.getByText(/items? needs? attention\./)).toHaveCount(0);
+  await expect(page.getByLabel("Question", { exact: true })).toHaveAttribute(
+    "aria-invalid",
+    "false",
+  );
+  await expect(page.getByLabel("Option A", { exact: true })).toHaveAttribute(
+    "aria-invalid",
+    "false",
+  );
+  await page.getByLabel("Question", { exact: true }).focus();
+  await page.getByLabel("Question", { exact: true }).press("Tab");
+  await expect(page.getByLabel("Question", { exact: true })).toHaveAttribute(
+    "aria-invalid",
+    "true",
+  );
+  await expect(page.getByLabel("Option A", { exact: true })).toHaveAttribute(
+    "aria-invalid",
+    "false",
+  );
+  await expect(
+    page.getByRole("button", { name: "Next issue", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Next issue", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Option A", { exact: true })).toHaveAttribute(
+    "aria-invalid",
+    "true",
+  );
+});
+
+test("mobile editor starts near the question, keeps Save visible, and previews the true set count", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/sets/set/edit");
+  await expect(page).toHaveTitle("Exam Prep");
+  await expect(page.locator(".set-details")).not.toHaveAttribute("open", "");
+  const prompt = page.getByLabel("Question", { exact: true });
+  await expect(prompt).toBeVisible();
+  expect((await prompt.boundingBox())!.y).toBeLessThan(700);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "/tmp/examprep-ux-fixed-editor-mobile.png",
+    animations: "disabled",
+  });
+  await page
+    .getByLabel("Explanation (optional)")
+    .fill("Explanation while scrolling");
+  await page.evaluate(() =>
+    window.scrollTo(0, document.documentElement.scrollHeight),
+  );
+  const save = page.getByRole("button", { name: "Save", exact: true });
+  expect((await save.boundingBox())!.y).toBeGreaterThanOrEqual(0);
+  expect((await save.boundingBox())!.y).toBeLessThan(100);
+  await page.setViewportSize({ width: 390, height: 420 });
+  await page.getByLabel("Explanation (optional)").scrollIntoViewIfNeeded();
+  expect((await save.boundingBox())!.y).toBeLessThan(100);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("button", { name: "02 Explain 2", exact: true }).click();
+  await expect(page.locator(".content-preview")).toContainText(
+    "Exam · 3 questions",
+  );
+  await expect(page.locator(".content-preview")).toContainText(
+    "Preview of question 2 of 3",
+  );
+  await expect(page.locator(".content-preview")).toContainText("Explain 2");
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({
+    path: "/tmp/examprep-ux-fixed-editor-desktop.png",
+    animations: "disabled",
+  });
+});
+
+test("search empty states recover existing content and mobile History exposes Completed", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.goto("/");
+  await expect(
+    page.getByRole("link", { name: "Reliable study", exact: true }),
+  ).toBeVisible();
+  await page.getByLabel("Search library").fill("no match");
+  await expect(
+    page.getByRole("heading", { name: "No study sets match this search." }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Import a study set from a file.", { exact: false }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Clear search", exact: true }).click();
+  await expect(
+    page.getByRole("link", { name: "Reliable study", exact: true }),
+  ).toBeVisible();
+  await page.goto("/history");
+  await page.getByLabel("Search history").fill("no match");
+  await expect(
+    page.getByRole("heading", { name: "No attempts match this search." }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Your attempts will appear here when you start studying."),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Clear search", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Reliable study" }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page
+    .getByRole("combobox", { name: "Attempt status", exact: true })
+    .selectOption("completed");
+  await expect(
+    page.getByRole("combobox", { name: "Attempt status", exact: true }),
+  ).toHaveValue("completed");
+  await expect(
+    page.getByRole("heading", { name: "No attempts match these filters." }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: "/tmp/examprep-ux-fixed-history-mobile.png",
+    animations: "disabled",
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page
+    .getByRole("button", { name: "Reset filters", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Reliable study" }),
+  ).toBeVisible();
+});
+
+test("closing Import asks before discarding pasted work and Keep editing preserves it", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Import", exact: true }).click();
+  await page.getByRole("tab", { name: "Paste JSON", exact: true }).click();
+  const source = '{"unfinished":';
+  await page.getByLabel("Study-set JSON").fill(source);
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Discard your import draft?" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Keep editing", exact: true }).click();
+  await expect(page.getByLabel("Study-set JSON")).toHaveValue(source);
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("heading", { name: "Discard your import draft?" }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Discard draft", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "Import", exact: true }).click();
+  await page.getByRole("tab", { name: "Paste JSON", exact: true }).click();
+  await expect(page.getByLabel("Study-set JSON")).toHaveValue("");
+});
+
+for (const mode of ["unreviewed", "mistakes"] as const) {
+  test(`flashcard results start a separate ${mode} subset`, async ({
+    page,
+  }) => {
+    const doc: StudyContent = {
+      schemaVersion: 1,
+      kind: "flashcards",
+      title: "Continue cards",
+      cards: [
+        { id: "one", front: "First?", back: "First answer" },
+        { id: "two", front: "Second?", back: "Second answer" },
+        { id: "three", front: "Third?", back: "Third answer" },
+      ],
+    };
+    const api = await fixture(page, doc);
+    api.attempt().responses = {
+      one: {
+        revealed: true,
+        rating: mode === "unreviewed" ? "known" : "review_again",
+      },
+    };
+    await page.goto("/practice/attempt");
+    await page
+      .getByRole("button", { name: "Finish session", exact: true })
+      .click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Finish session", exact: true })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Session complete" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", {
+        name: "Study unreviewed cards (2)",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "No mistakes to retry", exact: true }),
+    ).toHaveCount(0);
+    if (mode === "unreviewed")
+      await page.screenshot({
+        path: "/tmp/examprep-ux-fixed-unreviewed-results.png",
+        animations: "disabled",
+      });
+    await page
+      .getByRole("button", {
+        name:
+          mode === "unreviewed"
+            ? "Study unreviewed cards (2)"
+            : "Review again (1)",
+        exact: true,
+      })
+      .click();
+    await expect(page).toHaveURL(/\/practice\/fresh$/);
+    expect(api.retries).toHaveLength(1);
+    expect(api.retries[0].mode).toBe(mode);
+    expect(api.retries[0].snapshot).toEqual({
+      ...doc,
+      cards: mode === "unreviewed" ? doc.cards.slice(1) : [doc.cards[0]],
+    });
+    await expect(
+      page.getByRole("button", {
+        name: mode === "unreviewed" ? "Card 1 of 2" : "Card 1 of 1",
+        exact: true,
+      }),
+    ).toBeVisible();
+    expect(api.attempt().status).toBe("completed");
+  });
+}
+
+test("opens progress insights with separate scores and a next action", async ({
+  page,
+}) => {
+  await fixture(page);
+  const completedAt = "2026-11-08T14:00:00.000Z";
+  await page.route("**/api/insights", (route) =>
+    route.fulfill({
+      json: {
+        trends: [
+          {
+            setId: "set",
+            title: "Biology",
+            revision: 1,
+            scores: [
+              {
+                id: "earlier",
+                completedAt,
+                result: {
+                  automatic: { earnedPoints: 2, maxPoints: 4, pendingCount: 0 },
+                  selfAssessed: {
+                    earnedPoints: 1,
+                    maxPoints: 3,
+                    pendingCount: 0,
+                  },
+                },
+              },
+              {
+                id: "attempt",
+                completedAt,
+                result: {
+                  automatic: { earnedPoints: 4, maxPoints: 4, pendingCount: 0 },
+                  selfAssessed: {
+                    earnedPoints: 2,
+                    maxPoints: 3,
+                    pendingCount: 0,
+                  },
+                },
+              },
+            ],
+          },
+        ],
+        pending: { attemptId: "attempt", sessions: 1, answers: 2 },
+        recurring: [
+          {
+            attemptId: "attempt",
+            itemId: "q1",
+            setTitle: "Biology",
+            prompt: "Explain mitosis.",
+            misses: 2,
+          },
+        ],
+        retry: null,
+      },
+    }),
+  );
+  await page.goto("/history");
+  await page.getByText("Progress insights", { exact: true }).click();
+  await expect(
+    page.getByRole("columnheader", { name: "Automatic", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("columnheader", { name: "Self-assessed", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "4 / 4", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "2 / 3", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Explain mitosis." }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Continue self-assessment" }),
+  ).toHaveAttribute("href", "/practice/attempt");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "/tmp/examprep-progress-insights-mobile.png",
+    animations: "disabled",
+  });
+});
+
+test("sets a deck's daily review limit and starts its due queue", async ({
+  page,
+}) => {
+  const cards: StudyContent = {
+    kind: "flashcards",
+    schemaVersion: 1,
+    title: "Spanish verbs",
+    cards: [
+      { id: "one", front: "hablar", back: "to speak" },
+      { id: "two", front: "vivir", back: "to live" },
+    ],
+  };
+  await fixture(page, cards);
+  const queue = {
+    title: cards.title,
+    limit: 20,
+    reviewedToday: 0,
+    due: 1,
+    available: 1,
+    archived: false,
+    resetsAt: "2026-11-10T00:00:00.000Z",
+    activeAttemptId: null,
+    cards: [
+      { id: "one", front: "hablar", nextReviewAt: null, due: true },
+      {
+        id: "two",
+        front: "vivir",
+        nextReviewAt: "2026-11-12T12:00:00.000Z",
+        due: false,
+      },
+    ],
+  };
+  await page.route("**/api/sets/set/review", (route) => {
+    const method = route.request().method();
+    if (method === "PATCH") {
+      queue.limit = route.request().postDataJSON().limit;
+    }
+    return route.fulfill({
+      json: method === "POST" ? { id: "attempt" } : queue,
+    });
+  });
+  await page.goto("/");
+  await page
+    .locator("summary")
+    .filter({ hasText: "Actions for Spanish verbs" })
+    .click();
+  await page.getByRole("link", { name: "Spaced review", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Due queue" })).toBeVisible();
+  await expect(page.getByText("Due now", { exact: true })).toBeVisible();
+  await expect(
+    page.locator('time[datetime="2026-11-12T12:00:00.000Z"]'),
+  ).toBeVisible();
+  await page.getByLabel("Daily review limit").fill("8");
+  await page.getByRole("button", { name: "Save limit", exact: true }).click();
+  await expect(
+    page.getByText("0 of 8 reviewed today", { exact: false }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: "/tmp/examprep-due-review-desktop.png",
+    animations: "disabled",
+  });
+  await page
+    .getByRole("button", { name: "Review 1 card", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/practice\/attempt$/);
 });

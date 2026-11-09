@@ -25,6 +25,8 @@ app.route(
       BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET ?? "",
       BETTER_AUTH_URL: process.env.BETTER_AUTH_URL ?? "",
       PASSWORD_PEPPER: process.env.PASSWORD_PEPPER ?? "",
+      RESEND_API_KEY: process.env.RESEND_API_KEY,
+      RESET_EMAIL_FROM: process.env.RESET_EMAIL_FROM,
       RUNTIME: "node",
     },
     connectDatabase,

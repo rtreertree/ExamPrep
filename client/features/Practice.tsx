@@ -1,19 +1,34 @@
 import { NotationEditor } from "../components/NotationEditor";
 import { useEffect, useRef, useState } from "react";
-import { Link, useBlocker, useNavigate, useParams } from "react-router-dom";
+import {
+  Link,
+  useBlocker,
+  useLocation,
+  useNavigate,
+  useParams,
+} from "react-router-dom";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { itemsOf, type Question } from "../../shared/content";
 import {
   answered,
+  MAX_NOTE_CHARACTERS,
   maximum,
   mistakes,
   own,
+  retrySnapshot,
   writtenScore,
   type Response,
+  type RetryMode,
 } from "../../shared/attempts";
 import { api, download, type Attempt } from "../lib/api";
 import { useResource, useUnsaved } from "../lib/hooks";
 import { useAttempt } from "../lib/useAttempt";
+import { useAuth } from "../lib/auth";
+import {
+  planPracticeRecovery,
+  readPracticeRecoveryFile,
+  type PracticeCheckpoint,
+} from "../lib/practiceRecovery";
 import {
   Button,
   Dialog,
@@ -28,6 +43,7 @@ import { StudyContent } from "../components/StudyContent";
 import { RubricList } from "../components/RubricList";
 import { ScoreSummary } from "../components/ScoreSummary";
 import { FlashcardStage } from "../components/FlashcardStage";
+import { PracticeTimer } from "../components/PracticeTimer";
 export function PracticePage() {
   const { id } = useParams();
   const { data, error, loading, refresh } = useResource<Attempt>(
@@ -49,16 +65,30 @@ export function PracticePage() {
   return data ? <Practice key={data.id} initial={data} /> : null;
 }
 function Practice({ initial }: { initial: Attempt }) {
-  const state = useAttempt(initial);
+  const { user } = useAuth();
+  const state = useAttempt(initial, user!.id);
   const { attempt, position, responses, busy, dirty } = state;
   const doc = attempt.snapshot;
   const items = itemsOf(doc);
   const item = items[position];
   const r = own(responses, item.id);
   const navigate = useNavigate();
+  const location = useLocation();
+  const previous = location.state?.returnTo;
+  const returnTo =
+    typeof previous === "string" &&
+    /^(\/($|\?)|\/history($|\?)|\/review\/[^/?#]+($|\?))/.test(previous)
+      ? previous
+      : "/";
+  const returnLabel = returnTo.startsWith("/history")
+    ? "History"
+    : returnTo.startsWith("/review/")
+      ? "Review queue"
+      : "Library";
   const [confirm, setConfirm] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [retryError, setRetryError] = useState<Error>();
+  const [recoveryFileError, setRecoveryFileError] = useState<Error>();
   const [retrying, setRetrying] = useState(false);
   const [navFilter, setNavFilter] = useState("all");
   const [lastRating, setLastRating] = useState<{
@@ -70,15 +100,23 @@ function Practice({ initial }: { initial: Attempt }) {
   useEffect(() => {
     if (attempt.status !== "in_progress")
       requestAnimationFrame(() => resultHeading.current?.focus());
-  }, [attempt.status]);
+  }, [attempt.status, state.recoveryReady]);
   useUnsaved(dirty);
   const blocker = useBlocker(dirty);
   function response(
     next: Response | undefined,
     immediate: boolean | "manual" = true,
   ) {
+    const { flagged, confidence, note } = r ?? {};
+    updateResponse({ flagged, confidence, note, ...next }, immediate);
+  }
+  function updateResponse(
+    next: Response,
+    immediate: boolean | "manual" = true,
+  ) {
     const values = Object.assign(Object.create(null), responses);
-    if (next) values[item.id] = next;
+    if (Object.values(next).some((value) => value !== undefined))
+      values[item.id] = next;
     else delete values[item.id];
     state.change(values, position, immediate);
   }
@@ -88,20 +126,22 @@ function Practice({ initial }: { initial: Attempt }) {
   async function rate(rating: "known" | "review_again") {
     if (busy) return;
     setLastRating({ id: item.id, index: position, previous: r });
-    const values = { ...responses, [item.id]: { revealed: true, rating } };
+    const values = {
+      ...responses,
+      [item.id]: { ...r, revealed: true, rating },
+    };
     state.change(values, Math.min(position + 1, items.length - 1));
     await state.flush();
   }
-  async function retry() {
+  async function retry(mode: RetryMode = "mistakes") {
     setRetrying(true);
     setRetryError(undefined);
     try {
-      const next = await api<Attempt>(
-        `/attempts/${attempt.id}/retry`,
-        "POST",
-        {},
-      );
-      navigate(`/practice/${next.id}`);
+      if (!(await state.flush())) return;
+      const next = await api<Attempt>(`/attempts/${attempt.id}/retry`, "POST", {
+        mode,
+      });
+      navigate(`/practice/${next.id}`, { state: { returnTo } });
     } catch (e) {
       setRetryError(e as Error);
     } finally {
@@ -112,6 +152,8 @@ function Practice({ initial }: { initial: Attempt }) {
   const eligible =
     attempt.status === "completed" ? mistakes(doc, responses) : null;
   const retryCount = eligible ? itemsOf(eligible).length : 0;
+  const flagged = retrySnapshot(doc, responses, "flagged");
+  const uncertain = retrySnapshot(doc, responses, "low_confidence");
   const unanswered =
     doc.kind === "exam"
       ? doc.questions.filter((q) => !answered(q, own(responses, q.id))).length
@@ -144,20 +186,17 @@ function Practice({ initial }: { initial: Attempt }) {
   );
   const confirmedPending =
     attempt.result?.selfAssessed?.pendingCount ?? pending.length;
-  function recoveryDownload() {
+  function recoveryDownload(checkpoint = state.localCopy()) {
     download(
       JSON.stringify(
         {
-          purpose: "Practice recovery copy; not an importable study-set file",
-          attemptId: attempt.id,
+          ...checkpoint,
           title: doc.title,
-          confirmedRevision: attempt.revision,
-          position,
-          items: items.map((it) => ({
-            id: it.id,
-            prompt: "prompt" in it ? it.prompt : it.front,
-          })),
-          responses,
+          prompts: Object.fromEntries(
+            items
+              .filter((it) => Object.hasOwn(checkpoint.changes, it.id))
+              .map((it) => [it.id, "prompt" in it ? it.prompt : it.front]),
+          ),
         },
         null,
         2,
@@ -178,13 +217,19 @@ function Practice({ initial }: { initial: Attempt }) {
     }
     return own(responses, it.id)?.rating ? "Rated" : "Unreviewed";
   }
+  if (!state.recoveryReady)
+    return (
+      <div className="focus-loading">
+        <LoadingRows />
+      </div>
+    );
   return (
     <div className="practice-frame">
       <header className="focus-header frosted-navigation">
         <div className="focus-brand">
-          <Link className="button secondary" to="/">
+          <Link className="button secondary" to={returnTo}>
             <ArrowLeft size={18} />
-            Library
+            {returnLabel}
           </Link>
           <span className="wordmark">Exam Prep</span>
         </div>
@@ -199,6 +244,12 @@ function Practice({ initial }: { initial: Attempt }) {
         />
       </header>
       <div className="focus-main">
+        {inProgress && attempt.settings?.timerMinutes ? (
+          <PracticeTimer
+            startedAt={attempt.startedAt}
+            minutes={attempt.settings.timerMinutes}
+          />
+        ) : null}
         <div className="practice-progress">
           <progress
             max={items.length}
@@ -226,11 +277,11 @@ function Practice({ initial }: { initial: Attempt }) {
         {state.error ? (
           <Notice tone="warning">
             <p>
-              Could not confirm a save. Keep this page open and retry, or
-              download a recovery copy. This copy cannot be imported as a study
-              set.
+              {state.checkpointStatus === "saved"
+                ? "Could not confirm a save. A recovery checkpoint is saved on this device. You can restore it the next time you open this attempt."
+                : "Could not confirm a save. Retry, or download a recovery copy before leaving."}
             </p>
-            <Button onClick={recoveryDownload}>
+            <Button onClick={() => recoveryDownload()}>
               Download my unsaved answers
             </Button>
           </Notice>
@@ -238,8 +289,7 @@ function Practice({ initial }: { initial: Attempt }) {
         {state.conflict ? (
           <Notice tone="warning">
             <p>
-              A newer save exists. Your current answers remain here. Download
-              them before loading the confirmed progress.
+              A newer save exists. Load it to compare with your local progress.
             </p>
             <div className="actions">
               <Button onClick={() => window.location.reload()}>
@@ -251,7 +301,10 @@ function Practice({ initial }: { initial: Attempt }) {
         {attempt.sourceAttemptId ? (
           <p className="muted">
             Retry from{" "}
-            <Link to={`/practice/${attempt.sourceAttemptId}`}>
+            <Link
+              to={`/practice/${attempt.sourceAttemptId}`}
+              state={{ returnTo }}
+            >
               a previous attempt
             </Link>
           </p>
@@ -328,8 +381,39 @@ function Practice({ initial }: { initial: Attempt }) {
                 >
                   {retryCount
                     ? `${doc.kind === "exam" ? "Retry mistakes" : "Review again"} (${retryCount})`
-                    : "No mistakes to retry"}
+                    : doc.kind === "exam"
+                      ? "No mistakes to retry"
+                      : "No cards rated Review again"}
                 </Button>
+                {doc.kind === "flashcards" && unanswered > 0 ? (
+                  <Button
+                    busy={retrying}
+                    onClick={() => void retry("unreviewed")}
+                  >
+                    Study unreviewed cards ({unanswered})
+                  </Button>
+                ) : null}
+                {flagged ? (
+                  <Button busy={retrying} onClick={() => void retry("flagged")}>
+                    Practice flagged items ({itemsOf(flagged).length})
+                  </Button>
+                ) : null}
+                {uncertain ? (
+                  <Button
+                    busy={retrying}
+                    onClick={() => void retry("low_confidence")}
+                  >
+                    Practice low-confidence items ({itemsOf(uncertain).length})
+                  </Button>
+                ) : null}
+                {attempt.reviewMode && attempt.studySetId ? (
+                  <Link
+                    className="button secondary"
+                    to={`/review/${attempt.studySetId}`}
+                  >
+                    Return to review queue
+                  </Link>
+                ) : null}
                 <Link className="button secondary" to="/history">
                   View history
                 </Link>
@@ -388,7 +472,7 @@ function Practice({ initial }: { initial: Attempt }) {
                     ) : null}
                   </label>
                 ))}
-                {inProgress && r ? (
+                {inProgress && r?.selectedOptionId ? (
                   <Button variant="quiet" onClick={() => response(undefined)}>
                     Clear answer
                   </Button>
@@ -447,10 +531,9 @@ function Practice({ initial }: { initial: Attempt }) {
                       const values = {
                         ...responses,
                         [lastRating.id]: {
+                          ...own(responses, lastRating.id),
                           revealed: true,
-                          ...(lastRating.previous?.rating
-                            ? { rating: lastRating.previous.rating }
-                            : {}),
+                          rating: lastRating.previous?.rating,
                         },
                       };
                       state.change(values, lastRating.index);
@@ -495,6 +578,65 @@ function Practice({ initial }: { initial: Attempt }) {
             )}
           </>
         ) : null}
+        <details
+          className="practice-annotations"
+          key={`annotations-${item.id}`}
+        >
+          <summary>
+            Study notes and flags{r?.flagged ? " · Flagged" : ""}
+          </summary>
+          <div className="stack">
+            <Button
+              aria-pressed={r?.flagged ?? false}
+              disabled={state.submitting}
+              onClick={() =>
+                updateResponse({ ...r, flagged: r?.flagged ? undefined : true })
+              }
+            >
+              Flag for later
+            </Button>
+            <Field label="Confidence">
+              <select
+                value={r?.confidence ?? ""}
+                disabled={state.submitting}
+                onChange={(event) =>
+                  updateResponse({
+                    ...r,
+                    confidence: (event.target.value ||
+                      undefined) as Response["confidence"],
+                  })
+                }
+              >
+                <option value="">Not recorded</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </Field>
+            <Field
+              label="Private study note"
+              hint="Saved with this attempt. Study-set exports exclude it."
+            >
+              <textarea
+                rows={3}
+                value={r?.note ?? ""}
+                disabled={state.submitting}
+                onChange={(event) =>
+                  updateResponse(
+                    {
+                      ...r,
+                      note:
+                        Array.from(event.target.value)
+                          .slice(0, MAX_NOTE_CHARACTERS)
+                          .join("") || undefined,
+                    },
+                    false,
+                  )
+                }
+              />
+            </Field>
+          </div>
+        </details>
         <footer className="study-footer">
           <Button
             disabled={position === 0 || state.submitting}
@@ -537,6 +679,33 @@ function Practice({ initial }: { initial: Attempt }) {
         {inProgress && doc.kind === "flashcards" ? (
           <p className="muted centered">Your ratings are saved as you go.</p>
         ) : null}
+        <details>
+          <summary>Practice recovery tools</summary>
+          <Field
+            label="Open a practice recovery copy"
+            hint="Choose a recovery file for this attempt and account."
+          >
+            <input
+              type="file"
+              accept=".json,application/json"
+              disabled={busy || dirty}
+              onChange={async (event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (!file) return;
+                setRecoveryFileError(undefined);
+                try {
+                  state.addRecovery(
+                    await readPracticeRecoveryFile(file, user!.id, attempt.id),
+                  );
+                } catch (error) {
+                  setRecoveryFileError(error as Error);
+                }
+              }}
+            />
+          </Field>
+          <ErrorNotice error={recoveryFileError} />
+        </details>
       </div>
       {confirm ? (
         <Dialog
@@ -601,7 +770,9 @@ function Practice({ initial }: { initial: Attempt }) {
           ) : null}
           <ErrorNotice error={state.error} />
           {state.error ? (
-            <Button onClick={recoveryDownload}>Download recovery copy</Button>
+            <Button onClick={() => recoveryDownload()}>
+              Download recovery copy
+            </Button>
           ) : null}
           <div className="actions">
             <Button
@@ -649,6 +820,10 @@ function Practice({ initial }: { initial: Attempt }) {
               ...(attempt.status === "completed"
                 ? [{ value: "mistakes", label: "Needs review" }]
                 : []),
+              ...(flagged ? [{ value: "flagged", label: "Flagged" }] : []),
+              ...(uncertain
+                ? [{ value: "uncertain", label: "Low confidence" }]
+                : []),
             ]}
           />
           <div
@@ -661,7 +836,10 @@ function Practice({ initial }: { initial: Attempt }) {
               navFilter === "all" ||
               (navFilter === "unanswered" && omissions.includes(i)) ||
               (navFilter === "pending" && pending.includes(i)) ||
-              (navFilter === "mistakes" && incorrectIds.has(it.id)) ? (
+              (navFilter === "mistakes" && incorrectIds.has(it.id)) ||
+              (navFilter === "flagged" && own(responses, it.id)?.flagged) ||
+              (navFilter === "uncertain" &&
+                own(responses, it.id)?.confidence === "low") ? (
                 <Button
                   disabled={state.submitting}
                   className={i === position ? "selected" : ""}
@@ -681,10 +859,14 @@ function Practice({ initial }: { initial: Attempt }) {
           onClose={() => blocker.reset()}
         >
           <p>
-            Save your latest progress before leaving, or return to keep working.
+            {state.checkpointStatus === "saved"
+              ? "A recovery checkpoint is saved on this device if you leave before syncing."
+              : "Save your latest progress before leaving, or return to keep working."}
           </p>
           <ErrorNotice error={state.error} />
-          <Button onClick={recoveryDownload}>Download recovery copy</Button>
+          <Button onClick={() => recoveryDownload()}>
+            Download recovery copy
+          </Button>
           <div className="actions">
             <Button onClick={() => blocker.reset()}>Return to practice</Button>
             <Button
@@ -702,7 +884,89 @@ function Practice({ initial }: { initial: Attempt }) {
           </div>
         </Dialog>
       ) : null}
+      {state.recovery ? (
+        <PracticeRecoveryDialog
+          checkpoint={state.recovery}
+          attempt={attempt}
+          error={state.recoveryError}
+          onRestore={state.restoreRecovery}
+          onDiscard={state.discardRecovery}
+          onClose={state.dismissRecovery}
+          onDownload={recoveryDownload}
+        />
+      ) : null}
     </div>
+  );
+}
+function PracticeRecoveryDialog({
+  checkpoint,
+  attempt,
+  error,
+  onRestore,
+  onDiscard,
+  onClose,
+  onDownload,
+}: {
+  checkpoint: PracticeCheckpoint;
+  attempt: Attempt;
+  error?: Error;
+  onRestore: (checkpoint: PracticeCheckpoint, replace: boolean) => void;
+  onDiscard: (checkpoint: PracticeCheckpoint) => void;
+  onClose: () => void;
+  onDownload: (checkpoint: PracticeCheckpoint) => void;
+}) {
+  const plan = planPracticeRecovery(checkpoint, attempt);
+  const conflicts = plan.conflictCount || plan.positionConflict;
+  const hasSafe =
+    plan.safeCount > 0 || (plan.hasPosition && !plan.positionConflict);
+  return (
+    <Dialog title="Restore practice progress?" onClose={onClose}>
+      <p>
+        There are unsaved changes from{" "}
+        {new Date(checkpoint.updatedAt).toLocaleString()}.
+      </p>
+      {plan.staleStatus ? (
+        <Notice tone="warning">
+          This attempt moved to a new stage after the checkpoint was saved.
+          Download the local copy to keep these changes for reference.
+        </Notice>
+      ) : conflicts ? (
+        <Notice tone="warning">
+          {plan.conflictCount
+            ? `Another save changed ${plan.conflictCount} of the same items. `
+            : ""}
+          {plan.positionConflict
+            ? "It also recorded a different study position. "
+            : ""}
+          You can keep the newer saved changes or replace them with your local
+          copy.
+        </Notice>
+      ) : null}
+      <ErrorNotice error={error} />
+      <div className="actions">
+        {!plan.staleStatus && hasSafe ? (
+          <Button
+            variant="primary"
+            onClick={() => onRestore(checkpoint, false)}
+          >
+            {conflicts
+              ? "Restore without replacing newer changes"
+              : "Restore progress"}
+          </Button>
+        ) : null}
+        {!plan.staleStatus && conflicts ? (
+          <Button onClick={() => onRestore(checkpoint, true)}>
+            Restore and replace newer changes
+          </Button>
+        ) : null}
+        <Button onClick={() => onDownload(checkpoint)}>
+          Download recovery copy
+        </Button>
+        <Button variant="quiet" onClick={() => onDiscard(checkpoint)}>
+          Discard recovery copy
+        </Button>
+      </div>
+    </Dialog>
   );
 }
 function AnswerReview({

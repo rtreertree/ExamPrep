@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import {
   createBrowserRouter,
   Navigate,
@@ -10,6 +10,10 @@ import {
 import { BookOpen, History, UserRound, Menu, X } from "lucide-react";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { AuthPage, AccountPage } from "./features/Account";
+import { applyReadingSize, readingSize } from "./lib/readingSize";
+const PasswordRecoveryPage = lazy(() =>
+  import("./features/PasswordRecovery").then((m) => ({ default: m.PasswordRecoveryPage })),
+);
 const LibraryPage = lazy(() =>
   import("./features/Library").then((m) => ({ default: m.LibraryPage })),
 );
@@ -21,6 +25,9 @@ const HistoryPage = lazy(() =>
 );
 const PracticePage = lazy(() =>
   import("./features/Practice").then((m) => ({ default: m.PracticePage })),
+);
+const DueReviewPage = lazy(() =>
+  import("./features/DueReview").then((m) => ({ default: m.DueReviewPage })),
 );
 import { Button, ErrorNotice, LoadingRows } from "./components/ui";
 function Root() {
@@ -40,6 +47,11 @@ function Root() {
 }
 function Protected({ children }: { children?: ReactNode }) {
   const { user } = useAuth();
+  const userId = user?.id;
+  useEffect(() => {
+    applyReadingSize(userId ? readingSize(userId) : "standard");
+    return () => applyReadingSize("standard");
+  }, [userId]);
   return user ? (children ?? <Outlet />) : <Navigate to="/sign-in" replace />;
 }
 function AppShell() {
@@ -53,7 +65,8 @@ function AppShell() {
         onClick={() => setOpen(false)}
         className={
           location.pathname.includes("/edit") ||
-          location.pathname.startsWith("/new")
+          location.pathname.startsWith("/new") ||
+          location.pathname.startsWith("/review/")
             ? "active"
             : undefined
         }
@@ -119,6 +132,8 @@ const router = createBrowserRouter([
     ),
     children: [
       { path: "/sign-in", element: <AuthPage /> },
+      { path: "/forgot-password", element: <PasswordRecoveryPage /> },
+      { path: "/reset-password", element: <PasswordRecoveryPage reset /> },
       {
         element: <Protected />,
         children: [
@@ -127,6 +142,7 @@ const router = createBrowserRouter([
             children: [
               { index: true, element: <LibraryPage /> },
               { path: "/history", element: <HistoryPage /> },
+              { path: "/review/:id", element: <DueReviewPage /> },
               { path: "/account", element: <AccountPage /> },
               { path: "/sets/:id/edit", element: <EditorPage /> },
               { path: "/new/:kind/:draftId", element: <EditorPage /> },

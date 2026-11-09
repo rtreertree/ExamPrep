@@ -11,6 +11,7 @@ type Props = {
   awards?: Record<string, number>;
   onAward?: (id: string, points: number | undefined, commit: boolean) => void;
   onChange?: (criteria: Criterion[]) => void;
+  onRemove?: (criterion: Criterion, index: number) => void;
   disabled?: boolean;
 };
 export function RubricList({
@@ -20,6 +21,7 @@ export function RubricList({
   awards,
   onAward,
   onChange,
+  onRemove,
   disabled,
 }: Props) {
   return (
@@ -101,7 +103,10 @@ export function RubricList({
                 <Button
                   variant="quiet"
                   aria-label={`Remove criterion ${i + 1}`}
-                  onClick={() => onChange?.(criteria.filter((_, n) => n !== i))}
+                  onClick={() => {
+                    onRemove?.(c, i);
+                    onChange?.(criteria.filter((_, n) => n !== i));
+                  }}
                 >
                   <Trash2 size={16} />
                 </Button>

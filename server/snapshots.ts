@@ -104,7 +104,8 @@ export async function readAttemptProgress(
 ) {
   const rows = await db.$queryRaw<Omit<Attempt, "snapshot">[]>`
     SELECT id, "userId", "studySetId", "sourceAttemptId", status, position, result,
-      revision, "startedAt", "updatedAt", "completedAt", responses, "snapshotVersion", "progressContent"
+      revision, "startedAt", "updatedAt", "completedAt", responses, "snapshotVersion", "progressContent",
+      "settings", "studySetRevision", "reviewMode", "fullSet"
     FROM "Attempt" WHERE id = ${id} AND "userId" = ${userId}`;
   return rows[0];
 }

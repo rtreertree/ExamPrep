@@ -50,6 +50,8 @@ GitHub **production** environment:
 | Secret | `DATABASE_URL_UNPOOLED` | Direct URL for the **same endpoint/database**, without `-pooler`; migration tooling only |
 | Secret | `BETTER_AUTH_SECRET` | Independent cryptographically random secret, at least 32 characters |
 | Secret | `PASSWORD_PEPPER` | Separate stable random secret, at least 32 characters; encrypted backup required |
+| Optional secret | `RESEND_API_KEY` | Sending-only Resend key for password recovery |
+| Optional variable | `RESET_EMAIL_FROM` | Email address on a verified Resend sending domain |
 
 `BETTER_AUTH_URL=https://exam.phonet.app` is public configuration in Wrangler and
 the release workflow, not another secret or a `VITE_` setting. Do not rotate an
@@ -66,9 +68,9 @@ Cloudflare production bindings:
 | `ASSETS` | Wrangler-managed `dist/client` static assets |
 | `BETTER_AUTH_URL` | Production `vars`, exact HTTPS origin above |
 | `DATABASE_URL`, `BETTER_AUTH_SECRET`, `PASSWORD_PEPPER` | Worker secrets uploaded atomically with code from GitHub production secrets |
+| `RESEND_API_KEY`, `RESET_EMAIL_FROM` | Optional Worker bindings included when both production settings are provided |
 
-The direct migration URL and Cloudflare API token are **never Worker bindings**. No Hyperdrive, Pages, extra database, OAuth provider or mail service is
-needed. `PORT` applies only to Node. Local `.env`/`.dev.vars` remain ignored and are
+The direct migration URL and Cloudflare API token are **never Worker bindings**. Resend is used only for password recovery. `PORT` applies only to Node. Local `.env`/`.dev.vars` remain ignored and are
 not uploaded. Never enable SQL parameter logging or dump runtime environments.
 
 ## Checks and release ordering

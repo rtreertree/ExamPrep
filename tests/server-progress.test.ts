@@ -51,6 +51,7 @@ function fixture(legacy = false) {
   const readSnapshot = vi.fn(async () => record);
   const queries: string[] = [];
   const tx = {
+    $executeRaw: async () => 1,
     $queryRaw: async (
       strings: TemplateStringsArray,
       id: string,
@@ -104,6 +105,29 @@ async function request(
   });
 }
 describe("progress API trust boundary", () => {
+  it("rejects a compact submission when a newer answer and submission were saved elsewhere", async () => {
+    const { app, record } = fixture();
+    record.status = "reviewing";
+    record.revision = 3;
+    const stale = await request(
+      app,
+      "/attempts/attempt/submit?compact=1",
+      { revision: 1 },
+      "POST",
+    );
+    expect(stale.status).toBe(409);
+    const repeated = await request(
+      app,
+      "/attempts/attempt/submit?compact=1",
+      { revision: 2 },
+      "POST",
+    );
+    expect(repeated.status).toBe(200);
+    expect(await repeated.json()).toMatchObject({
+      revision: 3,
+      status: "reviewing",
+    });
+  });
   it("merges deltas and returns compact acknowledgements, protecting ownership and revisions", async () => {
     const { app, record, readSnapshot, queries } = fixture();
     let result = await request(app, "/attempts/attempt/progress", {
@@ -229,5 +253,123 @@ describe("progress API trust boundary", () => {
     } finally {
       log.mockRestore();
     }
+  });
+});
+
+describe("retry API subsets", () => {
+  it("creates unreviewed-card sessions from the owned frozen snapshot and keeps the default retry separate", async () => {
+    const snapshot: StudyContent = {
+      schemaVersion: 1,
+      kind: "flashcards",
+      title: "Original deck",
+      cards: [
+        { id: "known", front: "Known", back: "A" },
+        { id: "again", front: "Review again", back: "B" },
+        { id: "revealed", front: "Revealed but unrated", back: "C" },
+        { id: "unseen", front: "Unseen", back: "D" },
+      ],
+    };
+    const source = {
+      id: "source",
+      userId: "owner",
+      status: "completed",
+      studySetId: null,
+      snapshot: encodeStorage(snapshot),
+      responses: encodeStorage({
+        known: { revealed: true, rating: "known" },
+        again: { revealed: true, rating: "review_again" },
+        revealed: { revealed: true },
+      }),
+    };
+    const original = structuredClone(source);
+    const create = vi.fn(
+      async ({ data }: { data: Record<string, unknown> }) => ({
+        ...data,
+        id: "retry",
+        responses: {},
+        position: 0,
+        status: "in_progress",
+        result: null,
+      }),
+    );
+    const tx = {
+      attempt: {
+        findFirst: async ({
+          where,
+        }: {
+          where: { id: string; userId: string };
+        }) =>
+          where.id === source.id && where.userId === source.userId
+            ? source
+            : null,
+        create,
+      },
+    };
+    const db = {
+      $transaction: async (work: (tx: unknown) => Promise<unknown>) => work(tx),
+      $disconnect: async () => {},
+    } as unknown as Database;
+    const app = createApp(config, () => db);
+    let result = await request(
+      app,
+      "/attempts/source/retry",
+      { mode: "unreviewed" },
+      "POST",
+    );
+    expect(result.status).toBe(201);
+    expect(await result.json()).toMatchObject({
+      snapshot: { ...snapshot, cards: snapshot.cards.slice(2) },
+      sourceAttemptId: "source",
+      studySetId: null,
+      userId: "owner",
+      status: "in_progress",
+      responses: {},
+      result: null,
+    });
+    result = await request(app, "/attempts/source/retry", {}, "POST");
+    expect(result.status).toBe(201);
+    const retry = (await result.json()) as { snapshot: StudyContent };
+    expect(
+      retry.snapshot.kind === "flashcards" && retry.snapshot.cards,
+    ).toEqual([snapshot.cards[1]]);
+    expect(source).toEqual(original);
+    expect(
+      (
+        await request(
+          app,
+          "/attempts/not-owned/retry",
+          { mode: "unreviewed" },
+          "POST",
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (await request(app, "/attempts/source/retry", { mode: "other" }, "POST"))
+        .status,
+    ).toBe(422);
+    source.status = "in_progress";
+    expect(
+      (
+        await request(
+          app,
+          "/attempts/source/retry",
+          { mode: "unreviewed" },
+          "POST",
+        )
+      ).status,
+    ).toBe(409);
+    source.status = "completed";
+    source.snapshot = { ...snapshot, cards: snapshot.cards.slice(0, 2) };
+    expect(
+      (
+        await request(
+          app,
+          "/attempts/source/retry",
+          { mode: "unreviewed" },
+          "POST",
+        )
+      ).status,
+    ).toBe(422);
+    expect(create).toHaveBeenCalledTimes(2);
   });
 });

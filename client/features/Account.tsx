@@ -1,8 +1,14 @@
 import { useState, type FormEvent } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { clearDeviceData } from "../lib/deviceCleanup";
+import {
+  readingSize,
+  saveReadingSize,
+  type ReadingSize,
+} from "../lib/readingSize";
+import { AccountBackup } from "./AccountBackup";
 import {
   Button,
   Field,
@@ -96,6 +102,11 @@ export function AuthForm({
           {register ? "Create account" : "Sign in"}
         </Button>
       </form>
+      {!inline && !register ? (
+        <p className="auth-switch">
+          <Link to="/forgot-password">Forgot password?</Link>
+        </p>
+      ) : null}
       {!inline ? (
         <p className="auth-switch">
           {register ? "Already have an account?" : "New to Exam Prep?"}{" "}
@@ -125,7 +136,7 @@ export function AuthPage() {
         {cleanupUser ? (
           <Notice tone="warning">
             <p>
-              You are signed out. Some drafts or AI notes could not be removed
+              You are signed out. Some local study data could not be removed
               from this device. They remain tied to your account. Retry cleanup,
               or clear this site’s stored data in your browser on a shared
               device.
@@ -168,6 +179,9 @@ export function AccountPage() {
   const [error, setError] = useState<Error>();
   const [success, setSuccess] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  const [size, setSize] = useState(() =>
+    user ? readingSize(user.id) : "standard",
+  );
   async function change(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -254,9 +268,32 @@ export function AccountPage() {
         </section>
         <ErrorNotice error={error} />
         <section>
+          <h2>Reading preferences</h2>
+          <p className="muted">
+            Adjust the size of questions, answers, and flashcards on this
+            device.
+          </p>
+          <Field label="Study text size">
+            <select
+              value={size}
+              onChange={(event) => {
+                const next = event.target.value as ReadingSize;
+                setSize(next);
+                if (user) saveReadingSize(user.id, next);
+              }}
+            >
+              <option value="standard">Standard</option>
+              <option value="large">Large</option>
+              <option value="extra-large">Extra large</option>
+            </select>
+          </Field>
+        </section>
+        <AccountBackup />
+        <section>
           <h2>Sign out</h2>
           <p className="muted">
-            Signing out clears this account’s editor drafts from this device.
+            Signing out clears this account’s editor drafts and unsaved practice
+            checkpoints from this device.
           </p>
           <Button onClick={() => setConfirm(true)}>Sign out</Button>
         </section>
@@ -265,8 +302,8 @@ export function AccountPage() {
         <Dialog title="Sign out?" onClose={() => setConfirm(false)}>
           <p>
             Your saved sets and practice history stay in your account. Local
-            editor drafts and unfinished AI notes will be removed where device
-            storage is available.
+            editor drafts, unsaved practice checkpoints, and AI notes will be
+            removed where device storage is available.
           </p>
           <ErrorNotice error={error} retry={() => void logout()} />
           <div className="actions">

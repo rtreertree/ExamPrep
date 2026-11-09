@@ -1,0 +1,61 @@
+.library-filters {
+  margin-block: 12px 16px;
+}
+
+.library-filter-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 12px;
+  margin-block-start: 12px;
+}
+
+.library-course {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.item-search {
+  margin-block-end: 12px;
+}
+
+.item-search > p {
+  margin-block: 8px 0;
+  font-size: 14px;
+}
+
+.editor-page .item-toolbar {
+  flex-wrap: wrap;
+}
+
+@media (min-width: 1200px) {
+  .item-rail-list {
+    max-block-size: min(56vh, 42rem);
+    overflow-y: auto;
+  }
+}
+
+@media (max-width: 1199px) {
+  .editor-page .item-picker {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+  }
+
+  .item-picker .field {
+    flex: 1;
+  }
+
+  .item-picker .item-search-toggle {
+    min-height: 48px;
+    padding-inline: 14px;
+  }
+
+  .item-search {
+    display: none;
+    margin-block: 12px 0;
+  }
+
+  .item-search.is-open {
+    display: block;
+  }
+}

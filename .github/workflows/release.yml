@@ -43,6 +43,8 @@ jobs:
           DATABASE_URL_UNPOOLED: ${{ secrets.DATABASE_URL_UNPOOLED }}
           BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
           PASSWORD_PEPPER: ${{ secrets.PASSWORD_PEPPER }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESET_EMAIL_FROM: ${{ vars.RESET_EMAIL_FROM }}
           BETTER_AUTH_URL: https://exam.phonet.app
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

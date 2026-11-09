@@ -48,6 +48,10 @@ async function mockAPI(page: Page) {
     content: structuredClone(content),
     revision: 1,
     updatedAt: new Date().toISOString(),
+    course: "",
+    pinned: false,
+    archived: false,
+    lastStudiedAt: null,
   };
   let attempt: Attempt = {
     id: "notation",

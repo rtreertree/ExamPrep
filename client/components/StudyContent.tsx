@@ -44,6 +44,17 @@ export const StudyContent = memo(function StudyContent({
         ]}
         urlTransform={(url) => (/^https?:\/\//i.test(url) ? url : "")}
         components={{
+          pre: ({ node: _node, ...props }) => <pre {...props} tabIndex={0} />,
+          table: ({ node: _node, ...props }) => (
+            <div
+              className="study-table-scroll"
+              tabIndex={0}
+              role="region"
+              aria-label="Study table"
+            >
+              <table {...props} />
+            </div>
+          ),
           a: ({ children, ...props }) => (
             <a {...props} target="_blank" rel="noopener noreferrer">
               {children}

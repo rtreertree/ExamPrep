@@ -22,6 +22,19 @@ export function issueLabel(issue: Issue) {
     id: "item ID",
   };
   let location = "Study set";
+  if (p[0] === "library" || p[0] === "history") {
+    const group = p[0] === "library" ? "Library backup" : "Practice history";
+    const entry =
+      p[1] === "sets"
+        ? "study set"
+        : p[1] === "attempts"
+          ? "attempt"
+          : "review";
+    const row = /^\d+$/.test(p[2] ?? "")
+      ? `, ${entry} ${Number(p[2]) + 1}`
+      : "";
+    return `${group}${row}: ${issue.message}`;
+  }
   if (["questions", "cards"].includes(p[0]) && /^\d+$/.test(p[1] ?? "")) {
     location = `${p[0] === "questions" ? "Question" : "Card"} ${Number(p[1]) + 1}`;
     if (p[2] === "options" && /^\d+$/.test(p[3] ?? ""))

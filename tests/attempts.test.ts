@@ -4,6 +4,7 @@ import { parseContent } from "../shared/content";
 import {
   grade,
   mistakes,
+  unreviewedCards,
   validateProgress,
   type Responses,
 } from "../shared/attempts";
@@ -19,6 +20,23 @@ const responses: Responses = {
   q3: { text: "0", selfAssessment: "correct" },
 };
 describe("grading and state rules", () => {
+  it("studies only unrated cards, including revealed cards, preserving their content and order", () => {
+    if (deck.kind !== "flashcards") throw new Error("Expected deck");
+    expect(unreviewedCards(deck, { c1: { revealed: true } })).toEqual(deck);
+    const responses: Responses = { c1: { revealed: true, rating: "known" } };
+    expect(unreviewedCards(deck, responses)).toEqual({
+      ...deck,
+      cards: [deck.cards[1]],
+    });
+    responses.c1.rating = "review_again";
+    expect(unreviewedCards(deck, responses)).toEqual({
+      ...deck,
+      cards: [deck.cards[1]],
+    });
+    responses.c2 = { revealed: true, rating: "known" };
+    expect(unreviewedCards(deck, responses)).toBeNull();
+    expect(unreviewedCards(exam, {})).toBeNull();
+  });
   it("keeps automatic 1/1 separate from self-assessed 4/6", () => {
     expect(grade(exam, responses)).toEqual({
       status: "completed",
@@ -123,7 +141,7 @@ describe("grading and state rules", () => {
       ),
     ).toThrow();
   });
-  it("freezes answers in reviewing and every mutation after completion", () => {
+  it("freezes submitted answers and rejects no-op updates after completion", () => {
     expect(() =>
       validateProgress(
         exam,

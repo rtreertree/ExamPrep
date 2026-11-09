@@ -25,6 +25,7 @@ type Delegate<Model, Where, Create, Update, Order> = {
   deleteMany(args: { where: Where }): Promise<{ count: number }>;
 };
 type Tables = {
+  $executeRaw(query: TemplateStringsArray, ...values: unknown[]): Promise<number>;
   $queryRaw<T = unknown>(
     query: TemplateStringsArray,
     ...values: unknown[]

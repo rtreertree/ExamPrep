@@ -157,6 +157,10 @@ test("complete study workflow, recovery, partial credit, flashcards, responsive 
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.screenshot({ path: "/tmp/examprep-library.png" });
   await page.getByRole("button", { name: /Practice/ }).click();
+  await page
+    .getByRole("dialog", { name: "Set up practice" })
+    .getByRole("button", { name: "Start practice", exact: true })
+    .click();
   await page.locator("input[type=radio][value=b]").check();
   await expect(
     page.getByText("Saved to your account", { exact: true }),
@@ -233,6 +237,10 @@ test("complete study workflow, recovery, partial credit, flashcards, responsive 
     .locator(".set-row")
     .filter({ hasText: "Derivative rules" })
     .getByRole("button", { name: /Practice/ })
+    .click();
+  await page
+    .getByRole("dialog", { name: "Set up practice" })
+    .getByRole("button", { name: "Start practice", exact: true })
     .click();
   await expect(
     page.getByRole("button", { name: "Known", exact: true }),

@@ -21,20 +21,35 @@ import {
 } from "../components/ui";
 import { StudyContent } from "../components/StudyContent";
 import { RubricList } from "../components/RubricList";
-export function ContentPreview({ content }: { content: Content }) {
+export function ContentPreview({
+  content,
+  selectedIndex,
+}: {
+  content: Content;
+  selectedIndex?: number;
+}) {
   const [index, setIndex] = useState(0);
   const items = itemsOf(content);
-  const selected = Math.min(index, Math.max(0, items.length - 1));
+  const selected = Math.min(
+    selectedIndex ?? index,
+    Math.max(0, items.length - 1),
+  );
   const item = items[selected];
   return (
     <div className="content-preview">
       <h3>{content.title}</h3>
       <p className="muted">
         {content.kind === "exam" ? "Exam" : "Flashcards"} · {items.length}{" "}
-        {content.kind === "exam" ? "questions" : "cards"}
+        {content.kind === "exam"
+          ? items.length === 1
+            ? "question"
+            : "questions"
+          : items.length === 1
+            ? "card"
+            : "cards"}
       </p>
       <StudyContent source={content.description} label="description" />
-      {items.length > 1 ? (
+      {selectedIndex === undefined && items.length > 1 ? (
         <Field label="Preview item">
           <select
             value={selected}
@@ -51,7 +66,10 @@ export function ContentPreview({ content }: { content: Content }) {
       {item ? (
         <section key={item.id}>
           <span className="mono muted">
-            Item {selected + 1} of {items.length}
+            {selectedIndex === undefined
+              ? "Item"
+              : `Preview of ${content.kind === "exam" ? "question" : "card"}`}{" "}
+            {selected + 1} of {items.length}
           </span>
           {"type" in item ? (
             <>
@@ -74,9 +92,12 @@ export function ContentPreview({ content }: { content: Content }) {
                 {item.type === "single_choice" ? (
                   <p>
                     Correct option:{" "}
-                    {String.fromCharCode(
-                      65 + item.options.findIndex((o) => o.id === item.answer),
-                    )}
+                    {item.options.some((o) => o.id === item.answer)
+                      ? String.fromCharCode(
+                          65 +
+                            item.options.findIndex((o) => o.id === item.answer),
+                        )
+                      : "Select a correct answer in the editor"}
                   </p>
                 ) : (
                   <>
@@ -121,6 +142,13 @@ export function ImportPanel({
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [repairCopied, setRepairCopied] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
+  useUnsaved(!!raw);
+  function close() {
+    if (busy) return;
+    if (raw) setConfirmClose(true);
+    else onClose();
+  }
   function validate(source: string) {
     setRaw(source);
     setRepairCopied(false);
@@ -155,8 +183,28 @@ export function ImportPanel({
       setBusy(false);
     }
   }
+  if (confirmClose)
+    return (
+      <Dialog
+        title="Discard your import draft?"
+        onClose={() => setConfirmClose(false)}
+      >
+        <p>
+          Your imported or pasted content has not been saved. Keep editing to
+          preserve it, or discard it and close Import.
+        </p>
+        <div className="actions">
+          <Button variant="primary" onClick={() => setConfirmClose(false)}>
+            Keep editing
+          </Button>
+          <Button variant="danger" onClick={onClose}>
+            Discard draft
+          </Button>
+        </div>
+      </Dialog>
+    );
   return (
-    <Dialog title="Import a study set" onClose={onClose}>
+    <Dialog title="Import a study set" onClose={close}>
       <p className="muted">
         Bring a file from your AI tool, or one you wrote yourself.
       </p>
@@ -255,7 +303,9 @@ export function ImportPanel({
             Valid file. Review the content below before saving.
           </Notice>
           <div className="dialog-footer actions import-save-actions">
-            <Button onClick={onClose}>Cancel</Button>
+            <Button onClick={close} disabled={busy}>
+              Cancel
+            </Button>
             <Button variant="primary" busy={busy} onClick={save}>
               Save to library
             </Button>

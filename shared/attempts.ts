@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { type StudyContent, type Question, codePoints } from "./content";
+import {
+  type StudyContent,
+  type Question,
+  codePoints,
+  itemsOf,
+} from "./content";
 import { ValidationError } from "./json";
 export type Status = "in_progress" | "reviewing" | "completed";
 export type Response = {
@@ -9,6 +14,9 @@ export type Response = {
   criterionPoints?: Record<string, number>;
   revealed?: boolean;
   rating?: "known" | "review_again";
+  flagged?: boolean;
+  confidence?: "low" | "medium" | "high";
+  note?: string;
 };
 export type Responses = Record<string, Response>;
 export type Category = {
@@ -24,7 +32,50 @@ export type Result = {
   unreviewed?: number;
 };
 export const MAX_ANSWER_CHARACTERS = 20_000;
+export const MAX_NOTE_CHARACTERS = 4_000;
 export const revisionSchema = z.number().int().positive();
+export const practiceSettingsSchema = z.strictObject({
+  count: z.number().int().min(1).max(500),
+  order: z.enum(["original", "shuffled"]),
+  timerMinutes: z.number().int().min(1).max(600).nullable(),
+});
+export type PracticeSettings = z.infer<typeof practiceSettingsSchema>;
+export const retryModeSchema = z.enum([
+  "mistakes",
+  "unreviewed",
+  "flagged",
+  "low_confidence",
+]);
+export type RetryMode = z.infer<typeof retryModeSchema>;
+
+export function practiceSnapshot(
+  doc: StudyContent,
+  preferences: Partial<PracticeSettings>,
+  random = Math.random,
+) {
+  const originalCount = itemsOf(doc).length;
+  const settings: PracticeSettings = {
+    count: preferences.count ?? originalCount,
+    order: preferences.order ?? "original",
+    timerMinutes: preferences.timerMinutes ?? null,
+  };
+  if (settings.count > originalCount)
+    invalid("/count", `This set has only ${originalCount} items.`);
+  function select<T>(items: T[]) {
+    if (settings.order === "original") return items.slice(0, settings.count);
+    const ordered = [...items];
+    for (let i = ordered.length - 1; i > 0; i--) {
+      const j = Math.floor(random() * (i + 1));
+      [ordered[i], ordered[j]] = [ordered[j], ordered[i]];
+    }
+    return ordered.slice(0, settings.count);
+  }
+  const snapshot =
+    doc.kind === "exam"
+      ? { ...doc, questions: select(doc.questions) }
+      : { ...doc, cards: select(doc.cards) };
+  return { settings, snapshot, fullSet: settings.count === originalCount };
+}
 const objectInput = z
   .unknown()
   .refine(
@@ -51,11 +102,7 @@ export function responseChanges(
 ): ResponseChanges {
   return Object.fromEntries(
     [...new Set([...Object.keys(old), ...Object.keys(next)])]
-      .filter(
-        (id) =>
-          own(old, id) !== own(next, id) &&
-          JSON.stringify(own(old, id)) !== JSON.stringify(own(next, id)),
-      )
+      .filter((id) => !sameResponse(own(old, id), own(next, id)))
       .map((id) => [id, own(next, id) ?? null]),
   );
 }
@@ -69,18 +116,62 @@ export function mergeResponses(old: Responses, changes: unknown): Responses {
   }
   return next;
 }
-const choiceResponse = z.strictObject({ selectedOptionId: z.string() });
+const annotationFields = {
+  flagged: z.boolean().optional(),
+  confidence: z.enum(["low", "medium", "high"]).optional(),
+  note: z
+    .string()
+    .refine(
+      (text) => codePoints(text) <= MAX_NOTE_CHARACTERS,
+      "Note exceeds 4,000 characters.",
+    )
+    .optional(),
+};
+const choiceResponse = z.strictObject({
+  selectedOptionId: z.string().optional(),
+  ...annotationFields,
+});
 const writtenResponse = z.strictObject({
-  text: z.string(),
+  text: z.string().optional(),
   selfAssessment: z.enum(["correct", "incorrect"]).optional(),
   criterionPoints: objectInput.optional(),
+  ...annotationFields,
 });
 const cardResponse = z.strictObject({
-  revealed: z.boolean(),
+  revealed: z.boolean().optional(),
   rating: z.enum(["known", "review_again"]).optional(),
+  ...annotationFields,
 });
 export const own = <T>(o: Record<string, T>, key: string): T | undefined =>
   Object.hasOwn(o, key) ? o[key] : undefined;
+function sameAnswer(a?: Response, b?: Response) {
+  if (a === b) return true;
+  if (
+    a?.selectedOptionId !== b?.selectedOptionId ||
+    a?.text !== b?.text ||
+    a?.selfAssessment !== b?.selfAssessment ||
+    a?.revealed !== b?.revealed ||
+    a?.rating !== b?.rating
+  )
+    return false;
+  const x = a?.criterionPoints;
+  const y = b?.criterionPoints;
+  return (
+    x === y ||
+    (!!x &&
+      !!y &&
+      Object.keys(x).length === Object.keys(y).length &&
+      Object.entries(x).every(([id, points]) => own(y, id) === points))
+  );
+}
+export function sameResponse(a?: Response, b?: Response) {
+  return (
+    sameAnswer(a, b) &&
+    a?.flagged === b?.flagged &&
+    a?.confidence === b?.confidence &&
+    a?.note === b?.note
+  );
+}
 function invalid(path: string, message: string): never {
   throw new ValidationError([{ path, message }]);
 }
@@ -112,7 +203,6 @@ export function validateProgress(
   input: unknown,
   position: number,
 ): Responses {
-  if (status === "completed") invalid("/", "Completed attempts are read-only.");
   const items = doc.kind === "exam" ? doc.questions : doc.cards;
   if (!Number.isInteger(position) || position < 0 || position >= items.length)
     invalid("/position", "Position is outside this attempt.");
@@ -132,7 +222,12 @@ export function validateProgress(
           : writtenResponse;
     const parsed = schema.safeParse(value);
     if (!parsed.success)
-      invalid(`/responses/${id}`, "Response has invalid or forbidden fields.");
+      invalid(
+        `/responses/${id}`,
+        parsed.error.issues.some((issue) => issue.path[0] === "note")
+          ? "A private note must be text of at most 4,000 characters."
+          : "Response has invalid or forbidden fields.",
+      );
     const r = parsed.data as Response;
     // Zod records discard __proto__; preserve every contract-valid ID explicitly.
     if (r.criterionPoints !== undefined) {
@@ -161,13 +256,16 @@ export function validateProgress(
         );
     } else if ("type" in item) {
       if (item.type === "single_choice") {
-        if (!item.options.some((o) => o.id === r.selectedOptionId))
+        if (
+          r.selectedOptionId !== undefined &&
+          !item.options.some((o) => o.id === r.selectedOptionId)
+        )
           invalid(
             `/responses/${id}`,
             "Option does not belong to this question.",
           );
       } else {
-        if (codePoints(r.text!) > MAX_ANSWER_CHARACTERS)
+        if (codePoints(r.text ?? "") > MAX_ANSWER_CHARACTERS)
           invalid(`/responses/${id}/text`, "Answer exceeds 20,000 characters.");
         if (
           status === "in_progress" &&
@@ -222,9 +320,17 @@ export function validateProgress(
       )
         invalid(
           `/responses/${q.id}`,
-          "Submitted answers are frozen. Only self-assessment may change.",
+          "Submitted answers are frozen. You can change assessments and study notes.",
         );
     }
+  }
+  if (status === "completed") {
+    const changed = Object.keys(responseChanges(old, result));
+    if (
+      !changed.length ||
+      changed.some((id) => !sameAnswer(own(old, id), own(result, id)))
+    )
+      invalid("/", "Completed answers and scores are read-only.");
   }
   return result;
 }
@@ -281,6 +387,34 @@ export function mistakes(
       : (writtenScore(q, own(responses, q.id)) ?? 0) < maximum(q),
   );
   return questions.length ? { ...doc, questions } : null;
+}
+
+export function unreviewedCards(
+  doc: StudyContent,
+  responses: Responses,
+): StudyContent | null {
+  if (doc.kind !== "flashcards") return null;
+  const cards = doc.cards.filter((card) => !own(responses, card.id)?.rating);
+  return cards.length ? { ...doc, cards } : null;
+}
+
+export function retrySnapshot(
+  doc: StudyContent,
+  responses: Responses,
+  mode: RetryMode,
+): StudyContent | null {
+  if (mode === "mistakes") return mistakes(doc, responses);
+  if (mode === "unreviewed") return unreviewedCards(doc, responses);
+  const matches = ({ id }: { id: string }) =>
+    mode === "flagged"
+      ? own(responses, id)?.flagged === true
+      : own(responses, id)?.confidence === "low";
+  if (doc.kind === "exam") {
+    const questions = doc.questions.filter(matches);
+    return questions.length ? { ...doc, questions } : null;
+  }
+  const cards = doc.cards.filter(matches);
+  return cards.length ? { ...doc, cards } : null;
 }
 
 /** Validate only changed records; unchanged answers already crossed this boundary. */

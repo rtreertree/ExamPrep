@@ -1,0 +1,88 @@
+.study-progress {
+  margin-block: 16px;
+}
+.study-progress-panel {
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  min-width: 0;
+  padding: 20px;
+  overflow-wrap: anywhere;
+}
+.study-progress h2,
+.study-progress p {
+  margin: 0;
+}
+.study-progress h2 {
+  font-size: 20px;
+}
+.study-progress > section:not(.study-progress-panel) {
+  padding-block: 12px;
+}
+.history-insights {
+  margin-block: 18px;
+}
+.history-insights summary {
+  cursor: pointer;
+}
+.history-insights summary .muted {
+  margin-inline-start: 6px;
+}
+.study-progress-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+.study-progress-list li {
+  align-items: start;
+  border-bottom: 1px solid var(--divider);
+  display: grid;
+  gap: 8px 16px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  overflow-wrap: anywhere;
+  padding: 12px 0;
+}
+.study-progress-list :is(div, span) > .muted,
+.study-progress-list time,
+.study-progress-list span > span {
+  display: block;
+}
+.study-score-table {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  table-layout: fixed;
+  width: 100%;
+}
+.study-score-table caption {
+  font-weight: 600;
+  padding-bottom: 8px;
+  text-align: left;
+}
+.study-score-table :is(th, td) {
+  border-bottom: 1px solid var(--divider);
+  padding: 8px;
+  text-align: left;
+}
+.study-score-table th:first-child {
+  width: 44%;
+}
+.study-score-table tbody th {
+  font-weight: normal;
+}
+.review-limit .actions {
+  align-items: end;
+}
+.review-limit input {
+  max-width: 10rem;
+}
+@media (max-width: 550px) {
+  .study-progress-panel {
+    padding: 14px;
+  }
+  .study-progress-list li {
+    grid-template-columns: 1fr;
+  }
+  .study-score-table :is(th, td) {
+    padding: 6px 4px;
+  }
+}

@@ -1,4 +1,5 @@
 export const MAX_BYTES = 2_097_152;
+export const BACKUP_BYTES = 16 * 1024 * 1024;
 export type Issue = { path: string; message: string };
 export class ValidationError extends Error {
   constructor(

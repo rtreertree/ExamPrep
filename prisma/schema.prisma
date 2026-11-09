@@ -88,42 +88,66 @@ model RateLimit {
 }
 
 model StudySet {
-  id        String    @id @default(uuid())
-  userId    String
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  title     String
-  kind      String
-  content   Json
-  revision  Int       @default(1)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  attempts  Attempt[]
+  id            String       @id @default(uuid())
+  userId        String
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title         String
+  kind          String
+  content       Json
+  revision      Int          @default(1)
+  course        String       @default("")
+  pinned        Boolean      @default(false)
+  archived      Boolean      @default(false)
+  lastStudiedAt DateTime?
+  reviewLimit   Int          @default(20)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  attempts      Attempt[]
+  cardReviews   CardReview[]
 
   @@index([userId, updatedAt])
+  @@index([userId, archived, pinned, lastStudiedAt])
+}
+
+model CardReview {
+  studySetId       String
+  studySet         StudySet @relation(fields: [studySetId], references: [id], onDelete: Cascade)
+  cardId           String
+  fingerprint      String
+  streak           Int
+  dueAt            DateTime
+  attemptStartedAt DateTime
+
+  @@id([studySetId, cardId])
 }
 
 model Attempt {
-  id              String    @id @default(uuid())
-  userId          String
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  studySetId      String?
-  studySet        StudySet? @relation(fields: [studySetId], references: [id], onDelete: SetNull)
-  sourceAttemptId String?
-  sourceAttempt   Attempt?  @relation("Retries", fields: [sourceAttemptId], references: [id], onDelete: SetNull)
-  retries         Attempt[] @relation("Retries")
-  snapshotVersion Int       @default(0)
-  progressContent Json?
-  snapshot        Json
-  status          String    @default("in_progress")
-  responses       Json      @default("{}")
-  position        Int       @default(0)
-  result          Json?
-  revision        Int       @default(1)
-  startedAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  completedAt     DateTime?
+  id               String    @id @default(uuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  studySetId       String?
+  studySet         StudySet? @relation(fields: [studySetId], references: [id], onDelete: SetNull)
+  sourceAttemptId  String?
+  sourceAttempt    Attempt?  @relation("Retries", fields: [sourceAttemptId], references: [id], onDelete: SetNull)
+  retries          Attempt[] @relation("Retries")
+  snapshotVersion  Int       @default(0)
+  progressContent  Json?
+  snapshot         Json
+  studySetRevision Int?
+  settings         Json      @default("{}")
+  reviewMode       Boolean   @default(false)
+  fullSet          Boolean   @default(true)
+  status           String    @default("in_progress")
+  responses        Json      @default("{}")
+  position         Int       @default(0)
+  result           Json?
+  revision         Int       @default(1)
+  startedAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  completedAt      DateTime?
 
   @@index([userId, startedAt])
   @@index([studySetId])
   @@index([sourceAttemptId])
+  @@index([studySetId, reviewMode, completedAt])
 }

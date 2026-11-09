@@ -1,5 +1,10 @@
 import { serializeContent, type StudyContent } from "../../shared/content";
-import type { Responses, Result, Status } from "../../shared/attempts";
+import type {
+  PracticeSettings,
+  Responses,
+  Result,
+  Status,
+} from "../../shared/attempts";
 export type StudySet = {
   id: string;
   title: string;
@@ -7,8 +12,19 @@ export type StudySet = {
   content: StudyContent;
   revision: number;
   updatedAt: string;
+  course: string;
+  pinned: boolean;
+  archived: boolean;
+  lastStudiedAt: string | null;
+  reviewLimit?: number;
   count?: number;
-  continuation?: Pick<Attempt, "id" | "status" | "position" | "result"> | null;
+  continuation?:
+    | (Pick<Attempt, "id" | "status" | "position" | "result"> & {
+        total: number;
+        kind: StudyContent["kind"];
+        isOlderVersion: boolean;
+      })
+    | null;
 };
 export type Attempt = {
   id: string;
@@ -21,6 +37,10 @@ export type Attempt = {
   startedAt: string;
   studySetId: string | null;
   sourceAttemptId: string | null;
+  studySetRevision?: number | null;
+  settings?: PracticeSettings;
+  reviewMode?: boolean;
+  fullSet?: boolean;
   title?: string;
   kind?: StudyContent["kind"];
 };

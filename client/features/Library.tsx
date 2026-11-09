@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Upload, Plus, ArrowRight, Ellipsis } from "lucide-react";
 import { useResource } from "../lib/hooks";
 import { api, exportContent, type StudySet } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { accountDrafts, type Draft } from "../lib/drafts";
+import { listPage, useListQuery } from "../lib/listQuery";
 import {
   Button,
   Dialog,
@@ -19,17 +20,52 @@ import {
 } from "../components/ui";
 import { AIHandoffPanel, ImportPanel } from "./Authoring";
 import { SurfaceLight } from "../components/SurfaceLight";
+import { PracticeSetup } from "../components/PracticeSetup";
+import "./library-editor.css";
+
 export function LibraryPage() {
-  const [filter, setFilter] = useState("all");
-  const [page, setPage] = useState(0);
-  const [search, setSearch] = useState("");
-  const [saved, setSaved] = useState<StudySet>();
-  const [sample, setSample] = useState(false);
-  const resource = useResource<{ items: StudySet[]; hasMore: boolean }>(
-    `/sets?page=${page}${filter !== "all" ? `&kind=${filter}` : ""}&search=${encodeURIComponent(search)}`,
+  const { params, update, search, setSearch } = useListQuery([
+    "search",
+    "page",
+    "kind",
+    "course",
+    "archived",
+    "sort",
+  ]);
+  const kind = params.get("kind");
+  const filter = kind === "exam" || kind === "flashcards" ? kind : "all";
+  const page = listPage(params);
+  const course = params.get("course")?.slice(0, 100) ?? null;
+  const archived = params.get("archived") === "true";
+  const sort = params.get("sort") === "studied" ? "studied" : "updated";
+  const appliedSearch = (params.get("search") ?? "").slice(0, 200);
+  const returnTo = params.size ? `/?${params}` : "/";
+  const [filtersOpen, setFiltersOpen] = useState(
+    course !== null || archived || sort !== "updated",
   );
+  const [saved, setSaved] = useState<StudySet>();
+  const [settingUp, setSettingUp] = useState<StudySet>();
+  const [sample, setSample] = useState(false);
+  const query = new URLSearchParams({
+    page: String(page),
+    search: appliedSearch,
+  });
+  if (filter !== "all") query.set("kind", filter);
+  if (course !== null) query.set("course", course);
+  if (archived) query.set("archived", "true");
+  if (sort !== "updated") query.set("sort", sort);
+  const resource = useResource<{
+    items: StudySet[];
+    hasMore: boolean;
+    page: number;
+    courses: string[];
+  }>(`/sets?${query}`);
+  const courses = resource.data?.courses ?? [];
   const [panel, setPanel] = useState<"import" | "ai" | null>(null);
   const [deleting, setDeleting] = useState<StudySet>();
+  const [editingCourse, setEditingCourse] = useState<StudySet>();
+  const [courseName, setCourseName] = useState("");
+  const courseSuggestionsId = useId();
   const [error, setError] = useState<Error>();
   const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
@@ -51,16 +87,39 @@ export function LibraryPage() {
       active = false;
     };
   }, [user!.id]);
-  async function practice(set: StudySet) {
+  function resetFilters() {
+    setSearch("");
+    update({
+      search: null,
+      kind: null,
+      page: null,
+      course: null,
+      archived: null,
+      sort: null,
+    });
+  }
+  async function organize(
+    set: StudySet,
+    changes: { course?: string; pinned?: boolean; archived?: boolean },
+  ) {
     setBusy(true);
     setError(undefined);
     try {
-      const attempt = await api<{ id: string }>(
-        `/sets/${set.id}/attempts`,
-        "POST",
-        {},
-      );
-      navigate(`/practice/${attempt.id}`);
+      await api(`/sets/${set.id}/organization`, "PATCH", changes);
+      setEditingCourse(undefined);
+      resource.refresh();
+    } catch (e) {
+      setError(e as Error);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function duplicate(set: StudySet) {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const copy = await api<StudySet>(`/sets/${set.id}/duplicate`, "POST", {});
+      navigate(`/sets/${copy.id}/edit`);
     } catch (e) {
       setError(e as Error);
     } finally {
@@ -121,7 +180,7 @@ export function LibraryPage() {
             <Button
               variant="primary"
               busy={busy}
-              onClick={() => void practice(saved)}
+              onClick={() => setSettingUp(saved)}
             >
               Start practice
             </Button>
@@ -140,19 +199,73 @@ export function LibraryPage() {
           value={search}
           maxLength={200}
           placeholder="Find a study set by title"
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setPage(0);
-          }}
+          onChange={(e) => setSearch(e.target.value)}
         />
       </Field>
+      <details
+        className="library-filters"
+        open={filtersOpen}
+        onToggle={(event) => setFiltersOpen(event.currentTarget.open)}
+      >
+        <summary>Library filters{archived ? " · Archived" : ""}</summary>
+        <div className="library-filter-fields">
+          <Field label="Course">
+            <select
+              value={course === null ? "all" : `course:${course}`}
+              onChange={(e) =>
+                update({
+                  course:
+                    e.target.value === "all" ? null : e.target.value.slice(7),
+                  page: null,
+                })
+              }
+            >
+              <option value="all">All courses</option>
+              <option value="course:">No course</option>
+              {course && !courses.includes(course) ? (
+                <option value={`course:${course}`}>{course}</option>
+              ) : null}
+              {courses.map((name) => (
+                <option key={name} value={`course:${name}`}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Show sets">
+            <select
+              value={archived ? "archived" : "active"}
+              onChange={(e) =>
+                update({
+                  archived: e.target.value === "archived" ? "true" : null,
+                  page: null,
+                })
+              }
+            >
+              <option value="active">Active</option>
+              <option value="archived">Archived</option>
+            </select>
+          </Field>
+          <Field label="Sort library">
+            <select
+              value={sort}
+              onChange={(e) =>
+                update({
+                  sort: e.target.value === "studied" ? "studied" : null,
+                  page: null,
+                })
+              }
+            >
+              <option value="updated">Recently updated</option>
+              <option value="studied">Last studied</option>
+            </select>
+          </Field>
+        </div>
+      </details>
       <Tabs
         label="Study set type"
         value={filter}
-        onChange={(v) => {
-          setFilter(v);
-          setPage(0);
-        }}
+        onChange={(v) => update({ kind: v === "all" ? null : v, page: null })}
         tabs={[
           { value: "all", label: "All" },
           { value: "exam", label: "Exams" },
@@ -198,14 +311,17 @@ export function LibraryPage() {
             ))}
           </aside>
         ) : null}
-        {resource.loading ? (
+        {resource.loading && !resource.data ? (
           <LoadingRows />
         ) : resource.data?.items.length ? (
-          <div className="set-list">
+          <div className="set-list" aria-busy={resource.loading}>
             {resource.data.items.map((set, i) => (
               <SurfaceLight className="set-row" key={set.id}>
                 <span className="ordinal">
-                  {String(page * 30 + i + 1).padStart(2, "0")}
+                  {String((resource.data?.page ?? page) * 30 + i + 1).padStart(
+                    2,
+                    "0",
+                  )}
                 </span>
                 <Link
                   className="set-title"
@@ -213,24 +329,39 @@ export function LibraryPage() {
                   to={`/sets/${set.id}/edit`}
                 >
                   {set.title}
+                  <span className="set-edit-cue" aria-hidden="true">
+                    Edit
+                  </span>
                 </Link>
                 <span className="set-meta">
                   {set.kind === "exam"
-                    ? `Exam · ${set.count} questions`
-                    : `Flashcards · ${set.count} cards`}
+                    ? `Exam · ${set.count} question${set.count === 1 ? "" : "s"}`
+                    : `Flashcards · ${set.count} card${set.count === 1 ? "" : "s"}`}
+                  {set.course ? (
+                    <span className="library-course">{set.course}</span>
+                  ) : null}
+                  {set.pinned ? (
+                    <span className="library-course">Pinned</span>
+                  ) : null}
+                  {set.continuation?.isOlderVersion ? (
+                    <span className="library-course">
+                      Attempt uses an earlier set version
+                    </span>
+                  ) : null}
                 </span>
                 <div className="row-actions">
                   {set.continuation ? (
                     <Link
                       className="button primary"
                       to={`/practice/${set.continuation.id}`}
+                      state={{ returnTo }}
                     >
                       {set.continuation.status === "reviewing"
                         ? `Finish assessment — ${set.continuation.result?.selfAssessed?.pendingCount ?? "some"} remaining`
-                        : `Resume — ${set.kind === "exam" ? "question" : "card"} ${set.continuation.position + 1} of ${set.count}`}
+                        : `Resume — ${set.continuation.kind === "exam" ? "question" : "card"} ${set.continuation.position + 1} of ${set.continuation.total}`}
                     </Link>
                   ) : (
-                    <Button disabled={busy} onClick={() => void practice(set)}>
+                    <Button disabled={busy} onClick={() => setSettingUp(set)}>
                       Practice <ArrowRight size={17} />
                     </Button>
                   )}
@@ -242,13 +373,47 @@ export function LibraryPage() {
                       </>
                     }
                   >
-                    <button disabled={busy} onClick={() => void practice(set)}>
-                      Start new attempt
-                    </button>
+                    {set.continuation ? (
+                      <button disabled={busy} onClick={() => setSettingUp(set)}>
+                        Start new attempt
+                      </button>
+                    ) : null}
+                    {set.kind === "flashcards" && !set.archived ? (
+                      <Link to={`/review/${set.id}`}>Spaced review</Link>
+                    ) : null}
                     <Link to={`/history?setId=${set.id}`}>
                       All attempts for this set
                     </Link>
                     <Link to={`/sets/${set.id}/edit`}>Edit set</Link>
+                    <button disabled={busy} onClick={() => void duplicate(set)}>
+                      Duplicate set
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() => {
+                        setError(undefined);
+                        setCourseName(set.course ?? "");
+                        setEditingCourse(set);
+                      }}
+                    >
+                      Set course
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        void organize(set, { pinned: !set.pinned })
+                      }
+                    >
+                      {set.pinned ? "Unpin set" : "Pin set"}
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        void organize(set, { archived: !set.archived })
+                      }
+                    >
+                      {set.archived ? "Unarchive set" : "Archive set"}
+                    </button>
                     <button
                       onClick={async () => {
                         try {
@@ -272,15 +437,43 @@ export function LibraryPage() {
               </SurfaceLight>
             ))}
           </div>
-        ) : !resource.error ? (
+        ) : resource.loading ? null : !resource.error &&
+          (appliedSearch ||
+            filter !== "all" ||
+            page > 0 ||
+            course !== null ||
+            archived) ? (
           <EmptyState
             title={
-              search
-                ? "No matching study sets."
-                : filter === "all"
-                  ? "Your first set starts here."
-                  : "No sets here yet."
+              appliedSearch
+                ? "No study sets match this search."
+                : archived && course === null && filter === "all" && page === 0
+                  ? "No archived study sets."
+                  : "No study sets match this filter."
             }
+            actions={
+              <>
+                {appliedSearch ? (
+                  <Button
+                    onClick={() => {
+                      setSearch("");
+                      update({ search: null, page: null });
+                    }}
+                  >
+                    Clear search
+                  </Button>
+                ) : null}
+                <Button onClick={resetFilters}>Reset filters</Button>
+              </>
+            }
+          >
+            <p className="muted">
+              Try a different title or reset the filters to see your study sets.
+            </p>
+          </EmptyState>
+        ) : !resource.error ? (
+          <EmptyState
+            title="Your first set starts here."
             actions={
               <>
                 <Button onClick={() => setPanel("import")}>
@@ -309,15 +502,20 @@ export function LibraryPage() {
           </EmptyState>
         ) : null}
         <div className="pagination">
-          <Button disabled={!page} onClick={() => setPage((p) => p - 1)}>
+          <Button
+            disabled={!page || resource.loading}
+            onClick={() => update({ page: page > 1 ? String(page - 1) : null })}
+          >
             Previous page
           </Button>
           {page || resource.data?.hasMore ? (
             <span className="mono">Page {page + 1}</span>
           ) : null}
           <Button
-            disabled={!resource.data?.hasMore}
-            onClick={() => setPage((p) => p + 1)}
+            disabled={
+              !resource.data?.hasMore || resource.loading || page >= 1_000_000
+            }
+            onClick={() => update({ page: String(page + 1) })}
           >
             Next page
           </Button>
@@ -328,9 +526,7 @@ export function LibraryPage() {
           onClose={() => setPanel(null)}
           onSaved={(set) => {
             setSaved(set);
-            setSearch("");
-            setFilter("all");
-            setPage(0);
+            resetFilters();
             setPanel(null);
             resource.refresh();
           }}
@@ -340,6 +536,51 @@ export function LibraryPage() {
           onClose={() => setPanel(null)}
           onImport={() => setPanel("import")}
         />
+      ) : null}
+      {settingUp ? (
+        <PracticeSetup
+          set={settingUp}
+          returnTo={returnTo}
+          onClose={() => setSettingUp(undefined)}
+        />
+      ) : null}
+      {editingCourse ? (
+        <Dialog title="Set course" onClose={() => setEditingCourse(undefined)}>
+          <form
+            className="stack"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void organize(editingCourse, { course: courseName });
+            }}
+          >
+            <p>
+              Choose a course for “{editingCourse.title}”. Leave it blank to
+              remove the course.
+            </p>
+            <Field label="Course name">
+              <input
+                list={courseSuggestionsId}
+                maxLength={100}
+                value={courseName}
+                onChange={(e) => setCourseName(e.target.value)}
+              />
+            </Field>
+            <datalist id={courseSuggestionsId}>
+              {courses.map((name) => (
+                <option key={name} value={name} />
+              ))}
+            </datalist>
+            <ErrorNotice error={error} />
+            <div className="actions">
+              <Button onClick={() => setEditingCourse(undefined)}>
+                Cancel
+              </Button>
+              <Button variant="primary" busy={busy} type="submit">
+                Save course
+              </Button>
+            </div>
+          </form>
+        </Dialog>
       ) : null}
       {sample ? (
         <Dialog title="A sample study set" onClose={() => setSample(false)}>

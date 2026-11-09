@@ -28,7 +28,9 @@ A university student imports an exam or flashcard file created by any AI tool or
 | History | List attempts with study-set title, date, status, and result; resume unfinished work, inspect completed work, or start a fresh attempt containing only mistakes. |
 | Persistence | Accounts, study sets, answers, progress, and history live in Neon PostgreSQL through Prisma. |
 
-MVP exclusions: built-in AI, PDF/document extraction, media attachments, public sharing, classes, payments, timers, question randomization, spaced repetition, offline synchronization, social login, and email delivery. Email verification and forgotten-password recovery are deferred; password changes while signed in are included.
+The initial release excluded timers, randomization, spaced repetition, and email delivery. The current v1 adds configurable sessions, due review, and optional email-based password recovery. The current v1 also includes course organization, practice recovery, editor shortcuts, progress insights, private practice annotations, account backup, and adjustable study text size. See the [v1 study workflows](README.md#v1-study-workflows).
+
+Built-in AI, document extraction, media attachments, public sharing, classes, payments, offline synchronization, social login, and registration email verification remain outside the current scope.
 
 ## File contract
 
@@ -87,7 +89,7 @@ Only the fields listed for each shape are accepted. Single-choice and written qu
 ### History integrity
 
 - Copy the study content into an immutable snapshot when an attempt starts. Editing or deleting the original set must not change historical questions or results.
-- Completed attempts are read-only. Retrying creates a new attempt.
+- Completed answers, ratings, and scores stay fixed. Private flags, confidence, and notes remain editable. Retrying creates a new attempt.
 - Resume from the last confirmed save across devices. Handle conflicting edits explicitly rather than silently overwriting newer work.
 
 ### Retry mistakes

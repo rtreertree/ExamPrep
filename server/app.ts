@@ -11,15 +11,20 @@ import {
   decodeFile,
   ValidationError,
   MAX_BYTES,
+  BACKUP_BYTES,
 } from "../shared/json";
 import {
   validateContent,
   serializeContent,
+  itemsOf,
   type StudyContent,
 } from "../shared/content";
 import {
   grade,
-  mistakes,
+  practiceSettingsSchema,
+  practiceSnapshot,
+  retryModeSchema,
+  retrySnapshot,
   progressSchema,
   revisionSchema,
   validateProgress,
@@ -36,8 +41,20 @@ import {
   metadataOnly,
 } from "./snapshots";
 import { safeDiagnostic } from "./diagnostics";
+import { readInsights } from "./insights";
+import {
+  changeReviewLimit,
+  lockReviewDeck,
+  readReviewQueue,
+  recordSpacedReview,
+  startSpacedReview,
+} from "./spacedReview";
+import { MAX_DAILY_REVIEWS } from "../shared/spacedReview";
+import { registerBackup } from "./backup";
+import { passwordRecoveryEnabled } from "./resetEmail";
+import { markStudied } from "./practice";
 
-type Context = {
+export type Context = {
   Variables: {
     requestId: string;
     started: number;
@@ -70,6 +87,7 @@ const conflict = () =>
     message:
       "A newer revision was saved on another device. Your changes have been kept here.",
   });
+const courseSchema = z.string().trim().max(100);
 export function createApp(
   config: Config,
   connectDatabase: (url: string) => Database,
@@ -94,12 +112,19 @@ export function createApp(
   app.get("/api/health", (c) =>
     c.json({ status: "ok", runtime: config.RUNTIME ?? "node" }),
   );
-  app.use(
-    "/api/*",
-    bodyLimit({
-      maxSize: 8 * 1024 * 1024,
-      onError: (c) => c.json({ error: "Request is too large." }, 413),
-    }),
+  app.get("/api/account/recovery", (c) =>
+    c.json({ enabled: passwordRecoveryEnabled(config) }),
+  );
+  const standardLimit = bodyLimit({
+    maxSize: 8 * 1024 * 1024,
+    onError: (c) => c.json({ error: "Request is too large." }, 413),
+  });
+  const backupLimit = bodyLimit({
+    maxSize: BACKUP_BYTES,
+    onError: (c) => c.json({ error: "This backup exceeds 16 MiB." }, 413),
+  });
+  app.use("/api/*", (c, next) =>
+    c.req.path.startsWith("/api/backup/") ? backupLimit(c, next) : standardLimit(c, next),
   );
   app.use("/api/*", async (c, next) => {
     if (
@@ -126,7 +151,7 @@ export function createApp(
     }
     const db = connectDatabase(config.DATABASE_URL);
     c.set("db", db);
-    c.set("auth", createAuth(db, config));
+    c.set("auth", createAuth(db, config, c.req.path === "/api/auth/reset-password"));
     try {
       await next();
     } finally {
@@ -151,30 +176,78 @@ export function createApp(
     await c.get("db").$queryRaw`SELECT 1`;
     return c.json({ status: "ready" });
   });
+  app.get("/api/insights", async (c) =>
+    c.json(await readInsights(c.get("db"), c.get("userId"), c.req.query("setId") ?? null)),
+  );
+  app.get("/api/sets/:id/review", async (c) =>
+    c.json(await readReviewQueue(c.get("db"), c.get("userId"), c.req.param("id"))),
+  );
+  app.patch("/api/sets/:id/review", async (c) => {
+    const { limit } = schema(
+      z.strictObject({ limit: z.number().int().min(1).max(MAX_DAILY_REVIEWS) }),
+      await read(c.req.raw),
+    );
+    return c.json(await changeReviewLimit(c.get("db"), c.get("userId"), c.req.param("id"), limit));
+  });
+  app.post("/api/sets/:id/review", async (c) => {
+    schema(z.strictObject({}), await read(c.req.raw));
+    const { id, started } = await startSpacedReview(c.get("db"), c.get("userId"), c.req.param("id"));
+    return c.json({ id }, started ? 201 : 200);
+  });
+  registerBackup(app);
   app.get("/api/sets", async (c) => {
-    const page = Math.max(0, Number(c.req.query("page") ?? 0));
-    if (!Number.isInteger(page))
+    const page = Number(c.req.query("page") ?? 0);
+    if (!Number.isInteger(page) || page < 0 || page > 1_000_000)
       throw new HTTPException(400, { message: "Invalid page." });
     const kind = c.req.query("kind");
     if (kind && kind !== "exam" && kind !== "flashcards")
       throw new HTTPException(400, { message: "Invalid kind." });
     const search = encodeStorage((c.req.query("search") ?? "").slice(0, 200));
+    const course = c.req.query("course");
+    const storedCourse =
+      course === undefined ? null : encodeStorage(schema(courseSchema, course));
+    const archived = c.req.query("archived") ?? "false";
+    const sort = c.req.query("sort") ?? "updated";
+    if (!["true", "false"].includes(archived))
+      throw new HTTPException(400, { message: "Invalid archive filter." });
+    if (!["updated", "studied"].includes(sort))
+      throw new HTTPException(400, { message: "Invalid sort order." });
+    const db = c.get("db");
+    const userId = c.get("userId");
     // Project metadata in PostgreSQL: a page must not load thirty 2-MiB documents.
-    const sets = await c.get("db").$queryRaw<
-      (Omit<StudySet, "content"> & { count: number })[]
-    >`
-      SELECT id, "userId", title, kind, revision, "createdAt", "updatedAt",
-        COALESCE(jsonb_array_length(content->'questions'), jsonb_array_length(content->'cards')) AS count,
-        (SELECT jsonb_build_object('id', a.id, 'status', a.status, 'position', a.position, 'result', a.result)
-          FROM "Attempt" a WHERE a."studySetId" = "StudySet".id AND a."userId" = ${c.get("userId")}
+    const [sets, courses] = await Promise.all([
+      db.$queryRaw<(Omit<StudySet, "content"> & { count: number })[]>`
+        SELECT s.id, s."userId", s.title, s.kind, s.revision, s."createdAt",
+          s."updatedAt", s.course, s.pinned, s.archived, s."lastStudiedAt",
+          COALESCE(jsonb_array_length(s.content->'questions'), jsonb_array_length(s.content->'cards')) AS count,
+          (SELECT jsonb_build_object(
+            'id', a.id, 'status', a.status, 'position', a.position, 'result', a.result, 'kind', a.snapshot->>'kind',
+            'total', COALESCE(jsonb_array_length(a.snapshot->'questions'), jsonb_array_length(a.snapshot->'cards')),
+            'isOlderVersion', COALESCE(a."studySetRevision" <> s.revision, a."fullSet" AND a.snapshot <> s.content)
+          )
+          FROM "Attempt" a WHERE a."studySetId" = s.id AND a."userId" = ${userId}
           AND a.status IN ('in_progress', 'reviewing') ORDER BY a."updatedAt" DESC, a.id ASC LIMIT 1) AS continuation
-      FROM "StudySet" WHERE "userId" = ${c.get("userId")}
-        AND (${kind ?? null}::text IS NULL OR kind = ${kind ?? null}::text)
-      AND strpos(lower(title), lower(${search})) > 0
-      ORDER BY "updatedAt" DESC, id ASC LIMIT 31 OFFSET ${page * 30}
-    `;
+        FROM "StudySet" s WHERE s."userId" = ${userId}
+          AND s.archived = ${archived === "true"}
+          AND (${kind ?? null}::text IS NULL OR s.kind = ${kind ?? null}::text)
+          AND (${storedCourse}::text IS NULL OR s.course = ${storedCourse}::text)
+          AND strpos(lower(s.title), lower(${search})) > 0
+        ORDER BY s.pinned DESC,
+          CASE WHEN ${sort} = 'studied' THEN s."lastStudiedAt" END DESC NULLS LAST,
+          s."updatedAt" DESC, s.id ASC LIMIT 31 OFFSET ${page * 30}
+      `,
+      db.$queryRaw<{ course: string }[]>`
+        SELECT DISTINCT course FROM "StudySet"
+        WHERE "userId" = ${userId} AND course <> '' ORDER BY course
+      `,
+    ]);
     return c.json(
-      decodeStorage({ items: sets.slice(0, 30), hasMore: sets.length > 30 }),
+      decodeStorage({
+        items: sets.slice(0, 30),
+        hasMore: sets.length > 30,
+        page,
+        courses: courses.map(({ course }) => course),
+      }),
     );
   });
   app.post("/api/sets", async (c) => {
@@ -205,24 +278,74 @@ export function createApp(
     const db = c.get("db");
     const userId = c.get("userId");
     const id = c.req.param("id");
+    const storedContent = json(content);
     const set = await db.$transaction(async (tx) => {
       const changed = await tx.studySet.updateMany({
-        where: { id, userId, revision: input.revision },
+        where: {
+          id,
+          userId,
+          revision: input.revision,
+          NOT: { content: { equals: storedContent } },
+        },
         data: {
-          content: json(content),
+          content: storedContent,
           title: encodeStorage(content.title),
           kind: content.kind,
           revision: { increment: 1 },
         },
       });
-      if (!changed.count) {
-        if (!(await tx.studySet.findFirst({ where: { id, userId } })))
-          throw unavailable();
-        throw conflict();
-      }
-      return tx.studySet.findFirstOrThrow({ where: { id, userId } });
+      const saved = await tx.studySet.findFirst({ where: { id, userId } });
+      if (!saved) throw unavailable();
+      if (!changed.count && saved.revision !== input.revision) throw conflict();
+      return saved;
     });
     return c.json(decodeStorage(set));
+  });
+  app.patch("/api/sets/:id/organization", async (c) => {
+    const { course, ...flags } = schema(
+      z
+        .strictObject({
+          course: courseSchema.optional(),
+          pinned: z.boolean().optional(),
+          archived: z.boolean().optional(),
+        })
+        .refine((fields) => Object.keys(fields).length > 0, "Choose a field to update."),
+      await read(c.req.raw),
+    );
+    const changed = await c.get("db").studySet.updateMany({
+      where: { id: c.req.param("id"), userId: c.get("userId") },
+      data: { ...flags, course: encodeStorage(course) },
+    });
+    if (!changed.count) throw unavailable();
+    return c.json({ updated: true });
+  });
+  app.post("/api/sets/:id/duplicate", async (c) => {
+    schema(z.strictObject({}), await read(c.req.raw));
+    const db = c.get("db");
+    const userId = c.get("userId");
+    const original = await db.studySet.findFirst({
+      where: { id: c.req.param("id"), userId },
+    });
+    if (!original) throw unavailable();
+    const content = validateContent(decodeStorage(original.content));
+    const titled = {
+      ...content,
+      title: [...`Copy of ${content.title}`].slice(0, 200).join(""),
+    };
+    const copy =
+      new TextEncoder().encode(JSON.stringify(titled)).length <= MAX_BYTES
+        ? titled
+        : content;
+    const set = await db.studySet.create({
+      data: {
+        userId,
+        title: encodeStorage(copy.title),
+        kind: copy.kind,
+        course: original.course,
+        content: json(copy),
+      },
+    });
+    return c.json(decodeStorage(set), 201);
   });
   app.delete("/api/sets/:id", async (c) => {
     const input = schema(
@@ -255,7 +378,10 @@ export function createApp(
     });
   });
   app.post("/api/sets/:id/attempts", async (c) => {
-    schema(z.strictObject({}), await read(c.req.raw));
+    const input = schema(
+      practiceSettingsSchema.partial(),
+      await read(c.req.raw, 4096),
+    );
     const db = c.get("db");
     const userId = c.get("userId");
     const attempt = await db.$transaction(async (tx) => {
@@ -263,14 +389,23 @@ export function createApp(
         where: { id: c.req.param("id"), userId },
       });
       if (!set) throw unavailable();
-      const snapshot = validateContent(decodeStorage(set.content));
+      const { settings, snapshot, fullSet } = practiceSnapshot(
+        validateContent(decodeStorage(set.content)),
+        input,
+      );
+      const startedAt = new Date();
+      await markStudied(tx, userId, set.id, startedAt);
       return tx.attempt.create({
         data: {
           snapshotVersion: SNAPSHOT_VERSION,
           progressContent: json(progressContent(snapshot)),
           userId,
           studySetId: set.id,
+          studySetRevision: set.revision,
+          settings: json(settings),
+          fullSet,
           snapshot: json(snapshot),
+          startedAt,
         },
       });
     });
@@ -295,7 +430,7 @@ export function createApp(
         kind: string;
       })[]
     >`
-      SELECT id, "userId", "studySetId", "sourceAttemptId", status, position, result,
+      SELECT id, "userId", "studySetId", "sourceAttemptId", status, position, result, "reviewMode",
         revision, "startedAt", "updatedAt", "completedAt", snapshot->>'title' AS title,
         snapshot->>'kind' AS kind
       FROM "Attempt" WHERE "userId" = ${c.get("userId")}
@@ -359,19 +494,24 @@ export function createApp(
             );
       const scored =
         current.status === "reviewing" ? grade(snapshot, responses) : undefined;
+      const position = current.status === "completed" ? current.position : input.position;
+      const now = new Date();
+      // Study-set writes precede attempt writes, matching review completion.
+      if (current.status !== "completed")
+        await markStudied(tx, where.userId, current.studySetId, now);
       const changed = await tx.attempt.updateMany({
         where: { ...where, revision: input.revision, status: current.status },
         data: {
           snapshotVersion: SNAPSHOT_VERSION,
           progressContent: json(snapshot),
           responses: json(responses),
-          position: input.position,
+          position,
           revision: { increment: 1 },
           ...(scored
             ? {
                 result: json(scored.result),
                 status: scored.status,
-                completedAt: scored.status === "completed" ? new Date() : null,
+                completedAt: scored.status === "completed" ? now : null,
               }
             : {}),
         },
@@ -380,14 +520,14 @@ export function createApp(
       return "changes" in input
         ? {
             ...metadataOnly(current),
-            position: input.position,
+            position,
             revision: current.revision + 1,
             ...(scored
               ? {
                   status: scored.status,
                   result: scored.result,
                   completedAt:
-                    scored.status === "completed" ? new Date() : null,
+                    scored.status === "completed" ? now : null,
                 }
               : {}),
           }
@@ -403,46 +543,61 @@ export function createApp(
     const db = c.get("db");
     const where = { id: c.req.param("id"), userId: c.get("userId") };
     const compact = c.req.query("compact") === "1";
-    const current = await readAttemptProgress(db, where.id, where.userId);
-    if (!current) throw unavailable();
-    if (current.status !== "in_progress")
-      return c.json(
-        decodeStorage(
-          compact
-            ? metadataOnly(current)
-            : await db.attempt.findFirstOrThrow({ where }),
-        ),
-      );
-    if (current.revision !== input.revision) throw conflict();
-    const rules =
-      current.snapshotVersion === SNAPSHOT_VERSION && current.progressContent
-        ? readProgressContent(decodeStorage(current.progressContent))
-        : progressContent(
-            validateContent(
-              decodeStorage(
-                (await db.attempt.findFirstOrThrow({ where })).snapshot,
+    const attempt = await db.$transaction(async (tx) => {
+      const current = await readAttemptProgress(tx, where.id, where.userId);
+      if (!current) throw unavailable();
+      if (current.status !== "in_progress") {
+        if (compact && current.revision > input.revision + 1) throw conflict();
+        return compact
+          ? metadataOnly(current)
+          : tx.attempt.findFirstOrThrow({ where });
+      }
+      if (current.revision !== input.revision) throw conflict();
+      const rules =
+        current.snapshotVersion === SNAPSHOT_VERSION && current.progressContent
+          ? readProgressContent(decodeStorage(current.progressContent))
+          : progressContent(
+              validateContent(
+                decodeStorage((await tx.attempt.findFirstOrThrow({ where })).snapshot),
               ),
-            ),
-          );
-    const scored = grade(rules, decodeStorage(current.responses) as Responses);
-    const changed = await db.attempt.updateMany({
-      where: { ...where, status: "in_progress", revision: input.revision },
-      data: {
-        result: json(scored.result),
-        status: scored.status,
-        revision: { increment: 1 },
-        completedAt: scored.status === "completed" ? new Date() : null,
-      },
+            );
+      const scored = grade(rules, decodeStorage(current.responses) as Responses);
+      const now = new Date();
+      if (current.reviewMode && current.studySetId)
+        await lockReviewDeck(tx, where.userId, current.studySetId);
+      await markStudied(tx, where.userId, current.studySetId, now);
+      const changed = await tx.attempt.updateMany({
+        where: { ...where, status: "in_progress", revision: input.revision },
+        data: {
+          result: json(scored.result),
+          status: scored.status,
+          revision: { increment: 1 },
+          completedAt: scored.status === "completed" ? now : null,
+        },
+      });
+      if (changed.count && current.reviewMode && scored.status === "completed")
+        await recordSpacedReview(
+          tx,
+          await tx.attempt.findFirstOrThrow({ where }),
+          now,
+        );
+      const saved = compact
+        ? await readAttemptProgress(tx, where.id, where.userId)
+        : await tx.attempt.findFirst({ where });
+      if (!saved) throw unavailable();
+      if (
+        !changed.count &&
+        (saved.status === "in_progress" || (compact && saved.revision > input.revision + 1))
+      ) throw conflict();
+      return compact ? metadataOnly(saved) : saved;
     });
-    const saved = compact
-      ? await readAttemptProgress(db, where.id, where.userId)
-      : await db.attempt.findFirst({ where });
-    if (!saved) throw unavailable();
-    if (!changed.count && saved.status === "in_progress") throw conflict();
-    return c.json(decodeStorage(compact ? metadataOnly(saved) : saved));
+    return c.json(decodeStorage(attempt));
   });
   app.post("/api/attempts/:id/retry", async (c) => {
-    schema(z.strictObject({}), await read(c.req.raw));
+    const input = schema(
+      z.strictObject({ mode: retryModeSchema.default("mistakes") }),
+      await read(c.req.raw),
+    );
     const db = c.get("db");
     const where = { id: c.req.param("id"), userId: c.get("userId") };
     const attempt = await db.$transaction(async (tx) => {
@@ -452,16 +607,27 @@ export function createApp(
         throw new HTTPException(409, {
           message: "Complete the source attempt before retrying.",
         });
-      const snapshot = mistakes(
+      const snapshot = retrySnapshot(
         validateContent(decodeStorage(source.snapshot)),
         decodeStorage(source.responses) as Responses,
+        input.mode,
       );
       if (!snapshot) return null;
+      const startedAt = new Date();
+      await markStudied(tx, where.userId, source.studySetId, startedAt);
       return tx.attempt.create({
         data: {
           userId: c.get("userId"),
           studySetId: source.studySetId,
+          studySetRevision: source.studySetRevision,
           sourceAttemptId: source.id,
+          settings: json({
+            count: itemsOf(snapshot).length,
+            order: "original",
+            timerMinutes: null,
+          }),
+          fullSet: false,
+          startedAt,
           snapshot: json(snapshot),
           snapshotVersion: SNAPSHOT_VERSION,
           progressContent: json(progressContent(snapshot)),
@@ -470,7 +636,15 @@ export function createApp(
     });
     return attempt
       ? c.json(decodeStorage(attempt), 201)
-      : c.json({ error: "No mistakes to retry." }, 422);
+      : c.json(
+          {
+            error:
+              input.mode === "unreviewed"
+                ? "No unreviewed cards to study."
+                : "No items to review again.",
+          },
+          422,
+        );
   });
   app.notFound((c) => c.json({ error: "API route not found." }, 404));
   app.onError((error, c) => {

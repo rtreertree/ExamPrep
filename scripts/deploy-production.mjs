@@ -35,15 +35,16 @@ try {
   run(process.execPath, ["--import", "tsx", "scripts/free-tier-check.ts"]);
   directory = await mkdtemp(join(tmpdir(), "exam-prep-release-"));
   const path = join(directory, "secrets.json");
+  const keys = ["DATABASE_URL", "BETTER_AUTH_SECRET", "PASSWORD_PEPPER"];
+  if (
+    process.env.RESEND_API_KEY?.trim() &&
+    process.env.RESET_EMAIL_FROM?.trim()
+  )
+    keys.push("RESEND_API_KEY", "RESET_EMAIL_FROM");
   await writeFile(
     path,
     JSON.stringify(
-      Object.fromEntries(
-        ["DATABASE_URL", "BETTER_AUTH_SECRET", "PASSWORD_PEPPER"].map((key) => [
-          key,
-          process.env[key],
-        ]),
-      ),
+      Object.fromEntries(keys.map((key) => [key, process.env[key]])),
     ),
     { mode: 0o600 },
   );

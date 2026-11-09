@@ -1,6 +1,22 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  useDeferredValue,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Link, useBlocker, useNavigate, useParams } from "react-router-dom";
-import { ArrowUp, ArrowDown, Plus, Trash2, Download } from "lucide-react";
+import {
+  ArrowUp,
+  ArrowDown,
+  Copy,
+  ListOrdered,
+  Plus,
+  Search,
+  Trash2,
+  Download,
+} from "lucide-react";
 import {
   emptyContent,
   freshId,
@@ -10,6 +26,7 @@ import {
   type Question,
   type Card,
   type AnswerType,
+  type Criterion,
 } from "../../shared/content";
 import {
   api,
@@ -38,8 +55,31 @@ import {
 import { ContentPreview } from "./Authoring";
 import { RubricList } from "../components/RubricList";
 import { NotationEditor } from "../components/NotationEditor";
+import { PracticeSetup } from "../components/PracticeSetup";
+import "./library-editor.css";
 
 type Loaded = { set?: StudySet; draft?: Draft; missing: boolean };
+type Removal =
+  | { kind: "item"; item: Question | Card; index: number }
+  | {
+      kind: "option";
+      itemId: string;
+      option: { id: string; text: string };
+      index: number;
+      wasAnswer: boolean;
+    }
+  | { kind: "criterion"; itemId: string; criterion: Criterion; index: number };
+
+function matchesItem(item: Question | Card, search: string) {
+  const matches = (text: string) => text.toLowerCase().includes(search);
+  if ("front" in item) return matches(item.front) || matches(item.back);
+  if (matches(item.prompt) || matches(item.explanation ?? "")) return true;
+  return item.type === "single_choice"
+    ? item.options.some(({ text }) => matches(text))
+    : matches(item.answer) ||
+        item.rubric?.some(({ description }) => matches(description));
+}
+
 export function EditorPage() {
   const { id, kind, draftId } = useParams();
   const { user } = useAuth();
@@ -111,6 +151,13 @@ function Editor({
   const [recovery, setRecovery] = useState(initial.draft);
   const [conflict, setConflict] = useState(initial.missing);
   const [index, setIndex] = useState(0);
+  const [itemSearch, setItemSearch] = useState("");
+  const [itemSearchOpen, setItemSearchOpen] = useState(false);
+  const itemSearchId = useId();
+  const itemSearchField = useRef<HTMLInputElement>(null);
+  const searchTerm = useDeferredValue(itemSearch.trim().toLowerCase());
+  const [movePosition, setMovePosition] = useState<string>();
+  const [settingUp, setSettingUp] = useState<StudySet>();
   const [mode, setMode] = useState("edit");
   const [localStatus, setLocalStatus] = useState("No local changes");
   const [databaseStatus, setDatabaseStatus] = useState(
@@ -121,18 +168,28 @@ function Editor({
   const [storageError, setStorageError] = useState<Error>();
   const [announce, setAnnounce] = useState("");
   const [fieldIssues, setFieldIssues] = useState<Issue[]>([]);
+  const [removals, setRemovals] = useState<Removal[]>([]);
+  const [metadataOpen, setMetadataOpen] = useState(!initial.set);
+  const [showIssueSummary, setShowIssueSummary] = useState(false);
+  const touched = useRef(new Set<string>());
+  const fullCheck = useRef(false);
   const issueCursor = useRef(0);
   function checkFields() {
     try {
       validateContent(current.current);
       setFieldIssues([]);
     } catch (e) {
-      setFieldIssues(issuesOf(e as Error));
+      setFieldIssues(
+        issuesOf(e as Error).filter(
+          (issue) => fullCheck.current || touched.current.has(issue.path),
+        ),
+      );
     }
   }
   function focusIssue(issue: Issue) {
     const match = /^\/(?:questions|cards)\/(\d+)/.exec(issue.path);
     if (match) setIndex(Number(match[1]));
+    else setMetadataOpen(true);
     setMode("edit");
     requestAnimationFrame(() => {
       const field = document.querySelector<HTMLElement>(
@@ -240,6 +297,8 @@ function Editor({
   }
   async function save(asNew = false, practiceAfter = false) {
     if (saving.current) return;
+    fullCheck.current = true;
+    setShowIssueSummary(true);
     saving.current = true;
     setBusy(true);
     setError(undefined);
@@ -279,15 +338,8 @@ function Editor({
           ),
         );
       }
-      if (practiceAfter) {
-        const attempt = await api<{ id: string }>(
-          `/sets/${set.id}/attempts`,
-          "POST",
-          {},
-        );
-        allowedLeave.current = true;
-        navigate(`/practice/${attempt.id}`);
-      } else if (!initial.set || asNew) {
+      if (practiceAfter) setSettingUp(set);
+      else if (!initial.set || asNew) {
         allowedLeave.current = true;
         navigate(`/sets/${set.id}/edit`, { replace: true });
       }
@@ -304,6 +356,97 @@ function Editor({
   }
   const items = itemsOf(content);
   const item = items[index];
+  const listedItems = useMemo(
+    () =>
+      items
+        .map((item, index) => ({ item, index }))
+        .filter(({ item }) => !searchTerm || matchesItem(item, searchTerm)),
+    [items, searchTerm],
+  );
+  const missingAnswers: Issue[] =
+    content.kind === "exam"
+      ? content.questions.flatMap((q, i) =>
+          q.type === "single_choice" &&
+          !q.options.some((o) => o.id === q.answer)
+            ? [
+                {
+                  path: `/questions/${i}/answer`,
+                  message:
+                    "The correct option was removed. Select a replacement correct answer.",
+                },
+              ]
+            : [],
+        )
+      : [];
+  const visibleIssues = [
+    ...missingAnswers,
+    ...fieldIssues.filter(
+      (issue) => !missingAnswers.some((missing) => missing.path === issue.path),
+    ),
+  ];
+  function rememberRemoval(removal: Removal) {
+    setRemovals((previous) => [...previous, removal]);
+    touched.current.clear();
+    setFieldIssues([]);
+  }
+  const lastRemoval = removals.at(-1);
+  const undoAvailable =
+    !!lastRemoval &&
+    (lastRemoval.kind === "item"
+      ? items.length < 500
+      : content.kind === "exam" &&
+        content.questions.some(
+          (q) =>
+            q.id === lastRemoval.itemId &&
+            (lastRemoval.kind === "option"
+              ? q.type === "single_choice" && q.options.length < 6
+              : q.type === "written" && (q.rubric?.length ?? 0) < 20),
+        ));
+  function undoRemoval() {
+    if (!lastRemoval || !undoAvailable) return;
+    if (lastRemoval.kind === "item") {
+      const restored = [...items];
+      const position = Math.min(lastRemoval.index, restored.length);
+      restored.splice(position, 0, lastRemoval.item);
+      setContent(
+        content.kind === "exam"
+          ? { ...content, questions: restored as Question[] }
+          : { ...content, cards: restored as Card[] },
+      );
+      setIndex(position);
+    } else if (content.kind === "exam") {
+      setContent({
+        ...content,
+        questions: content.questions.map((q) => {
+          if (q.id !== lastRemoval.itemId) return q;
+          if (lastRemoval.kind === "option" && q.type === "single_choice") {
+            const options = [...q.options];
+            options.splice(lastRemoval.index, 0, lastRemoval.option);
+            return {
+              ...q,
+              options,
+              answer:
+                lastRemoval.wasAnswer && !q.answer
+                  ? lastRemoval.option.id
+                  : q.answer,
+            };
+          }
+          if (lastRemoval.kind === "criterion" && q.type === "written") {
+            const rubric = [...(q.rubric ?? [])];
+            rubric.splice(lastRemoval.index, 0, lastRemoval.criterion);
+            return { ...q, rubric };
+          }
+          return q;
+        }),
+      });
+      setIndex(content.questions.findIndex((q) => q.id === lastRemoval.itemId));
+    }
+    setMode("edit");
+    setRemovals((previous) => previous.slice(0, -1));
+    touched.current.clear();
+    setFieldIssues([]);
+    setAnnounce("Removed content restored.");
+  }
   function updateItem(next: Question | Card) {
     if (content.kind === "exam")
       setContent({
@@ -341,20 +484,42 @@ function Editor({
         cards: [...content.cards, { id, front: "", back: "" }],
       });
     setIndex(items.length);
+    setItemSearch("");
     setAnnounce("Item added.");
   }
-  function move(delta: number) {
-    const next = [...items];
-    [next[index], next[index + delta]] = [next[index + delta], next[index]];
+  function replaceItems(next: (Question | Card)[], activeIndex: number) {
+    touched.current.clear();
+    setFieldIssues([]);
     setContent(
       content.kind === "exam"
         ? { ...content, questions: next as Question[] }
         : { ...content, cards: next as Card[] },
     );
-    setIndex(index + delta);
-    setAnnounce(`Item moved to position ${index + delta + 1}.`);
+    setIndex(activeIndex);
+  }
+  function move(destination: number) {
+    if (
+      !item ||
+      destination < 0 ||
+      destination >= items.length ||
+      destination === index
+    )
+      return;
+    const next = [...items];
+    next.splice(index, 1);
+    next.splice(destination, 0, item);
+    replaceItems(next, destination);
+    setAnnounce(`Item moved to position ${destination + 1}.`);
+  }
+  function duplicateItem() {
+    if (!item || items.length >= 500) return;
+    const next = [...items];
+    next.splice(index + 1, 0, { ...structuredClone(item), id: freshId() });
+    replaceItems(next, index + 1);
+    setAnnounce(`Item copied to position ${index + 2}.`);
   }
   function remove() {
+    rememberRemoval({ kind: "item", item: structuredClone(item), index });
     if (content.kind === "exam")
       setContent({
         ...content,
@@ -374,6 +539,30 @@ function Editor({
     else next[name] = value;
     setContent(next);
   }
+  const addActions = (
+    <div className="stack item-add">
+      {content.kind === "exam" ? (
+        <>
+          <Button
+            disabled={items.length >= 500}
+            onClick={() => add("single_choice")}
+          >
+            <Plus size={16} />
+            Single choice
+          </Button>
+          <Button disabled={items.length >= 500} onClick={() => add("written")}>
+            <Plus size={16} />
+            Written answer
+          </Button>
+        </>
+      ) : (
+        <Button disabled={items.length >= 500} onClick={() => add("card")}>
+          <Plus size={16} />
+          Add card
+        </Button>
+      )}
+    </div>
+  );
   return (
     <div className="editor-page">
       <Link className="back-link" to="/">
@@ -403,26 +592,53 @@ function Editor({
             >
               Save and practice
             </Button>
-            <Button
-              variant="primary"
-              busy={busy}
-              disabled={!!recovery || conflict}
-              onClick={() => void save()}
-            >
-              Save
-            </Button>
           </>
         }
       />
-      <div className="save-channels">
-        <SaveStatus state={localStatus} local />
-        <SaveStatus
-          state={
-            dirty && databaseStatus === "Saved"
-              ? "Unsaved account changes"
-              : databaseStatus
-          }
-        />
+      <div className="editor-persistent-controls">
+        <div className="editor-savebar">
+          <div className="editor-save-state">
+            <SaveStatus
+              state={
+                dirty && databaseStatus === "Saved"
+                  ? "Unsaved account changes"
+                  : databaseStatus
+              }
+            />
+            <SaveStatus state={localStatus} local />
+          </div>
+          <Button
+            variant="primary"
+            busy={busy}
+            disabled={!!recovery || conflict}
+            onClick={() => void save()}
+          >
+            Save
+          </Button>
+        </div>
+        {lastRemoval ? (
+          <div className="removal-notice" role="status">
+            <span>
+              {lastRemoval.kind === "item"
+                ? "type" in lastRemoval.item
+                  ? "Question"
+                  : "Card"
+                : lastRemoval.kind === "option"
+                  ? "Option"
+                  : "Criterion"}{" "}
+              removed.
+            </span>
+            <Button
+              disabled={!undoAvailable || busy || !!recovery}
+              onClick={undoRemoval}
+            >
+              Undo
+            </Button>
+            <Button variant="quiet" onClick={() => setRemovals([])}>
+              Dismiss
+            </Button>
+          </div>
+        ) : null}
       </div>
       {recovery ? (
         <Notice tone="warning">
@@ -475,31 +691,33 @@ function Editor({
           </div>
         </Notice>
       ) : null}
-      {dirty ? (
-        <p role="status">
-          {localStatus === "Saved"
-            ? "Account changes not saved; draft saved on this device."
-            : "Account changes not saved. Keep this page open until a save is confirmed."}
-        </p>
-      ) : null}
-      {fieldIssues.length ? (
+      {showIssueSummary && visibleIssues.length ? (
         <Notice tone="warning">
           <p>
             {
               new Set(
-                fieldIssues.map(
+                visibleIssues.map(
                   (i) =>
                     /^\/(?:questions|cards)\/(\d+)/.exec(i.path)?.[1] ??
                     "metadata",
                 ),
               ).size
             }{" "}
-            items need attention.
+            {new Set(
+              visibleIssues.map(
+                (i) =>
+                  /^\/(?:questions|cards)\/(\d+)/.exec(i.path)?.[1] ??
+                  "metadata",
+              ),
+            ).size === 1
+              ? "item needs"
+              : "items need"}{" "}
+            attention.
           </p>
           <Button
             onClick={() => {
               const issue =
-                fieldIssues[issueCursor.current++ % fieldIssues.length];
+                visibleIssues[issueCursor.current++ % visibleIssues.length];
               focusIssue(issue);
             }}
           >
@@ -508,7 +726,7 @@ function Editor({
           <details>
             <summary>Show fields that need attention</summary>
             <ul>
-              {fieldIssues.slice(0, 20).map((i, n) => (
+              {visibleIssues.slice(0, 20).map((i, n) => (
                 <li key={n}>
                   <Button variant="quiet" onClick={() => focusIssue(i)}>
                     {issueLabel(i)}
@@ -527,34 +745,48 @@ function Editor({
       <div className="sr-only" aria-live="polite">
         {announce}
       </div>
-      <FieldIssues.Provider value={fieldIssues}>
+      <FieldIssues.Provider value={visibleIssues}>
         <fieldset
           className="editor-fieldset"
           disabled={busy || !!recovery}
-          onBlurCapture={() => checkFields()}
+          onBlurCapture={(event) => {
+            const field =
+              event.target.closest<HTMLElement>("[data-field-path]");
+            if (!field) return;
+            if (field.dataset.fieldPath)
+              touched.current.add(field.dataset.fieldPath);
+            checkFields();
+          }}
         >
-          <div className="metadata-fields">
-            <Field
-              path="/title"
-              label="Title"
-              hint={`${[...content.title].length} / 200 characters`}
-            >
-              <input
-                value={content.title}
-                onChange={(e) =>
-                  setContent({ ...content, title: e.target.value })
-                }
-              />
-            </Field>
-            <Field path="/description" label="Description (optional)">
-              <NotationEditor
-                rows={2}
-                maxCharacters={2000}
-                value={content.description ?? ""}
-                onChange={(value) => optional("description", value)}
-              />
-            </Field>
-          </div>
+          <details
+            className="set-details"
+            open={metadataOpen}
+            onToggle={(event) => setMetadataOpen(event.currentTarget.open)}
+          >
+            <summary>Set details</summary>
+            <div className="metadata-fields">
+              <Field
+                path="/title"
+                label="Title"
+                hint={`${[...content.title].length} / 200 characters`}
+              >
+                <input
+                  value={content.title}
+                  onChange={(e) =>
+                    setContent({ ...content, title: e.target.value })
+                  }
+                />
+              </Field>
+              <Field path="/description" label="Description (optional)">
+                <NotationEditor
+                  rows={2}
+                  maxCharacters={2000}
+                  value={content.description ?? ""}
+                  onChange={(value) => optional("description", value)}
+                />
+              </Field>
+            </div>
+          </details>
           <div className="editor-layout">
             <aside className="item-rail">
               <h2>{content.kind === "exam" ? "Questions" : "Cards"}</h2>
@@ -564,10 +796,15 @@ function Editor({
                     value={index}
                     onChange={(e) => setIndex(Number(e.target.value))}
                   >
-                    {items.map((item, i) => (
+                    {!listedItems.some((entry) => entry.index === index) ? (
+                      <option value={index} disabled>
+                        Item {index + 1} · outside search results
+                      </option>
+                    ) : null}
+                    {listedItems.map(({ item, index: i }) => (
                       <option key={item.id} value={i}>
                         {i + 1}.{" "}
-                        {fieldIssues.some((issue) =>
+                        {visibleIssues.some((issue) =>
                           issue.path.startsWith(
                             `/${content.kind === "exam" ? "questions" : "cards"}/${i}/`,
                           ),
@@ -581,19 +818,65 @@ function Editor({
                     ))}
                   </select>
                 </Field>
+                <Button
+                  className="item-search-toggle"
+                  aria-expanded={itemSearchOpen}
+                  aria-controls={itemSearchId}
+                  aria-label={
+                    content.kind === "exam"
+                      ? "Search questions"
+                      : "Search cards"
+                  }
+                  onClick={() => {
+                    if (itemSearchOpen) setItemSearch("");
+                    else
+                      requestAnimationFrame(() =>
+                        itemSearchField.current?.focus(),
+                      );
+                    setItemSearchOpen(!itemSearchOpen);
+                  }}
+                >
+                  <Search size={18} />
+                </Button>
+              </div>
+              <div
+                id={itemSearchId}
+                className={`item-search${itemSearchOpen ? " is-open" : ""}`}
+              >
+                <Field
+                  label={
+                    content.kind === "exam" ? "Find a question" : "Find a card"
+                  }
+                >
+                  <input
+                    ref={itemSearchField}
+                    type="search"
+                    value={itemSearch}
+                    maxLength={200}
+                    onChange={(e) => setItemSearch(e.target.value)}
+                  />
+                </Field>
+                {searchTerm ? (
+                  <p className="muted" role="status">
+                    {listedItems.length === 0
+                      ? "No matching items."
+                      : `${listedItems.length} of ${items.length} items match.`}
+                  </p>
+                ) : null}
               </div>
               <div className="item-rail-list">
-                {items.map((item, i) => (
+                {listedItems.map(({ item, index: i }) => (
                   <button
                     className={`rail-item ${index === i ? "selected" : ""}`}
                     key={item.id}
+                    aria-current={index === i ? "true" : undefined}
                     onClick={() => setIndex(i)}
                   >
                     <span className="mono">
                       {String(i + 1).padStart(2, "0")}
                     </span>
                     <span>
-                      {fieldIssues.some((issue) =>
+                      {visibleIssues.some((issue) =>
                         issue.path.startsWith(
                           `/${content.kind === "exam" ? "questions" : "cards"}/${i}/`,
                         ),
@@ -607,34 +890,7 @@ function Editor({
                   </button>
                 ))}
               </div>
-              <div className="stack item-add">
-                {content.kind === "exam" ? (
-                  <>
-                    <Button
-                      disabled={items.length >= 500}
-                      onClick={() => add("single_choice")}
-                    >
-                      <Plus size={16} />
-                      Single choice
-                    </Button>
-                    <Button
-                      disabled={items.length >= 500}
-                      onClick={() => add("written")}
-                    >
-                      <Plus size={16} />
-                      Written answer
-                    </Button>
-                  </>
-                ) : (
-                  <Button
-                    disabled={items.length >= 500}
-                    onClick={() => add("card")}
-                  >
-                    <Plus size={16} />
-                    Add card
-                  </Button>
-                )}
-              </div>
+              <div className="item-add-desktop">{addActions}</div>
             </aside>
             <div className="editor-tabs">
               <Tabs
@@ -661,16 +917,32 @@ function Editor({
                   <Button
                     aria-label="Move item up"
                     disabled={index === 0}
-                    onClick={() => move(-1)}
+                    onClick={() => move(index - 1)}
                   >
                     <ArrowUp size={16} />
                   </Button>
                   <Button
                     aria-label="Move item down"
                     disabled={index >= items.length - 1}
-                    onClick={() => move(1)}
+                    onClick={() => move(index + 1)}
                   >
                     <ArrowDown size={16} />
+                  </Button>
+                  <Button
+                    aria-label="Move item to position"
+                    title="Move item to position"
+                    disabled={items.length <= 1}
+                    onClick={() => setMovePosition(String(index + 1))}
+                  >
+                    <ListOrdered size={16} />
+                  </Button>
+                  <Button
+                    aria-label="Duplicate item"
+                    title="Duplicate item"
+                    disabled={items.length >= 500}
+                    onClick={duplicateItem}
+                  >
+                    <Copy size={16} />
                   </Button>
                   <Button
                     variant="quiet"
@@ -688,6 +960,7 @@ function Editor({
                   path={`/${content.kind === "exam" ? "questions" : "cards"}/${index}`}
                   item={item}
                   onChange={updateItem}
+                  onRemove={rememberRemoval}
                 />
               ) : null}
             </section>
@@ -698,17 +971,60 @@ function Editor({
               className={`preview-column ${mode === "preview" ? "active" : ""}`}
             >
               <h2>Preview</h2>
-              <ContentPreview
-                content={
-                  content.kind === "exam"
-                    ? { ...content, questions: item ? [item as Question] : [] }
-                    : { ...content, cards: item ? [item as Card] : [] }
-                }
-              />
+              <ContentPreview content={content} selectedIndex={index} />
             </section>
           </div>
+          <div className="item-add-mobile">{addActions}</div>
         </fieldset>
       </FieldIssues.Provider>
+      {settingUp ? (
+        <PracticeSetup
+          set={settingUp}
+          onClose={() => {
+            setSettingUp(undefined);
+            if (!initial.set) {
+              allowedLeave.current = true;
+              navigate(`/sets/${settingUp.id}/edit`, { replace: true });
+            }
+          }}
+        />
+      ) : null}
+      {movePosition !== undefined ? (
+        <Dialog
+          title="Move item to position"
+          onClose={() => setMovePosition(undefined)}
+        >
+          <form
+            className="stack"
+            onSubmit={(e) => {
+              e.preventDefault();
+              move(Number(movePosition) - 1);
+              setMovePosition(undefined);
+            }}
+          >
+            <Field
+              label="New position"
+              hint={`Choose a position from 1 to ${items.length}.`}
+            >
+              <input
+                type="number"
+                min={1}
+                max={items.length}
+                step={1}
+                required
+                value={movePosition}
+                onChange={(e) => setMovePosition(e.target.value)}
+              />
+            </Field>
+            <div className="actions">
+              <Button onClick={() => setMovePosition(undefined)}>Cancel</Button>
+              <Button type="submit" variant="primary">
+                Move item
+              </Button>
+            </div>
+          </form>
+        </Dialog>
+      ) : null}
       {blocker.state === "blocked" ? (
         <Dialog
           title="Leave with unsaved changes?"
@@ -738,10 +1054,12 @@ function ItemFields({
   item,
   onChange,
   path,
+  onRemove,
 }: {
   path: string;
   item: Question | Card;
   onChange: (item: Question | Card) => void;
+  onRemove: (removal: Removal) => void;
 }) {
   if (!("type" in item))
     return (
@@ -835,10 +1153,17 @@ function ItemFields({
                   disabled={q.options.length <= 2}
                   onClick={() => {
                     const options = q.options.filter((_, n) => n !== i);
+                    onRemove({
+                      kind: "option",
+                      itemId: q.id,
+                      option: o,
+                      index: i,
+                      wasAnswer: q.answer === o.id,
+                    });
                     onChange({
                       ...q,
                       options,
-                      answer: q.answer === o.id ? options[0].id : q.answer,
+                      answer: q.answer === o.id ? "" : q.answer,
                     });
                   }}
                 >
@@ -863,6 +1188,9 @@ function ItemFields({
               value={q.answer}
               onChange={(e) => onChange({ ...q, answer: e.target.value })}
             >
+              <option value="" disabled>
+                Select a correct answer
+              </option>
               {q.options.map((o, i) => (
                 <option key={o.id} value={o.id}>
                   Option {String.fromCharCode(65 + i)}
@@ -900,6 +1228,9 @@ function ItemFields({
               criteria={q.rubric}
               path={`${path}/rubric`}
               mode="author"
+              onRemove={(criterion, index) =>
+                onRemove({ kind: "criterion", itemId: q.id, criterion, index })
+              }
               onChange={(rubric) => {
                 if (rubric.length) onChange({ ...q, rubric });
                 else {

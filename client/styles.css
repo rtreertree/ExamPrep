@@ -749,6 +749,8 @@ input[type="file"] {
   min-width: 0;
   max-width: 100%;
   overflow-wrap: anywhere;
+  font-size: calc(1em * var(--study-scale, 1));
+  line-height: 1.6;
 }
 .study-content p {
   margin: 12px 0;
@@ -765,7 +767,7 @@ input[type="file"] {
   overflow-x: auto;
   padding: 16px;
   background: var(--surface-raised);
-  font-size: 14px;
+  font-size: 0.875em;
 }
 .study-content code {
   white-space: pre-wrap;
@@ -776,10 +778,11 @@ input[type="file"] {
 .study-content a {
   color: var(--info);
 }
-.study-content table {
-  display: block;
+.study-table-scroll {
   overflow-x: auto;
   max-width: 100%;
+}
+.study-content table {
   border-collapse: collapse;
 }
 .study-content td,
@@ -853,6 +856,19 @@ input[type="file"] {
 .account-content h2 + p {
   margin: 12px 0 24px;
 }
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.checkbox-row input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  padding: 0;
+  flex: none;
+  accent-color: var(--accent);
+}
 .empty {
   padding: 64px 0;
 }
@@ -890,6 +906,94 @@ input[type="file"] {
 }
 .editor-page .page-header {
   margin-bottom: 32px;
+}
+.editor-persistent-controls {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  margin-bottom: 20px;
+  background: var(--canvas);
+}
+.editor-savebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  background: var(--canvas);
+  border-bottom: 1px solid var(--divider);
+}
+.editor-save-state {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+}
+.editor-savebar > .button {
+  flex-shrink: 0;
+}
+.set-details {
+  margin-bottom: 20px;
+}
+.set-details > summary {
+  margin-bottom: 16px;
+}
+.removal-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--divider);
+}
+.set-edit-cue {
+  display: inline-block;
+  margin-left: 12px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--secondary);
+  vertical-align: middle;
+}
+.history-status-select {
+  display: none;
+}
+.item-add-mobile {
+  display: none;
+}
+.editor-page :is(input, textarea, select, math-field) {
+  scroll-margin-top: 180px;
+  scroll-margin-bottom: 24px;
+}
+@media (max-width: 599px) {
+  .history-status-select {
+    display: block;
+  }
+  .history-status-tabs {
+    display: none;
+  }
+  .editor-save-state {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .editor-page .page-header {
+    margin-bottom: 12px;
+    gap: 12px;
+  }
+  .editor-page .back-link {
+    margin-bottom: 12px;
+  }
+  .editor-page .item-rail {
+    padding: 12px 0;
+  }
+  .editor-page .item-toolbar {
+    margin-bottom: 12px;
+  }
+  .editor-page .edit-column > .stack {
+    gap: 16px;
+  }
+  .editor-page .metadata-fields {
+    padding-bottom: 8px;
+  }
 }
 .back-link {
   display: inline-block;
@@ -1465,6 +1569,12 @@ progress::-moz-progress-bar {
   }
 }
 @media (max-width: 1199px) {
+  .item-add-desktop {
+    display: none;
+  }
+  .item-add-mobile {
+    display: block;
+  }
   .sidebar {
     display: none;
   }
@@ -1772,6 +1882,12 @@ progress::-moz-progress-bar {
 .question-stage {
   flex: 1;
 }
+.practice-annotations {
+  margin: 24px 0 8px;
+}
+.practice-annotations > .stack {
+  margin-top: 16px;
+}
 .study-footer {
   flex-shrink: 0;
   position: sticky;
@@ -1780,7 +1896,7 @@ progress::-moz-progress-bar {
   z-index: 10;
 }
 .answer-option .study-content {
-  font-size: 20px;
+  font-size: calc(20px * var(--study-scale, 1));
 }
 @media (max-width: 767px) {
   .focus-main {
