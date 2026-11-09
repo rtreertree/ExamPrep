@@ -11,8 +11,11 @@ import { BookOpen, History, UserRound, Menu, X } from "lucide-react";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { AuthPage, AccountPage } from "./features/Account";
 import { applyReadingSize, readingSize } from "./lib/readingSize";
+const LandingPage = lazy(() => import("./features/Landing"));
 const PasswordRecoveryPage = lazy(() =>
-  import("./features/PasswordRecovery").then((m) => ({ default: m.PasswordRecoveryPage })),
+  import("./features/PasswordRecovery").then((m) => ({
+    default: m.PasswordRecoveryPage,
+  })),
 );
 const LibraryPage = lazy(() =>
   import("./features/Library").then((m) => ({ default: m.LibraryPage })),
@@ -31,27 +34,32 @@ const DueReviewPage = lazy(() =>
 );
 import { Button, ErrorNotice, LoadingRows } from "./components/ui";
 function Root() {
+  const { pathname } = useLocation();
   return (
-    <AuthProvider>
-      <Suspense
-        fallback={
-          <main className="focus-loading">
-            <LoadingRows />
-          </main>
-        }
+    <Suspense
+      fallback={
+        <main className="focus-loading">
+          <LoadingRows />
+        </main>
+      }
+    >
+      <AuthProvider
+        sessionErrorFallback={pathname === "/" ? <LandingPage /> : undefined}
       >
         <Outlet />
-      </Suspense>
-    </AuthProvider>
+      </AuthProvider>
+    </Suspense>
   );
 }
 function Protected({ children }: { children?: ReactNode }) {
   const { user } = useAuth();
+  const { pathname } = useLocation();
   const userId = user?.id;
   useEffect(() => {
     applyReadingSize(userId ? readingSize(userId) : "standard");
     return () => applyReadingSize("standard");
   }, [userId]);
+  if (!user && pathname === "/") return <LandingPage />;
   return user ? (children ?? <Outlet />) : <Navigate to="/sign-in" replace />;
 }
 function AppShell() {

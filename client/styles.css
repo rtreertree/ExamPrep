@@ -280,7 +280,7 @@ small {
   margin-top: 40px;
   flex: 1;
 }
-nav a {
+:where(.workspace) nav a {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -295,11 +295,11 @@ nav a {
     background var(--quick),
     color var(--quick);
 }
-nav a.active {
+:where(.workspace) nav a.active {
   color: var(--text);
   background: var(--surface);
 }
-nav a.active:before {
+:where(.workspace) nav a.active:before {
   content: "";
   position: absolute;
   left: 0;
@@ -309,7 +309,7 @@ nav a.active:before {
   background: var(--accent);
   animation: margin-enter var(--standard) var(--ease-out);
 }
-nav a:hover {
+:where(.workspace) nav a:hover {
   background: var(--surface);
   color: var(--text);
 }

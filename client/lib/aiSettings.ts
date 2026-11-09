@@ -3,7 +3,14 @@ export type AISettings = {
   level: string;
   language: string;
   count: number;
-  kind: string;
+  kind: "exam" | "flashcards";
+};
+export const defaultAISettings: AISettings = {
+  topic: "",
+  level: "University",
+  language: "English",
+  count: 10,
+  kind: "exam",
 };
 export const aiSettingsKey = (userId: string) => `exam-prep:ai:v1:${userId}`;
 export function readAISettings(userId: string): AISettings | undefined {

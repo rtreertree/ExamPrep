@@ -54,7 +54,8 @@ test("complete study workflow, recovery, partial credit, flashcards, responsive 
   await page.goto("/");
   await expect(page).toHaveTitle("Exam Prep");
   await page
-    .getByRole("button", { name: "Create an account", exact: true })
+    .getByRole("region", { name: "Study on your terms." })
+    .getByRole("link", { name: "Get started" })
     .click();
   await page.getByLabel("Email", { exact: true }).fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);

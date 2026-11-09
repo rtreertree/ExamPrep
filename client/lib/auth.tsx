@@ -22,7 +22,13 @@ const AuthContext = createContext<{
   setCleanupUser: (userId?: string) => void;
 }>({ user: null, refresh: async () => {}, setCleanupUser: () => {} });
 export const useAuth = () => useContext(AuthContext);
-export function AuthProvider({ children }: { children: ReactNode }) {
+export function AuthProvider({
+  children,
+  sessionErrorFallback,
+}: {
+  children: ReactNode;
+  sessionErrorFallback?: ReactNode;
+}) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error>();
@@ -53,10 +59,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     );
   if (error)
     return (
-      <main className="auth-page">
-        <h1>Exam Prep</h1>
-        <ErrorNotice error={error} retry={refresh} />
-      </main>
+      sessionErrorFallback ?? (
+        <main className="auth-page">
+          <h1>Exam Prep</h1>
+          <ErrorNotice error={error} retry={refresh} />
+        </main>
+      )
     );
   return (
     <AuthContext.Provider

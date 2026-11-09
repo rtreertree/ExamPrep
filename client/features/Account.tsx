@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { clearDeviceData } from "../lib/deviceCleanup";
@@ -21,12 +21,15 @@ export function AuthForm({
   inline,
   onSuccess,
   expectedEmail,
+  register = false,
+  onModeChange,
 }: {
   expectedEmail?: string;
   inline?: boolean;
   onSuccess: () => void | Promise<void>;
+  register?: boolean;
+  onModeChange?: () => void;
 }) {
-  const [register, setRegister] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -107,13 +110,13 @@ export function AuthForm({
           <Link to="/forgot-password">Forgot password?</Link>
         </p>
       ) : null}
-      {!inline ? (
+      {onModeChange ? (
         <p className="auth-switch">
           {register ? "Already have an account?" : "New to Exam Prep?"}{" "}
           <Button
             variant="quiet"
             onClick={() => {
-              setRegister(!register);
+              onModeChange();
               setError(undefined);
             }}
           >
@@ -127,7 +130,9 @@ export function AuthForm({
 export function AuthPage() {
   const { user, refresh, cleanupUser, setCleanupUser } = useAuth();
   const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
   const [cleanupError, setCleanupError] = useState<Error>();
+  const register = params.get("mode") === "register";
   if (user) return <Navigate to="/" replace />;
   return (
     <main className="auth-page">
@@ -161,6 +166,10 @@ export function AuthPage() {
           </Notice>
         ) : null}
         <AuthForm
+          register={register}
+          onModeChange={() =>
+            setParams(register ? {} : { mode: "register" }, { replace: true })
+          }
           onSuccess={async () => {
             await refresh();
             navigate("/");
