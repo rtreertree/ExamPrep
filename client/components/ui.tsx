@@ -146,13 +146,42 @@ export function ErrorNotice({
     </Notice>
   );
 }
-export function LoadingRows() {
+export function LoadingRows({ label = "Loading" }: { label?: string }) {
   return (
-    <div role="status" aria-label="Loading" className="loading-rows">
+    <div role="status" aria-label={label} className="loading-rows">
       {[1, 2, 3].map((i) => (
         <div key={i} />
       ))}
     </div>
+  );
+}
+export function Pagination({
+  label,
+  page,
+  hasMore,
+  loading,
+  onChange,
+}: {
+  label: string;
+  page: number;
+  hasMore?: boolean;
+  loading: boolean;
+  onChange: (page: number) => void;
+}) {
+  if (!page && !hasMore) return null;
+  return (
+    <nav className="pagination" aria-label={label}>
+      <Button disabled={!page || loading} onClick={() => onChange(page - 1)}>
+        Previous page
+      </Button>
+      <span className="mono">Page {page + 1}</span>
+      <Button
+        disabled={!hasMore || loading || page >= 1_000_000}
+        onClick={() => onChange(page + 1)}
+      >
+        Next page
+      </Button>
+    </nav>
   );
 }
 export function EmptyState({
@@ -313,10 +342,14 @@ export function Dialog({
   const ref = useRef<HTMLDialogElement>(null);
   const id = useId();
   useEffect(() => {
-    const previous = document.activeElement as HTMLElement;
-    ref.current?.showModal();
+    const previous = document.activeElement;
+    const dialog = ref.current;
+    dialog?.showModal();
     return () => {
-      previous?.focus();
+      dialog?.close();
+      if (previous instanceof HTMLElement && previous.isConnected) {
+        previous.focus({ preventScroll: true });
+      }
     };
   }, []);
   return (
@@ -360,34 +393,52 @@ export function Menu({
 }) {
   const ref = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
-    const close = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node))
-        ref.current?.removeAttribute("open");
+    const close = (event: Event) => {
+      const menu = ref.current;
+      if (menu?.open && !menu.contains(event.target as Node)) menu.open = false;
     };
     document.addEventListener("click", close);
-    return () => document.removeEventListener("click", close);
+    document.addEventListener("focusin", close);
+    return () => {
+      document.removeEventListener("click", close);
+      document.removeEventListener("focusin", close);
+    };
   }, []);
   return (
     <details
       ref={ref}
       className="menu"
       onKeyDown={(e) => {
-        if (e.key === "Escape") {
-          ref.current?.removeAttribute("open");
-          ref.current?.querySelector("summary")?.focus();
-        }
-        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        const menu = e.currentTarget;
+        const summary = menu.querySelector("summary");
+        if (e.key === "Escape" && menu.open) {
           e.preventDefault();
-          const nodes = [
-            ...(ref.current?.querySelectorAll<HTMLElement>(
-              ".menu-content button,.menu-content a",
-            ) ?? []),
-          ];
-          const index = nodes.indexOf(document.activeElement as HTMLElement);
-          nodes[
-            (index + (e.key === "ArrowDown" ? 1 : -1) + nodes.length) %
-              nodes.length
-          ]?.focus();
+          menu.open = false;
+          summary?.focus();
+          return;
+        }
+        const { key } = e;
+        if (
+          key !== "ArrowDown" &&
+          key !== "ArrowUp" &&
+          !(menu.open && (key === "Home" || key === "End"))
+        ) return;
+
+        e.preventDefault();
+        menu.open = true;
+        const items = [
+          ...menu.querySelectorAll<HTMLElement>(
+            ".menu-content button:not(:disabled), .menu-content a[href]",
+          ),
+        ];
+        const index = items.indexOf(document.activeElement as HTMLElement);
+        if (key === "Home" || (key === "ArrowDown" && index < 0)) {
+          items[0]?.focus();
+        } else if (key === "End" || index < 0) {
+          items.at(-1)?.focus();
+        } else {
+          const step = key === "ArrowDown" ? 1 : -1;
+          items[(index + step + items.length) % items.length]?.focus();
         }
       }}
     >
@@ -397,7 +448,17 @@ export function Menu({
       </summary>
       <div
         className="menu-content frosted-overlay"
-        onClick={() => ref.current?.removeAttribute("open")}
+        onClick={(event) => {
+          const target = event.target;
+          const menu = ref.current;
+          if (
+            !(target instanceof Element) ||
+            !menu ||
+            !target.closest("button:not(:disabled), a[href]")
+          ) return;
+          menu.open = false;
+          menu.querySelector("summary")?.focus({ preventScroll: true });
+        }}
       >
         {children}
       </div>

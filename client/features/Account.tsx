@@ -1,6 +1,13 @@
 import { Selector } from "../components/Selector";
 import { useState, type FormEvent } from "react";
-import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
+import {
+  Link,
+  Navigate,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+  type Location,
+} from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { clearDeviceData } from "../lib/deviceCleanup";
@@ -31,6 +38,7 @@ export function AuthForm({
   register?: boolean;
   onModeChange?: () => void;
 }) {
+  const location = useLocation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -108,7 +116,9 @@ export function AuthForm({
       </form>
       {!inline && !register ? (
         <p className="auth-switch">
-          <Link to="/forgot-password">Forgot password?</Link>
+          <Link to="/forgot-password" state={location.state}>
+            Forgot password?
+          </Link>
         </p>
       ) : null}
       {onModeChange ? (
@@ -130,11 +140,16 @@ export function AuthForm({
 }
 export function AuthPage() {
   const { user, refresh, cleanupUser, setCleanupUser } = useAuth();
-  const navigate = useNavigate();
+  const location = useLocation();
+  const destination: Location | undefined = location.state?.signInReturn;
   const [params, setParams] = useSearchParams();
   const [cleanupError, setCleanupError] = useState<Error>();
   const register = params.get("mode") === "register";
-  if (user) return <Navigate to="/" replace />;
+  if (user) {
+    return (
+      <Navigate to={destination ?? "/"} state={destination?.state} replace />
+    );
+  }
   return (
     <main className="auth-page">
       <div className="auth-form">
@@ -169,12 +184,12 @@ export function AuthPage() {
         <AuthForm
           register={register}
           onModeChange={() =>
-            setParams(register ? {} : { mode: "register" }, { replace: true })
+            setParams(register ? {} : { mode: "register" }, {
+              replace: true,
+              state: location.state,
+            })
           }
-          onSuccess={async () => {
-            await refresh();
-            navigate("/");
-          }}
+          onSuccess={refresh}
         />
       </div>
     </main>

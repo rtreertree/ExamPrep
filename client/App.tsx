@@ -1,10 +1,11 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   createBrowserRouter,
   Navigate,
   NavLink,
   Outlet,
   RouterProvider,
+  ScrollRestoration,
   useLocation,
 } from "react-router-dom";
 import { BookOpen, History, UserRound, Menu, X } from "lucide-react";
@@ -48,23 +49,42 @@ function Root() {
       >
         <Outlet />
       </AuthProvider>
+      <ScrollRestoration />
     </Suspense>
   );
 }
 function Protected({ children }: { children?: ReactNode }) {
   const { user } = useAuth();
-  const { pathname } = useLocation();
+  const location = useLocation();
   const userId = user?.id;
   useEffect(() => {
     applyReadingSize(userId ? readingSize(userId) : "standard");
     return () => applyReadingSize("standard");
   }, [userId]);
-  if (!user && pathname === "/") return <LandingPage />;
-  return user ? (children ?? <Outlet />) : <Navigate to="/sign-in" replace />;
+  if (!user && location.pathname === "/") return <LandingPage />;
+  return user ? (
+    (children ?? <Outlet />)
+  ) : (
+    <Navigate to="/sign-in" replace state={{ signInReturn: location }} />
+  );
 }
 function AppShell() {
   const [open, setOpen] = useState(false);
+  const header = useRef<HTMLElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
   const location = useLocation();
+  useEffect(() => {
+    if (!open) return;
+    function dismissOutside(event: Event) {
+      if (!header.current?.contains(event.target as Node)) setOpen(false);
+    }
+    document.addEventListener("pointerdown", dismissOutside);
+    document.addEventListener("focusin", dismissOutside);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOutside);
+      document.removeEventListener("focusin", dismissOutside);
+    };
+  }, [open]);
   const links = (
     <>
       <NavLink
@@ -105,19 +125,38 @@ function AppShell() {
         <div className="wordmark">Exam Prep</div>
         <nav aria-label="Main navigation">{links}</nav>
       </aside>
-      <header className="mobile-header frosted-navigation">
+      <header
+        ref={header}
+        className="mobile-header frosted-navigation"
+        onKeyDown={(event) => {
+          if (event.key !== "Escape" || !open) return;
+          setOpen(false);
+          toggle.current?.focus();
+        }}
+      >
         <span className="wordmark">Exam Prep</span>
         <Button
+          ref={toggle}
           variant="quiet"
           aria-label={open ? "Close navigation" : "Open navigation"}
           aria-expanded={open}
-          onClick={() => setOpen(!open)}
+          aria-controls={open ? "mobile-navigation" : undefined}
+          onClick={() => setOpen((previous) => !previous)}
         >
           {open ? <X /> : <Menu />}
         </Button>
-        {open ? <nav aria-label="Mobile navigation">{links}</nav> : null}
+        {open ? (
+          <nav id="mobile-navigation" aria-label="Mobile navigation">
+            {links}
+          </nav>
+        ) : null}
       </header>
-      <main id="main" className="workspace-main" key={location.pathname}>
+      <main
+        id="main"
+        tabIndex={-1}
+        className="workspace-main"
+        key={location.pathname}
+      >
         <Outlet />
       </main>
     </div>

@@ -12,13 +12,14 @@ import { useAuth } from "../lib/auth";
 import { useResource } from "../lib/hooks";
 
 export function PasswordRecoveryPage({ reset = false }: { reset?: boolean }) {
+  const { state } = useLocation();
   return (
     <main className="auth-page">
       <div className="auth-form">
         <div className="wordmark">Exam Prep</div>
         {reset ? <ResetPassword /> : <RequestReset />}
         <p className="auth-switch">
-          <Link to="/sign-in" replace>
+          <Link to="/sign-in" state={state} replace>
             Back to sign in
           </Link>
         </p>

@@ -1,6 +1,16 @@
 .library-filters {
   margin-block: 12px 16px;
 }
+.library-filters summary {
+  width: fit-content;
+  max-width: 100%;
+  min-height: 44px;
+  padding-block: 10px;
+  overflow-wrap: anywhere;
+}
+.library-filters[open] .library-filter-summary {
+  display: none;
+}
 
 .library-filter-fields {
   display: grid;

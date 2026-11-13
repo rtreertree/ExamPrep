@@ -86,6 +86,7 @@ export function EditorPage() {
   const { user } = useAuth();
   const [loaded, setLoaded] = useState<Loaded>();
   const [error, setError] = useState<Error>();
+  const [version, setVersion] = useState(0);
   const key = id || `new:${draftId}`;
   useEffect(() => {
     let live = true;
@@ -109,9 +110,20 @@ export function EditorPage() {
     return () => {
       live = false;
     };
-  }, [id, key, user!.id]);
-  if (error) return <ErrorNotice error={error} />;
-  if (!loaded) return <LoadingRows />;
+  }, [id, key, user!.id, version]);
+  if (error) {
+    return (
+      <>
+        <PageHeader title="Couldn’t open this study set" />
+        <ErrorNotice
+          error={error}
+          retry={() => setVersion((value) => value + 1)}
+        />
+        <Link to="/">Return to library</Link>
+      </>
+    );
+  }
+  if (!loaded) return <LoadingRows label="Loading the editor" />;
   if (loaded.missing && !loaded.draft)
     return (
       <Notice tone="warning">

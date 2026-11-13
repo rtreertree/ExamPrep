@@ -118,6 +118,7 @@ async function fixture(page: Page, doc = written, position = 0) {
     starts: 0,
     submitFailures: 0,
     logoutFailures: 0,
+    editorLoadFailures: 0,
     listDelay: undefined as Promise<void> | undefined,
     delay: undefined as (() => Promise<void>) | undefined,
     set: () => set,
@@ -145,6 +146,11 @@ async function fixture(page: Page, doc = written, position = 0) {
         state.signedIn = false;
         value = { success: true };
       }
+    } else if (path === "/api/auth/sign-in/email") {
+      state.signedIn = true;
+      value = { success: true };
+    } else if (path === "/api/account/recovery") {
+      value = { enabled: true };
     } else if (path === "/api/sets") {
       if (req.method() === "POST") {
         const content = validateContent(req.postDataJSON());
@@ -198,17 +204,23 @@ async function fixture(page: Page, doc = written, position = 0) {
         };
       }
     } else if (path === `/api/sets/${set.id}`) {
-      if (req.method() === "PUT") {
-        const content = validateContent(req.postDataJSON().content);
-        set = {
-          ...set,
-          content,
-          title: content.title,
-          count: itemsOf(content).length,
-          revision: set.revision + 1,
-        };
+      if (req.method() === "GET" && state.editorLoadFailures > 0) {
+        state.editorLoadFailures--;
+        status = 503;
+        value = { error: "The study set is temporarily unavailable." };
+      } else {
+        if (req.method() === "PUT") {
+          const content = validateContent(req.postDataJSON().content);
+          set = {
+            ...set,
+            content,
+            title: content.title,
+            count: itemsOf(content).length,
+            revision: set.revision + 1,
+          };
+        }
+        value = set;
       }
-      value = set;
     } else if (path === "/api/sets/set/organization") {
       set = { ...set, ...req.postDataJSON() };
       value = { updated: true };
@@ -657,7 +669,13 @@ test("AI settings survive closing, remain account scoped, and search filters rea
       .toBe(true);
     await expect(
       page.getByRole("link", { name: "Reliable study", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("status", { name: "Updating study sets" }),
     ).toBeVisible();
+    await expect(page.getByLabel("Search library")).toHaveValue(
+      "beyond page one",
+    );
   } finally {
     release();
     api.listDelay = undefined;
@@ -1713,6 +1731,122 @@ test("search empty states recover existing content and mobile History exposes Co
   await expect(
     page.getByRole("heading", { name: "Reliable study" }),
   ).toBeVisible();
+});
+
+test("sign-in resumes the requested page and preserves its filters", async ({
+  page,
+}) => {
+  const api = await fixture(page);
+  api.signedIn = false;
+  const requested = "/history?status=in_progress&search=Reliable";
+  await page.goto(requested);
+  await expect(page).toHaveURL(/\/sign-in$/);
+  await page.getByRole("link", { name: "Forgot password?" }).click();
+  await page.getByRole("link", { name: "Back to sign in" }).click();
+  await page.getByRole("button", { name: "Create an account" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Create your account" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+  await page.getByLabel("Email", { exact: true }).fill("student@example.test");
+  const password = page.getByLabel("Password", { exact: true });
+  await password.fill("sample-password");
+  await password.press("Enter");
+  await expect.poll(() => api.requests).toContain("/api/auth/sign-in/email");
+  await expect(page).toHaveURL(requested);
+  await expect(page).toHaveTitle("Exam Prep");
+  await expect(page.getByLabel("Search history")).toHaveValue("Reliable");
+  await expect(page.getByRole("tab", { name: "In progress" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.getByRole("link", { name: "Resume practice" })).toBeVisible();
+});
+
+test("keyboard navigation opens menus and restores focus after dismissal", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  const navigation = page.getByRole("button", { name: "Open navigation" });
+  await navigation.press("Enter");
+  const history = page
+    .getByRole("navigation", { name: "Mobile navigation" })
+    .getByRole("link", { name: "History" });
+  await history.press("Escape");
+  await expect(navigation).toBeFocused();
+  await expect(history).toHaveCount(0);
+  await navigation.press("Enter");
+  await page.getByLabel("Search library").click();
+  await expect(history).toHaveCount(0);
+
+  const create = page.locator("summary").filter({ hasText: "Create" });
+  await create.press("ArrowUp");
+  const ai = page.getByRole("button", { name: "Create with your AI" });
+  await expect(ai).toBeFocused();
+  await ai.press("Home");
+  const exam = page.getByRole("link", { name: "Exam", exact: true });
+  await expect(exam).toBeFocused();
+  await exam.press("Escape");
+  await expect(create).toBeFocused();
+  await expect(ai).toBeHidden();
+
+  await create.press("ArrowUp");
+  await ai.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "Create with your AI" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Close dialog" }).press("Enter");
+  await expect(dialog).toBeHidden();
+  await expect(create).toBeFocused();
+});
+
+test("changing library pages returns focus to the new results", async ({
+  page,
+}) => {
+  const api = await fixture(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route(/\/api\/sets\?/, (route) => {
+    const pageIndex = Number(
+      new URL(route.request().url()).searchParams.get("page"),
+    );
+    const items = Array.from({ length: pageIndex ? 1 : 30 }, (_, index) => ({
+      ...api.set(),
+      id: `set-${pageIndex}-${index}`,
+      title: `Study set ${pageIndex * 30 + index + 1}`,
+    }));
+    return route.fulfill({
+      json: { items, hasMore: !pageIndex, page: pageIndex, courses: [] },
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Next page" }).press("Enter");
+  await expect(
+    page.getByRole("tabpanel", { name: "All study sets" }),
+  ).toBeFocused();
+  const firstSet = page.getByRole("link", { name: "Study set 31", exact: true });
+  await expect(firstSet).toBeInViewport();
+  await expect(page.getByText("Page 2", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Previous page" }).press("Enter");
+  await expect(
+    page.getByRole("link", { name: "Study set 1", exact: true }),
+  ).toBeInViewport();
+});
+
+test("a temporary editor load failure can be retried in place", async ({
+  page,
+}) => {
+  const api = await fixture(page);
+  api.editorLoadFailures = 2;
+  await page.goto("/sets/set/edit");
+  await expect(page.getByRole("alert")).toContainText("temporarily unavailable");
+  api.editorLoadFailures = 0;
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(
+    page.getByRole("heading", { name: written.title, level: 1 }),
+  ).toBeVisible();
+  await expect(page).toHaveURL("/sets/set/edit");
 });
 
 test("closing Import asks before discarding pasted work and Keep editing preserves it", async ({

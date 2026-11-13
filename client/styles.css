@@ -878,8 +878,8 @@ input[type="file"] {
   margin-top: 32px;
   gap: 8px;
 }
-.pagination:has(button:first-child:disabled):has(button:last-child:disabled) {
-  display: none;
+.workspace-main [role="tabpanel"][tabindex="-1"] {
+  scroll-margin-top: 12px;
 }
 .draft-list {
   border-bottom: 1px solid var(--divider);
@@ -963,6 +963,7 @@ input[type="file"] {
 @media (max-width: 599px) {
   .history-status-select {
     display: block;
+    margin-top: 12px;
   }
   .history-status-tabs {
     display: none;

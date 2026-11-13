@@ -1,4 +1,5 @@
 import { Selector } from "../components/Selector";
+import { useRef } from "react";
 import { Link } from "react-router-dom";
 import { useResource } from "../lib/hooks";
 import { listPage, useListQuery } from "../lib/listQuery";
@@ -11,6 +12,7 @@ import {
   Tabs,
   LoadingRows,
   PageHeader,
+  Pagination,
 } from "../components/ui";
 import { ScoreSummary } from "../components/ScoreSummary";
 import { ProgressInsights } from "./ProgressInsights";
@@ -29,10 +31,11 @@ export function HistoryPage() {
     "setId",
   ]);
   const page = listPage(params);
+  const results = useRef<HTMLElement>(null);
   const status =
     statuses.find((entry) => entry.value === params.get("status"))?.value ??
     "all";
-  const appliedSearch = params.get("search") ?? "";
+  const appliedSearch = (params.get("search") ?? "").slice(0, 200);
   const setId = params.get("setId");
   const returnTo = params.size ? `/history?${params}` : "/history";
   const returnState = { returnTo };
@@ -44,16 +47,17 @@ export function HistoryPage() {
   );
   const setStatus = (value: string) =>
     update({ status: value === "all" ? null : value, page: null });
+  function goToPage(next: number) {
+    update({ page: next > 0 ? String(next) : null });
+    results.current?.focus();
+    results.current?.scrollIntoView({ block: "start" });
+  }
   return (
     <>
       <PageHeader
         title="History"
-        description="Your progress, one session at a time."
+        description="Resume attempts and review your results."
       />
-      <p className="muted">
-        Each attempt keeps the version of the set used when it began. Retry
-        scores cover only their subset of items.
-      </p>
       <ProgressInsights setId={setId} returnTo={returnTo} />
       {setId ? (
         <Button onClick={() => update({ setId: null, page: null })}>
@@ -65,6 +69,7 @@ export function HistoryPage() {
           type="search"
           maxLength={200}
           value={search}
+          placeholder="Find an attempt by set title"
           onChange={(e) => setSearch(e.target.value)}
         />
       </Field>
@@ -86,16 +91,17 @@ export function HistoryPage() {
         />
       </div>
       <section
+        ref={results}
+        tabIndex={-1}
         role="tabpanel"
         id={`attempt-status-${status}`}
         aria-label="Filtered attempts"
-        aria-busy={loading}
       >
         <ErrorNotice error={error} retry={refresh} />
-        {loading && !data ? (
-          <LoadingRows />
+        {loading && !data?.items.length ? (
+          <LoadingRows label="Loading attempts" />
         ) : data?.items.length ? (
-          <div className="history-list">
+          <div className="history-list" aria-busy={loading}>
             {data.items.map((a, i) => (
               <article className="attempt-row" key={a.id}>
                 <span className="ordinal">
@@ -196,23 +202,13 @@ export function HistoryPage() {
             </p>
           </EmptyState>
         ) : null}
-        <div className="pagination">
-          <Button
-            disabled={!page || loading}
-            onClick={() => update({ page: page > 1 ? String(page - 1) : null })}
-          >
-            Previous page
-          </Button>
-          {page || data?.hasMore ? (
-            <span className="mono">Page {page + 1}</span>
-          ) : null}
-          <Button
-            disabled={!data?.hasMore || loading}
-            onClick={() => update({ page: String(page + 1) })}
-          >
-            Next page
-          </Button>
-        </div>
+        <Pagination
+          label="History pages"
+          page={page}
+          hasMore={data?.hasMore}
+          loading={loading}
+          onChange={goToPage}
+        />
       </section>
     </>
   );

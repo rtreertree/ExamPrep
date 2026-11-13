@@ -1,5 +1,5 @@
 import { Selector } from "../components/Selector";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Upload, Plus, ArrowRight, Ellipsis } from "lucide-react";
 import { useResource } from "../lib/hooks";
@@ -18,6 +18,7 @@ import {
   LoadingRows,
   Menu,
   PageHeader,
+  Pagination,
   Tabs,
 } from "../components/ui";
 import { AIHandoffPanel, ImportPanel } from "./Authoring";
@@ -42,6 +43,7 @@ export function LibraryPage() {
   const sort = params.get("sort") === "studied" ? "studied" : "updated";
   const appliedSearch = (params.get("search") ?? "").slice(0, 200);
   const returnTo = params.size ? `/?${params}` : "/";
+  const results = useRef<HTMLElement>(null);
   const [filtersOpen, setFiltersOpen] = useState(
     course !== null || archived || sort !== "updated",
   );
@@ -62,7 +64,7 @@ export function LibraryPage() {
     page: number;
     courses: string[];
   }>(`/sets?${query}`);
-  const courses = resource.data?.courses ?? [];
+  const courses = resource.lastData?.courses ?? [];
   const [panel, setPanel] = useState<
     "import" | "ai" | { aiSettings: AISettings } | null
   >(null);
@@ -100,6 +102,11 @@ export function LibraryPage() {
       archived: null,
       sort: null,
     });
+  }
+  function goToPage(next: number) {
+    update({ page: next > 0 ? String(next) : null });
+    results.current?.focus();
+    results.current?.scrollIntoView({ block: "start" });
   }
   async function organize(
     set: StudySet,
@@ -149,7 +156,6 @@ export function LibraryPage() {
     <>
       <PageHeader
         title="Your library"
-        description="Pick up a set and keep going."
         display
         actions={
           <>
@@ -210,7 +216,14 @@ export function LibraryPage() {
         open={filtersOpen}
         onToggle={(event) => setFiltersOpen(event.currentTarget.open)}
       >
-        <summary>Library filters{archived ? " · Archived" : ""}</summary>
+        <summary>
+          Library filters
+          <span className="library-filter-summary muted">
+            {archived ? " · Archived" : ""}
+            {course !== null ? ` · ${course || "No course"}` : ""}
+            {sort === "studied" ? " · Last studied" : ""}
+          </span>
+        </summary>
         <div className="library-filter-fields">
           <Field label="Course">
             <Selector
@@ -277,6 +290,8 @@ export function LibraryPage() {
         ]}
       />
       <section
+        ref={results}
+        tabIndex={-1}
         role="tabpanel"
         id={`study-set-type-${filter}`}
         aria-label={
@@ -315,8 +330,10 @@ export function LibraryPage() {
             ))}
           </aside>
         ) : null}
-        {resource.loading && !resource.data ? (
-          <LoadingRows />
+        {resource.loading && !resource.data?.items.length ? (
+          <LoadingRows
+            label={resource.lastData ? "Updating study sets" : "Loading study sets"}
+          />
         ) : resource.data?.items.length ? (
           <div className="set-list" aria-busy={resource.loading}>
             {resource.data.items.map((set, i) => (
@@ -441,7 +458,7 @@ export function LibraryPage() {
               </SurfaceLight>
             ))}
           </div>
-        ) : resource.loading ? null : !resource.error &&
+        ) : !resource.error &&
           (appliedSearch ||
             filter !== "all" ||
             page > 0 ||
@@ -505,25 +522,13 @@ export function LibraryPage() {
             </p>
           </EmptyState>
         ) : null}
-        <div className="pagination">
-          <Button
-            disabled={!page || resource.loading}
-            onClick={() => update({ page: page > 1 ? String(page - 1) : null })}
-          >
-            Previous page
-          </Button>
-          {page || resource.data?.hasMore ? (
-            <span className="mono">Page {page + 1}</span>
-          ) : null}
-          <Button
-            disabled={
-              !resource.data?.hasMore || resource.loading || page >= 1_000_000
-            }
-            onClick={() => update({ page: String(page + 1) })}
-          >
-            Next page
-          </Button>
-        </div>
+        <Pagination
+          label="Library pages"
+          page={page}
+          hasMore={resource.data?.hasMore}
+          loading={resource.loading}
+          onChange={goToPage}
+        />
       </section>
       {panel && panel !== "ai" ? (
         <ImportPanel

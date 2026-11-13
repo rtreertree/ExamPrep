@@ -1,30 +1,40 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 export function useResource<T>(path: string) {
-  const [data, setData] = useState<T>();
-  const [error, setError] = useState<Error>();
-  const [loading, setLoading] = useState(true);
+  const [response, setResponse] = useState<{ path: string; data: T }>();
+  const [settled, setSettled] = useState<{
+    path: string;
+    version: number;
+    error?: Error;
+  }>();
   const [version, setVersion] = useState(0);
   useEffect(() => {
     let live = true;
-    setLoading(true);
-    setError(undefined);
+    setSettled(undefined);
     api<T>(path)
       .then((d) => {
-        if (live) setData(d);
+        if (!live) return;
+        setResponse({ path, data: d });
+        setSettled({ path, version });
       })
-      .catch((e) => {
-        if (live) setError(e);
-      })
-      .finally(() => {
-        if (live) setLoading(false);
+      .catch((error) => {
+        if (live) setSettled({ path, version, error });
       });
     return () => {
       live = false;
     };
   }, [path, version]);
   const refresh = useCallback(() => setVersion((v) => v + 1), []);
-  return { data, setData, error, loading, refresh };
+  const setData = useCallback((data: T) => setResponse({ path, data }), [path]);
+  const current = settled?.path === path && settled.version === version;
+  return {
+    data: response?.path === path ? response.data : undefined,
+    lastData: response?.data,
+    setData,
+    error: current ? settled.error : undefined,
+    loading: !current,
+    refresh,
+  };
 }
 export function useUnsaved(dirty: boolean) {
   useEffect(() => {

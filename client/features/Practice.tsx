@@ -53,36 +53,7 @@ import {
 import "./exam-practice.css";
 export function PracticePage() {
   const { id } = useParams();
-  const { data, error, loading, refresh } = useResource<Attempt>(
-    `/attempts/${id}`,
-  );
-  if (loading)
-    return (
-      <div className="focus-loading">
-        <LoadingRows />
-      </div>
-    );
-  if (error)
-    return (
-      <div className="focus-loading">
-        <Link to="/">← Library</Link>
-        <ErrorNotice error={error} retry={refresh} />
-      </div>
-    );
-  return data ? <Practice key={data.id} initial={data} /> : null;
-}
-function Practice({ initial }: { initial: Attempt }) {
-  const { user } = useAuth();
-  const state = useAttempt(initial, user!.id);
-  const { attempt, position, responses, busy, dirty } = state;
-  const doc = attempt.snapshot;
-  const isExam = doc.kind === "exam";
-  const items = itemsOf(doc);
-  const item = items[position];
-  const r = own(responses, item.id);
-  const navigate = useNavigate();
-  const location = useLocation();
-  const previous = location.state?.returnTo;
+  const previous = useLocation().state?.returnTo;
   const returnTo =
     typeof previous === "string" &&
     /^(\/($|\?)|\/history($|\?)|\/review\/[^/?#]+($|\?))/.test(previous)
@@ -93,6 +64,49 @@ function Practice({ initial }: { initial: Attempt }) {
     : returnTo.startsWith("/review/")
       ? "Review queue"
       : "Library";
+  const { data, error, loading, refresh } = useResource<Attempt>(
+    `/attempts/${id}`,
+  );
+  if (loading)
+    return (
+      <div className="focus-loading">
+        <LoadingRows label="Loading practice session" />
+      </div>
+    );
+  if (error)
+    return (
+      <div className="focus-loading">
+        <Link to={returnTo}>← {returnLabel}</Link>
+        <ErrorNotice error={error} retry={refresh} />
+      </div>
+    );
+  return data ? (
+    <Practice
+      key={data.id}
+      initial={data}
+      returnTo={returnTo}
+      returnLabel={returnLabel}
+    />
+  ) : null;
+}
+function Practice({
+  initial,
+  returnTo,
+  returnLabel,
+}: {
+  initial: Attempt;
+  returnTo: string;
+  returnLabel: string;
+}) {
+  const { user } = useAuth();
+  const state = useAttempt(initial, user!.id);
+  const { attempt, position, responses, busy, dirty } = state;
+  const doc = attempt.snapshot;
+  const isExam = doc.kind === "exam";
+  const items = itemsOf(doc);
+  const item = items[position];
+  const r = own(responses, item.id);
+  const navigate = useNavigate();
   const [confirm, setConfirm] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [retryError, setRetryError] = useState<Error>();
