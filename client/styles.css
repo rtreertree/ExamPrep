@@ -881,6 +881,77 @@ input[type="file"] {
 .workspace-main [role="tabpanel"][tabindex="-1"] {
   scroll-margin-top: 12px;
 }
+.list-results {
+  scroll-margin-top: 12px;
+}
+.list-view-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-block-end: 20px;
+}
+.list-view-switcher .button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.list-filter-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: 12px;
+  margin-block: 12px 16px;
+}
+.list-filter-fields > .field:only-child {
+  max-width: 18rem;
+}
+.list-announcement > p,
+.history-set-scope {
+  margin-block-end: 16px;
+}
+.organization-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.organization-list > li {
+  border-bottom: 1px solid var(--divider);
+}
+.organization-row {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 16px;
+  min-height: 64px;
+  padding: 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  text-align: start;
+  cursor: pointer;
+}
+.organization-row strong {
+  overflow-wrap: anywhere;
+}
+.organization-row > .muted {
+  font-size: 14px;
+}
+.organization-row:is(:hover, :focus-visible, [aria-expanded="true"]) {
+  background: var(--surface);
+}
+.history-group .organization-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+.history-group .organization-row[aria-expanded="true"] > svg {
+  transform: rotate(180deg);
+}
+.group-attempts {
+  padding: 0 12px 12px;
+}
+.group-attempts .attempt-row:last-child {
+  border-bottom: 0;
+}
 .draft-list {
   border-bottom: 1px solid var(--divider);
   padding: 16px 0 24px;
@@ -1420,12 +1491,12 @@ progress::-moz-progress-bar {
 .attempt-row .ordinal {
   padding-top: 6px;
 }
-.attempt-row h2 {
+.attempt-row :is(h2, h3) {
   font-size: 20px;
   line-height: 28px;
   overflow-wrap: anywhere;
 }
-.attempt-row h2 a {
+.attempt-row :is(h2, h3) a {
   text-decoration: none;
 }
 .attempt-row p {
@@ -1815,6 +1886,12 @@ progress::-moz-progress-bar {
     grid-column: 2;
     justify-self: start;
     margin-top: 8px;
+  }
+  .group-attempts {
+    padding-inline: 4px;
+  }
+  .group-attempts .score-summary {
+    flex-wrap: wrap;
   }
   .results-intro {
     margin-bottom: 32px;

@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID, scryptSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { neonConfig } from "@neondatabase/serverless";
+import { Prisma } from "../generated/prisma/client";
 import ws from "ws";
 import { connectDatabase } from "../server/db";
 import { databasePasswords, PASSWORD_PATTERN } from "../server/passwords";
@@ -509,6 +510,200 @@ describe.skipIf(!enabled)(
         ),
       ).toBe(true);
       expect((await b("/attempts")).value.items).toHaveLength(0);
+    }, 60000);
+    it("browses courses by archive scope and applies organization batches atomically", async () => {
+      const course = `Course ${randomUUID()}`;
+      const created = await Promise.all([
+        a("/sets", "POST", { ...exam, title: "Bulk organization exam" }),
+        a("/sets", "POST", { ...deck, title: "Bulk organization deck" }),
+        b("/sets", "POST", { ...exam, title: "Another account's set" }),
+      ]);
+      const [first, second, foreign] = created.map(({ value }) => value);
+      const path = "/sets/organization";
+      try {
+        const failed = await a(path, "PATCH", {
+          ids: [first.id, foreign.id],
+          course,
+        });
+        expect(failed.status).toBe(404);
+        expect((await a(`/sets/${first.id}`)).value.course).toBe("");
+        expect((await b(`/sets/${foreign.id}`)).value.course).toBe("");
+        expect(
+          (await a(path, "PATCH", { ids: [first.id, first.id], pinned: true }))
+            .status,
+        ).toBe(422);
+        const changes = {
+          ids: [first.id, second.id],
+          course: ` ${course} `,
+          pinned: true,
+        };
+        expect((await a(path, "PATCH", changes)).value).toEqual({ updated: 2 });
+        expect((await a(path, "PATCH", changes)).value).toEqual({ updated: 0 });
+        expect((await a(`/sets/${first.id}`)).value).toMatchObject({
+          revision: 1,
+          course,
+          pinned: true,
+        });
+        expect((await a("/sets/courses")).value.items).toContainEqual({
+          course,
+          count: 2,
+        });
+        expect((await b("/sets/courses")).value.items).not.toContainEqual(
+          expect.objectContaining({ course }),
+        );
+        expect(
+          (await a(path, "PATCH", { ids: [second.id], archived: true })).value,
+        ).toEqual({ updated: 1 });
+        expect((await a("/sets/courses")).value.items).toContainEqual({
+          course,
+          count: 1,
+        });
+        expect(
+          (await a("/sets/courses?archived=true")).value.items,
+        ).toContainEqual({ course, count: 1 });
+        expect(
+          (
+            await a(path, "PATCH", {
+              ids: [second.id],
+              archived: false,
+              course: "",
+            })
+          ).value,
+        ).toEqual({ updated: 1 });
+        expect((await a("/sets/courses")).value.items).toContainEqual(
+          expect.objectContaining({ course: "" }),
+        );
+      } finally {
+        await db!.studySet.deleteMany({
+          where: { id: { in: [first.id, second.id, foreign.id] } },
+        });
+      }
+    }, 60000);
+    it("filters and pages History by attempts and by study set", async () => {
+      const title = `Grouped history ${randomUUID()}`;
+      const sets = Array.from({ length: 32 }, (_, index) => {
+        const content = { ...deck, title: `${title} ${index}` };
+        return {
+          id: randomUUID(),
+          userId,
+          content,
+          title: content.title,
+          kind: content.kind,
+        };
+      });
+      const [renamed, deleted] = sets;
+      const from = "2026-11-01T04:00:00.000Z";
+      const before = "2026-11-03T05:00:00.000Z";
+      const groups = sets.map((set, index) => ({
+        id: randomUUID(),
+        userId,
+        studySetId: set.id,
+        snapshot: set.content,
+        status: "completed",
+        startedAt: new Date(Date.parse(from) + index * 1000),
+        completedAt: new Date(before),
+        result: {},
+      }));
+      const extra = Array.from({ length: 30 }, () => ({
+        ...groups[0],
+        id: randomUUID(),
+        startedAt: new Date("2026-11-02T13:00:00.000Z"),
+      }));
+      const excluded = [
+        {
+          ...groups[0],
+          id: randomUUID(),
+          startedAt: new Date(Date.parse(from) - 1),
+        },
+        { ...groups[0], id: randomUUID(), startedAt: new Date(before) },
+        {
+          ...groups[0],
+          id: randomUUID(),
+          status: "in_progress",
+          completedAt: null,
+          result: Prisma.DbNull,
+        },
+        { ...groups[0], id: randomUUID(), reviewMode: true },
+        { ...groups[0], id: randomUUID(), snapshot: { ...exam, title } },
+      ];
+      const records = [...groups, ...extra, ...excluded];
+      await db!.studySet.createMany({ data: sets });
+      try {
+        await db!.attempt.createMany({ data: records });
+        const currentTitle = "Current study-set title";
+        await db!.studySet.update({
+          where: { id: renamed.id },
+          data: {
+            title: currentTitle,
+            content: { ...renamed.content, title: currentTitle },
+            revision: 2,
+          },
+        });
+        await db!.studySet.delete({ where: { id: deleted.id } });
+        const filter = new URLSearchParams({
+          search: title,
+          status: "completed",
+          type: "flashcards",
+          startedFrom: from,
+          startedBefore: before,
+        });
+        const groupPath = `/attempts/groups?${filter}`;
+        const first = (await a(groupPath)).value;
+        const second = (await a(groupPath + "&page=1")).value;
+        expect(first.hasMore).toBe(true);
+        expect(first.items).toHaveLength(30);
+        expect(first.items[0]).toMatchObject({
+          setId: renamed.id,
+          title: currentTitle,
+          count: 31,
+        });
+        expect(
+          (
+            await a(
+              `/attempts/groups?search=${encodeURIComponent(currentTitle)}`,
+            )
+          ).value.items,
+        ).toEqual([
+          expect.objectContaining({ setId: renamed.id, title: currentTitle }),
+        ]);
+        expect(second).toMatchObject({
+          hasMore: false,
+          items: expect.arrayContaining([
+            {
+              setId: null,
+              title: null,
+              count: 1,
+              latestStartedAt: expect.any(String),
+            },
+          ]),
+        });
+        expect(second.items).toHaveLength(2);
+        expect((await b(groupPath)).value.items).toEqual([]);
+        const attemptPath = `/attempts?${filter}&setId=${renamed.id}`;
+        expect((await a(attemptPath)).value).toMatchObject({ hasMore: true });
+        expect((await a(attemptPath + "&page=1")).value).toMatchObject({
+          hasMore: false,
+          items: [{ id: groups[0].id }],
+        });
+        expect(
+          (await a(`/attempts?${filter}&unlinked=true`)).value.items,
+        ).toMatchObject([{ title: deleted.title }]);
+        filter.set("type", "spaced");
+        expect((await a(`/attempts?${filter}`)).value.items).toMatchObject([
+          { id: excluded[3].id },
+        ]);
+        expect((await a("/attempts/groups?type=other")).status).toBe(400);
+        expect(
+          (await a("/attempts?startedFrom=2026-02-30T00:00:00Z")).status,
+        ).toBe(400);
+      } finally {
+        await db!.attempt.deleteMany({
+          where: { id: { in: records.map(({ id }) => id) } },
+        });
+        await db!.studySet.deleteMany({
+          where: { id: { in: sets.map(({ id }) => id) } },
+        });
+      }
     }, 60000);
     it("uses database hashing for long Unicode passwords and preserves legacy accounts during migration", async () => {
       const c = client();

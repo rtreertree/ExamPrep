@@ -27,7 +27,7 @@ type Delegate<Model, Where, Create, Update, Order> = {
 type Tables = {
   $executeRaw(query: TemplateStringsArray, ...values: unknown[]): Promise<number>;
   $queryRaw<T = unknown>(
-    query: TemplateStringsArray,
+    query: TemplateStringsArray | Prisma.Sql,
     ...values: unknown[]
   ): Promise<T>;
   studySet: Delegate<
@@ -47,9 +47,5 @@ type Tables = {
 };
 export type Database = Tables & {
   $disconnect(): Promise<void>;
-  $queryRaw<T = unknown>(
-    query: TemplateStringsArray,
-    ...values: unknown[]
-  ): Promise<T>;
   $transaction<T>(work: (tx: Tables) => Promise<T>): Promise<T>;
 };

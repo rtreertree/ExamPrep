@@ -1733,6 +1733,293 @@ test("search empty states recover existing content and mobile History exposes Co
   ).toBeVisible();
 });
 
+test("browse courses and organize one Library page at a time", async ({
+  page,
+}) => {
+  const existing = await fixture(page);
+  const sets = [
+    { ...existing.set(), id: "other-page", title: "Cells", course: "Biology" },
+    { ...existing.set(), id: "genetics", title: "Genetics", course: "Biology" },
+    {
+      ...existing.set(),
+      id: "evolution",
+      title: "Evolution",
+      course: "Biology",
+    },
+    { ...existing.set(), id: "unsorted", title: "Field notes" },
+  ];
+  let failure = true;
+  await page.route(
+    /\/api\/sets(?:\?|\/courses|\/organization)/,
+    async (route) => {
+      const url = new URL(route.request().url());
+      const archived = url.searchParams.get("archived") === "true";
+      const scope = sets.filter((set) => set.archived === archived);
+      if (url.pathname === "/api/sets/courses") {
+        const courses = [...new Set(scope.map(({ course }) => course))];
+        return route.fulfill({
+          json: {
+            items: courses.map((course) => ({
+              course,
+              count: scope.filter((set) => set.course === course).length,
+            })),
+            hasMore: false,
+          },
+        });
+      }
+      if (url.pathname === "/api/sets/organization") {
+        const { ids, ...changes } = route.request().postDataJSON();
+        expect(ids).toEqual(
+          changes.archived ? ["genetics", "evolution"] : ["genetics"],
+        );
+        if (failure) {
+          failure = false;
+          return route.fulfill({
+            status: 404,
+            json: { error: "A selected set is unavailable." },
+          });
+        }
+        for (const set of sets.filter((item) => ids.includes(item.id)))
+          Object.assign(set, changes);
+        return route.fulfill({ json: { updated: ids.length } });
+      }
+      const course = url.searchParams.get("course");
+      const search = url.searchParams.get("search") ?? "";
+      const kind = url.searchParams.get("kind");
+      const page = Number(url.searchParams.get("page"));
+      const items = scope.filter(
+        (set) =>
+          (course === null || set.course === course) &&
+          (!kind || set.kind === kind) &&
+          set.title.toLowerCase().includes(search.toLowerCase()),
+      );
+      return route.fulfill({
+        json: {
+          items: page ? items.slice(1) : items.slice(0, 1),
+          hasMore: !page && items.length > 1,
+          courses: ["Biology"],
+          page,
+        },
+      });
+    },
+  );
+  await page.goto("/?search=missing&kind=flashcards");
+  await page.getByRole("button", { name: "By course" }).press("Enter");
+  await expect(
+    page.getByRole("button", { name: "No course 1 set" }),
+  ).toBeVisible();
+  await expect(page).toHaveTitle("Exam Prep");
+  await page.screenshot({
+    path: "/tmp/examprep-course-overview.png",
+    animations: "disabled",
+  });
+  await page.getByRole("button", { name: "Biology 3 sets" }).press("Enter");
+  await expect(page.getByRole("tabpanel")).toBeFocused();
+  await expect(page.getByLabel("Search library")).toHaveValue("");
+  await expect(
+    page.getByRole("tab", { name: "All", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page.getByRole("link", { name: "Cells", exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Select sets", exact: true }).click();
+  await page.getByRole("checkbox", { name: "Select this page" }).check();
+  await page.getByRole("button", { name: "Next page" }).click();
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
+  await page.getByRole("button", { name: "Select sets", exact: true }).click();
+  await page.getByRole("checkbox", { name: "Select Genetics" }).press("Space");
+  await expect(
+    page.getByRole("checkbox", { name: "Select this page" }),
+  ).toHaveJSProperty("indeterminate", true);
+  await page
+    .getByRole("button", { name: "Organize selected", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "Organize selected sets" });
+  await chooseOption(
+    dialog.getByRole("combobox", { name: "Action" }),
+    "Pin sets",
+  );
+  await dialog.getByRole("button", { name: "Apply to selected sets" }).click();
+  await expect(dialog.getByRole("alert")).toHaveText(
+    "A selected set is unavailable.",
+  );
+  await expect(dialog.getByText("1 set selected")).toBeVisible();
+  await dialog.getByRole("button", { name: "Apply to selected sets" }).click();
+  await expect(page.getByText("1 set updated.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Select sets", exact: true }).click();
+  await page.getByRole("checkbox", { name: "Select this page" }).check();
+  await expect(
+    page.getByRole("checkbox", { name: "Select Evolution" }),
+  ).toBeChecked();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+  await page.screenshot({
+    path: "/tmp/examprep-bulk-library-mobile.png",
+    animations: "disabled",
+  });
+  await page
+    .getByRole("button", { name: "Organize selected", exact: true })
+    .click();
+  await chooseOption(
+    dialog.getByRole("combobox", { name: "Action" }),
+    "Archive sets",
+  );
+  await dialog.getByRole("button", { name: "Apply to selected sets" }).click();
+  await expect(
+    page.getByText("2 sets updated.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Cells", exact: true }),
+  ).toBeVisible();
+  await expect(page).not.toHaveURL(/page=/);
+
+  await page.getByRole("button", { name: "By course" }).click();
+  await expect(
+    page.getByRole("button", { name: "Biology 1 set" }),
+  ).toBeVisible();
+  await chooseOption(
+    page.getByRole("combobox", { name: "Show sets" }),
+    "Archived",
+  );
+  await expect(
+    page.getByRole("button", { name: "Biology 2 sets" }),
+  ).toBeVisible();
+});
+
+test.describe("History organization", () => {
+  test.use({ timezoneId: "America/New_York" });
+
+  test("combines filters and restores an expanded group and its page from practice", async ({
+    page,
+  }) => {
+    const existing = await fixture(page);
+    const groups = [
+      {
+        setId: "set",
+        title: "Renamed study set",
+        count: 31,
+        latestStartedAt: "2026-11-02T10:00:00.000Z",
+      },
+      {
+        setId: null,
+        title: null,
+        count: 1,
+        latestStartedAt: "2026-11-02T09:00:00.000Z",
+      },
+    ];
+    const groupQueries: URLSearchParams[] = [];
+    const attemptQueries: URLSearchParams[] = [];
+    await page.route(/\/api\/attempts(?:\/groups)?\?/, async (route) => {
+      const url = new URL(route.request().url());
+      const query = url.searchParams;
+      if (url.pathname.endsWith("/groups")) {
+        groupQueries.push(query);
+        return route.fulfill({ json: { items: groups, hasMore: false } });
+      }
+      attemptQueries.push(query);
+      const laterPage = query.get("page") === "1";
+      const deleted = query.get("unlinked") === "true";
+      return route.fulfill({
+        json: {
+          items: [
+            {
+              ...existing.attempt(),
+              title: deleted
+                ? "Original deleted title"
+                : laterPage
+                  ? "Old study title"
+                  : "More recent attempt",
+              startedAt: deleted
+                ? groups[1].latestStartedAt
+                : groups[0].latestStartedAt,
+              kind: "exam",
+            },
+          ],
+          hasMore: !laterPage && !deleted,
+        },
+      });
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(
+      "/history?view=sets&type=exam&date=custom&from=2026-11-01&through=2026-11-02&status=in_progress&search=study",
+    );
+    const group = page.getByRole("button", {
+      name: "Renamed study set 31 attempts",
+    });
+    await expect(group).toBeVisible();
+    expect(Object.fromEntries(groupQueries.at(-1)!)).toMatchObject({
+      status: "in_progress",
+      type: "exam",
+      search: "study",
+      startedFrom: "2026-11-01T04:00:00.000Z",
+      startedBefore: "2026-11-03T05:00:00.000Z",
+    });
+    await page.getByLabel("Start date").fill("2026-11-03");
+    await expect(page.getByRole("alert")).toHaveText(
+      "Start date must be on or before end date.",
+    );
+    await page.getByLabel("Start date").fill("2026-11-01");
+    await group.press("Enter");
+    await expect(group).toHaveAttribute("aria-expanded", "true");
+    await page
+      .getByRole("navigation", { name: "Attempt pages for this group" })
+      .getByRole("button", { name: "Next page" })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Old study title" }),
+    ).toBeVisible();
+    expect(Object.fromEntries(attemptQueries.at(-1)!)).toMatchObject({
+      page: "1",
+      setId: "set",
+      search: "study",
+      type: "exam",
+      status: "in_progress",
+      startedFrom: "2026-11-01T04:00:00.000Z",
+      startedBefore: "2026-11-03T05:00:00.000Z",
+    });
+    await page
+      .getByRole("link", { name: "Resume practice", exact: false })
+      .click();
+    await page.getByRole("link", { name: "History", exact: true }).click();
+    await expect(page).toHaveURL(/group=set&groupPage=1/);
+    await expect(group).toHaveAttribute("aria-expanded", "true");
+    await expect(
+      page.getByRole("heading", { name: "Old study title" }),
+    ).toBeVisible();
+
+    const deleted = page.getByRole("button", {
+      name: "Deleted sets 1 attempt",
+    });
+    await deleted.click();
+    await expect(group).toHaveAttribute("aria-expanded", "false");
+    await expect(
+      page.getByRole("heading", { name: "Original deleted title" }),
+    ).toBeVisible();
+    expect(Object.fromEntries(attemptQueries.at(-1)!)).toMatchObject({
+      page: "0",
+      unlinked: "true",
+    });
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(390);
+    await page.screenshot({
+      path: "/tmp/examprep-history-groups-mobile.png",
+      animations: "disabled",
+    });
+    await chooseOption(
+      page.getByRole("combobox", { name: "Attempt type" }),
+      "Spaced review",
+    );
+    await expect(deleted).toHaveAttribute("aria-expanded", "false");
+    await expect.poll(() => groupQueries.at(-1)?.get("type")).toBe("spaced");
+  });
+});
+
 test("sign-in resumes the requested page and preserves its filters", async ({
   page,
 }) => {

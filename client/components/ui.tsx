@@ -14,6 +14,7 @@ import { X, ChevronDown, Check } from "lucide-react";
 import { ApiError } from "../lib/api";
 import { issuesOf, issueLabel } from "../lib/issues";
 import type { Issue } from "../../shared/json";
+import { MAX_LIST_PAGE } from "../../shared/listing";
 export const FieldIssues = createContext<Issue[]>([]);
 export function Button({
   variant = "secondary",
@@ -59,10 +60,14 @@ export function Field({
     ? cloneElement(children, {
         id,
         "aria-describedby":
-          [hint ? `${id}-hint` : "", issue ? `${id}-error` : ""]
+          [
+            children.props["aria-describedby"],
+            hint ? `${id}-hint` : "",
+            issue ? `${id}-error` : "",
+          ]
             .filter(Boolean)
             .join(" ") || undefined,
-        "aria-invalid": !!issue,
+        "aria-invalid": !!issue || children.props["aria-invalid"] || false,
       })
     : children;
   return (
@@ -176,7 +181,7 @@ export function Pagination({
       </Button>
       <span className="mono">Page {page + 1}</span>
       <Button
-        disabled={!hasMore || loading || page >= 1_000_000}
+        disabled={!hasMore || loading || page >= MAX_LIST_PAGE}
         onClick={() => onChange(page + 1)}
       >
         Next page
@@ -220,6 +225,30 @@ export function PageHeader({
       </div>
       {actions ? <div className="actions">{actions}</div> : null}
     </header>
+  );
+}
+export function ListViewSwitcher({
+  label,
+  listLabel,
+  groupedLabel,
+  grouped,
+  onChange,
+}: {
+  label: string;
+  listLabel: string;
+  groupedLabel: string;
+  grouped: boolean;
+  onChange: (grouped: boolean) => void;
+}) {
+  return (
+    <div className="list-view-switcher" role="group" aria-label={label}>
+      <Button aria-pressed={!grouped} onClick={() => onChange(false)}>
+        {listLabel}
+      </Button>
+      <Button aria-pressed={grouped} onClick={() => onChange(true)}>
+        {groupedLabel}
+      </Button>
+    </div>
   );
 }
 export function SaveStatus({

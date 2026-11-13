@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
-export function useResource<T>(path: string) {
+export function useResource<T>(path: string | null) {
   const [response, setResponse] = useState<{ path: string; data: T }>();
   const [settled, setSettled] = useState<{
     path: string;
@@ -11,6 +11,7 @@ export function useResource<T>(path: string) {
   useEffect(() => {
     let live = true;
     setSettled(undefined);
+    if (path === null) return;
     api<T>(path)
       .then((d) => {
         if (!live) return;
@@ -25,14 +26,19 @@ export function useResource<T>(path: string) {
     };
   }, [path, version]);
   const refresh = useCallback(() => setVersion((v) => v + 1), []);
-  const setData = useCallback((data: T) => setResponse({ path, data }), [path]);
+  const setData = useCallback(
+    (data: T) => {
+      if (path !== null) setResponse({ path, data });
+    },
+    [path],
+  );
   const current = settled?.path === path && settled.version === version;
   return {
     data: response?.path === path ? response.data : undefined,
     lastData: response?.data,
     setData,
     error: current ? settled.error : undefined,
-    loading: !current,
+    loading: path !== null && !current,
     refresh,
   };
 }

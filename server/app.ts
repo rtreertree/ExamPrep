@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
-import type { Prisma, StudySet, Attempt } from "../generated/prisma/client";
+import type { Prisma, StudySet } from "../generated/prisma/client";
 import type { Database } from "./db";
 import { createAuth, type Config } from "./auth";
 import { encodeStorage, decodeStorage } from "./storage";
@@ -53,6 +53,12 @@ import { MAX_DAILY_REVIEWS } from "../shared/spacedReview";
 import { registerBackup } from "./backup";
 import { passwordRecoveryEnabled } from "./resetEmail";
 import { markStudied } from "./practice";
+import {
+  LIST_PAGE_SIZE,
+  MAX_LIST_PAGE,
+  type CourseSummary,
+} from "../shared/listing";
+import { readHistory } from "./history";
 
 export type Context = {
   Variables: {
@@ -88,6 +94,22 @@ const conflict = () =>
       "A newer revision was saved on another device. Your changes have been kept here.",
   });
 const courseSchema = z.string().trim().max(100);
+const organizationFields = {
+  course: courseSchema.optional(),
+  pinned: z.boolean().optional(),
+  archived: z.boolean().optional(),
+};
+function listPage(value?: string) {
+  const page = Number(value ?? 0);
+  if (!Number.isInteger(page) || page < 0 || page > MAX_LIST_PAGE)
+    throw new HTTPException(400, { message: "Invalid page." });
+  return page;
+}
+function archiveFilter(value = "false") {
+  if (value !== "true" && value !== "false")
+    throw new HTTPException(400, { message: "Invalid archive filter." });
+  return value === "true";
+}
 export function createApp(
   config: Config,
   connectDatabase: (url: string) => Database,
@@ -196,9 +218,7 @@ export function createApp(
   });
   registerBackup(app);
   app.get("/api/sets", async (c) => {
-    const page = Number(c.req.query("page") ?? 0);
-    if (!Number.isInteger(page) || page < 0 || page > 1_000_000)
-      throw new HTTPException(400, { message: "Invalid page." });
+    const page = listPage(c.req.query("page"));
     const kind = c.req.query("kind");
     if (kind && kind !== "exam" && kind !== "flashcards")
       throw new HTTPException(400, { message: "Invalid kind." });
@@ -206,10 +226,8 @@ export function createApp(
     const course = c.req.query("course");
     const storedCourse =
       course === undefined ? null : encodeStorage(schema(courseSchema, course));
-    const archived = c.req.query("archived") ?? "false";
+    const archived = archiveFilter(c.req.query("archived"));
     const sort = c.req.query("sort") ?? "updated";
-    if (!["true", "false"].includes(archived))
-      throw new HTTPException(400, { message: "Invalid archive filter." });
     if (!["updated", "studied"].includes(sort))
       throw new HTTPException(400, { message: "Invalid sort order." });
     const db = c.get("db");
@@ -228,13 +246,13 @@ export function createApp(
           FROM "Attempt" a WHERE a."studySetId" = s.id AND a."userId" = ${userId}
           AND a.status IN ('in_progress', 'reviewing') ORDER BY a."updatedAt" DESC, a.id ASC LIMIT 1) AS continuation
         FROM "StudySet" s WHERE s."userId" = ${userId}
-          AND s.archived = ${archived === "true"}
+          AND s.archived = ${archived}
           AND (${kind ?? null}::text IS NULL OR s.kind = ${kind ?? null}::text)
           AND (${storedCourse}::text IS NULL OR s.course = ${storedCourse}::text)
           AND strpos(lower(s.title), lower(${search})) > 0
         ORDER BY s.pinned DESC,
           CASE WHEN ${sort} = 'studied' THEN s."lastStudiedAt" END DESC NULLS LAST,
-          s."updatedAt" DESC, s.id ASC LIMIT 31 OFFSET ${page * 30}
+          s."updatedAt" DESC, s.id ASC LIMIT ${LIST_PAGE_SIZE + 1} OFFSET ${page * LIST_PAGE_SIZE}
       `,
       db.$queryRaw<{ course: string }[]>`
         SELECT DISTINCT course FROM "StudySet"
@@ -243,12 +261,78 @@ export function createApp(
     ]);
     return c.json(
       decodeStorage({
-        items: sets.slice(0, 30),
-        hasMore: sets.length > 30,
+        items: sets.slice(0, LIST_PAGE_SIZE),
+        hasMore: sets.length > LIST_PAGE_SIZE,
         page,
         courses: courses.map(({ course }) => course),
       }),
     );
+  });
+  app.get("/api/sets/courses", async (c) => {
+    const page = listPage(c.req.query("page"));
+    const archived = archiveFilter(c.req.query("archived"));
+    const rows = await c.get("db").$queryRaw<CourseSummary[]>`
+      SELECT course, COUNT(*)::int AS count
+      FROM "StudySet" WHERE "userId" = ${c.get("userId")} AND archived = ${archived}
+      GROUP BY course ORDER BY (course = ''), lower(course), course
+      LIMIT ${LIST_PAGE_SIZE + 1} OFFSET ${page * LIST_PAGE_SIZE}
+    `;
+    return c.json(
+      decodeStorage({
+        items: rows.slice(0, LIST_PAGE_SIZE),
+        hasMore: rows.length > LIST_PAGE_SIZE,
+      }),
+    );
+  });
+  app.patch("/api/sets/organization", async (c) => {
+    const { ids, course, pinned, archived } = schema(
+      z
+        .strictObject({
+          ids: z
+            .array(z.string().min(1).max(64))
+            .min(1)
+            .max(LIST_PAGE_SIZE)
+            .refine(
+              (ids) => new Set(ids).size === ids.length,
+              "Select distinct study sets.",
+            ),
+          ...organizationFields,
+        })
+        .refine(
+          ({ course, pinned, archived }) =>
+            course !== undefined ||
+            pinned !== undefined ||
+            archived !== undefined,
+          "Choose a field to update.",
+        ),
+      await read(c.req.raw),
+    );
+    const userId = c.get("userId");
+    const storedCourse = encodeStorage(course);
+    const changed = await c.get("db").$transaction(async (tx) => {
+      // Lock in a stable order so an overlapping batch cannot change membership mid-update.
+      const owned = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "StudySet" WHERE "userId" = ${userId}
+        AND id IN (SELECT jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb))
+        ORDER BY id FOR UPDATE
+      `;
+      if (owned.length !== ids.length) throw unavailable();
+      return tx.studySet.updateMany({
+        where: {
+          userId,
+          id: { in: ids },
+          OR: [
+            ...(storedCourse === undefined
+              ? []
+              : [{ course: { not: storedCourse } }]),
+            ...(pinned === undefined ? [] : [{ pinned: !pinned }]),
+            ...(archived === undefined ? [] : [{ archived: !archived }]),
+          ],
+        },
+        data: { course: storedCourse, pinned, archived },
+      });
+    });
+    return c.json({ updated: changed.count });
   });
   app.post("/api/sets", async (c) => {
     const content = validateContent(await read(c.req.raw, MAX_BYTES));
@@ -304,11 +388,7 @@ export function createApp(
   app.patch("/api/sets/:id/organization", async (c) => {
     const { course, ...flags } = schema(
       z
-        .strictObject({
-          course: courseSchema.optional(),
-          pinned: z.boolean().optional(),
-          archived: z.boolean().optional(),
-        })
+        .strictObject(organizationFields)
         .refine((fields) => Object.keys(fields).length > 0, "Choose a field to update."),
       await read(c.req.raw),
     );
@@ -411,41 +491,28 @@ export function createApp(
     });
     return c.json(decodeStorage(attempt), 201);
   });
-  app.get("/api/attempts", async (c) => {
-    const page = Number(c.req.query("page") ?? 0);
-    if (!Number.isInteger(page) || page < 0)
-      throw new HTTPException(400, { message: "Invalid page." });
-    const status = c.req.query("status") ?? "all";
-    if (
-      !["all", "attention", "in_progress", "reviewing", "completed"].includes(
-        status,
-      )
-    )
-      throw new HTTPException(400, { message: "Invalid status filter." });
-    const search = encodeStorage((c.req.query("search") ?? "").slice(0, 200));
-    const setId = c.req.query("setId");
-    const attempts = await c.get("db").$queryRaw<
-      (Omit<Attempt, "snapshot" | "responses"> & {
-        title: string;
-        kind: string;
-      })[]
-    >`
-      SELECT id, "userId", "studySetId", "sourceAttemptId", status, position, result, "reviewMode",
-        revision, "startedAt", "updatedAt", "completedAt", snapshot->>'title' AS title,
-        snapshot->>'kind' AS kind
-      FROM "Attempt" WHERE "userId" = ${c.get("userId")}
-      AND (${status} = 'all' OR status = ${status} OR (${status} = 'attention' AND status <> 'completed'))
-      AND (${setId ?? null}::text IS NULL OR "studySetId" = ${setId ?? null}::text)
-      AND strpos(lower(snapshot->>'title'), lower(${search})) > 0
-      ORDER BY "startedAt" DESC, id ASC LIMIT 31 OFFSET ${page * 30}
-    `;
-    return c.json(
-      decodeStorage({
-        items: attempts.slice(0, 30),
-        hasMore: attempts.length > 30,
-      }),
-    );
-  });
+  app.get("/api/attempts", async (c) =>
+    c.json(
+      await readHistory(
+        c.get("db"),
+        c.get("userId"),
+        c.req.query(),
+        listPage(c.req.query("page")),
+        false,
+      ),
+    ),
+  );
+  app.get("/api/attempts/groups", async (c) =>
+    c.json(
+      await readHistory(
+        c.get("db"),
+        c.get("userId"),
+        c.req.query(),
+        listPage(c.req.query("page")),
+        true,
+      ),
+    ),
+  );
   app.get("/api/attempts/:id", async (c) => {
     const attempt = await c.get("db").attempt.findFirst({
       where: { id: c.req.param("id"), userId: c.get("userId") },
