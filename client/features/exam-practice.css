@@ -1,0 +1,266 @@
+.exam-frame > .focus-main {
+  min-width: 0;
+}
+
+.exam-progress {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.exam-progress-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+}
+
+.exam-progress-header > .button {
+  margin-inline-start: auto;
+}
+
+.exam-timer .mono {
+  margin-inline-start: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.exam-frame .question-stage {
+  min-width: 0;
+  scroll-margin-top: 16px;
+}
+
+.exam-frame .question-heading {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px 8px;
+  margin: 8px 0 20px;
+}
+
+.exam-question-meta h2 {
+  width: fit-content;
+  font-size: 15px;
+  line-height: 24px;
+  font-weight: 500;
+}
+
+.exam-question-meta p {
+  font-size: 14px;
+}
+
+.exam-frame .study-prompt {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.exam-flag[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.exam-flag[aria-pressed="true"] svg {
+  fill: currentColor;
+}
+
+.exam-map-rail {
+  display: none;
+}
+
+.exam-map {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.exam-map label {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.exam-map select {
+  min-width: 0;
+  width: 100%;
+}
+
+.exam-map-list {
+  display: grid;
+  gap: 6px;
+  max-height: min(55dvh, 32rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  margin: 4px -4px 0;
+  padding: 4px;
+  scroll-padding-block: 4px;
+}
+
+.exam-map-list .button {
+  display: grid;
+  grid-template-columns: 3ch minmax(0, 1fr) auto;
+  justify-content: stretch;
+  width: 100%;
+  gap: 8px;
+  padding-inline: 10px;
+  text-align: left;
+  white-space: normal;
+}
+
+.exam-map-list [aria-current="step"] {
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.exam-map-list svg {
+  color: var(--accent);
+}
+
+.exam-frame .results-intro {
+  margin-bottom: 24px;
+}
+
+.exam-frame .score-summary {
+  margin: 16px 0;
+}
+
+.exam-frame .answer-review {
+  margin-top: 16px;
+  padding-top: 16px;
+}
+
+.exam-answer-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.exam-answer-comparison > section {
+  min-width: 0;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-study);
+}
+
+.exam-answer-comparison h3 {
+  margin: 0 0 8px;
+}
+
+.exam-frame .answer-option .study-content {
+  min-width: 0;
+}
+
+.exam-frame .study-footer {
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px 0 max(12px, env(safe-area-inset-bottom));
+}
+
+.exam-frame .study-footer .actions {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.exam-submit-summary {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.exam-unanswered-list {
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+@media (min-width: 1200px) {
+  .exam-frame {
+    display: grid;
+    grid-template-columns: minmax(48px, 1fr) minmax(0, 800px) 32px 220px minmax(
+        48px,
+        1fr
+      );
+    grid-template-rows: auto 1fr;
+  }
+
+  .exam-frame > .focus-header {
+    grid-column: 1 / -1;
+  }
+
+  .exam-frame > .focus-main {
+    grid-column: 2;
+    padding-inline: 0;
+  }
+
+  .exam-progress-header:empty,
+  .exam-progress-header > .exam-picker {
+    display: none;
+  }
+
+  .exam-progress-header > .exam-timer {
+    margin-inline-start: auto;
+  }
+
+  .exam-map-rail {
+    display: block;
+    grid-column: 4;
+    align-self: start;
+    position: sticky;
+    top: 16px;
+    margin-top: 32px;
+    padding-inline-start: 16px;
+    border-inline-start: 1px solid var(--divider);
+  }
+
+  .exam-map-rail h2 {
+    font-size: 17px;
+    line-height: 24px;
+    margin-bottom: 12px;
+  }
+}
+
+@media (max-width: 767px) {
+  .exam-frame .study-footer {
+    flex-wrap: nowrap;
+  }
+
+  .exam-frame .study-footer .button {
+    min-width: 0;
+    padding-inline: 10px;
+    white-space: normal;
+    text-align: center;
+  }
+
+  .exam-frame .study-footer .actions {
+    flex-wrap: wrap;
+  }
+
+  .exam-frame:has(:is(.written-answer, .practice-annotations textarea):focus)
+    .study-footer {
+    position: static;
+  }
+}
+
+@media (max-width: 600px) {
+  .exam-answer-comparison {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-height: 640px) {
+  .exam-frame .study-footer {
+    position: sticky;
+  }
+
+  .exam-frame .focus-main :is(input, textarea, select, button, summary) {
+    scroll-margin-bottom: 110px;
+  }
+}
+
+@media (max-height: 639px) {
+  .exam-frame .study-footer {
+    position: static;
+  }
+
+  .exam-map-rail {
+    position: static;
+  }
+}

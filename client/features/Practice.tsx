@@ -7,7 +7,7 @@ import {
   useNavigate,
   useParams,
 } from "react-router-dom";
-import { ArrowLeft, ArrowRight } from "lucide-react";
+import { ArrowLeft, ArrowRight, Flag, List } from "lucide-react";
 import { itemsOf, type Question } from "../../shared/content";
 import {
   answered,
@@ -44,6 +44,12 @@ import { RubricList } from "../components/RubricList";
 import { ScoreSummary } from "../components/ScoreSummary";
 import { FlashcardStage } from "../components/FlashcardStage";
 import { PracticeTimer } from "../components/PracticeTimer";
+import {
+  ExamQuestionMap,
+  type ExamMapItem,
+  type ExamQuestionStatus,
+} from "../components/ExamQuestionMap";
+import "./exam-practice.css";
 export function PracticePage() {
   const { id } = useParams();
   const { data, error, loading, refresh } = useResource<Attempt>(
@@ -69,6 +75,7 @@ function Practice({ initial }: { initial: Attempt }) {
   const state = useAttempt(initial, user!.id);
   const { attempt, position, responses, busy, dirty } = state;
   const doc = attempt.snapshot;
+  const isExam = doc.kind === "exam";
   const items = itemsOf(doc);
   const item = items[position];
   const r = own(responses, item.id);
@@ -97,10 +104,30 @@ function Practice({ initial }: { initial: Attempt }) {
     previous?: Response;
   }>();
   const resultHeading = useRef<HTMLHeadingElement>(null);
+  const questionHeading = useRef<HTMLHeadingElement>(null);
+  const questionStage = useRef<HTMLElement>(null);
+  const moving = useRef(false);
+  const [focusQuestion, setFocusQuestion] = useState<number>();
   useEffect(() => {
-    if (attempt.status !== "in_progress")
-      requestAnimationFrame(() => resultHeading.current?.focus());
+    if (attempt.status === "in_progress" || !state.recoveryReady) return;
+    const frame = requestAnimationFrame(() => resultHeading.current?.focus());
+    return () => cancelAnimationFrame(frame);
   }, [attempt.status, state.recoveryReady]);
+  useEffect(() => {
+    if (focusQuestion !== position || navOpen || confirm) return;
+    const frame = requestAnimationFrame(() => {
+      questionHeading.current?.focus({ preventScroll: true });
+      const top = questionStage.current?.getBoundingClientRect().top;
+      if (top !== undefined && (top < 0 || top > window.innerHeight / 2)) {
+        questionStage.current?.scrollIntoView({
+          block: "start",
+          behavior: "instant",
+        });
+      }
+      setFocusQuestion(undefined);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusQuestion, position, navOpen, confirm]);
   useUnsaved(dirty);
   const blocker = useBlocker(dirty);
   function response(
@@ -121,7 +148,24 @@ function Practice({ initial }: { initial: Attempt }) {
     state.change(values, position, immediate);
   }
   async function go(index: number) {
-    if (await state.moveTo(index)) setNavOpen(false);
+    if (!isExam) {
+      if (await state.moveTo(index)) setNavOpen(false);
+      return;
+    }
+    if (moving.current) return;
+    moving.current = true;
+    try {
+      if (await state.moveTo(index)) {
+        setNavOpen(false);
+        setConfirm(false);
+        setFocusQuestion(index);
+      }
+    } finally {
+      moving.current = false;
+    }
+  }
+  function toggleFlag() {
+    updateResponse({ ...r, flagged: r?.flagged ? undefined : true });
   }
   async function rate(rating: "known" | "review_again") {
     if (busy) return;
@@ -152,20 +196,31 @@ function Practice({ initial }: { initial: Attempt }) {
   const eligible =
     attempt.status === "completed" ? mistakes(doc, responses) : null;
   const retryCount = eligible ? itemsOf(eligible).length : 0;
-  const flagged = retrySnapshot(doc, responses, "flagged");
-  const uncertain = retrySnapshot(doc, responses, "low_confidence");
-  const unanswered =
-    doc.kind === "exam"
-      ? doc.questions.filter((q) => !answered(q, own(responses, q.id))).length
-      : doc.cards.filter((c) => !own(responses, c.id)?.rating).length;
-  const pending =
-    doc.kind === "exam"
-      ? doc.questions.flatMap((q, i) =>
-          q.type === "written" && writtenScore(q, own(responses, q.id)) === null
-            ? [i]
-            : [],
-        )
-      : [];
+  const flagged =
+    !isExam || !inProgress ? retrySnapshot(doc, responses, "flagged") : null;
+  const uncertain =
+    !isExam || !inProgress
+      ? retrySnapshot(doc, responses, "low_confidence")
+      : null;
+  const incorrectIds = new Set(
+    eligible ? itemsOf(eligible).map((i) => i.id) : [],
+  );
+  const examMapItems = isExam
+    ? doc.questions.map((question): ExamMapItem => {
+        const answer = own(responses, question.id);
+        return {
+          id: question.id,
+          status: examQuestionStatus(question, answer, attempt.status),
+          flagged: answer?.flagged === true,
+          lowConfidence: answer?.confidence === "low",
+          mistake: incorrectIds.has(question.id),
+        };
+      })
+    : [];
+  const pending = examMapItems.flatMap(({ status }, index) =>
+    status === "Needs assessment" ? [index] : [],
+  );
+  const nextPending = pending.find((i) => i > position) ?? pending[0];
   const writtenAnswered =
     doc.kind === "exam"
       ? doc.questions.filter(
@@ -181,9 +236,11 @@ function Practice({ initial }: { initial: Attempt }) {
       ? [i]
       : [],
   );
-  const incorrectIds = new Set(
-    eligible ? itemsOf(eligible).map((i) => i.id) : [],
-  );
+  const unanswered = omissions.length;
+  const flaggedCount = examMapItems.filter(
+    (question) => question.flagged,
+  ).length;
+  const firstMistake = examMapItems.findIndex((question) => question.mistake);
   const confirmedPending =
     attempt.result?.selfAssessed?.pendingCount ?? pending.length;
   function recoveryDownload(checkpoint = state.localCopy()) {
@@ -204,19 +261,19 @@ function Practice({ initial }: { initial: Attempt }) {
       "practice-answer-recovery.json",
     );
   }
-  function itemState(it: typeof item) {
-    if ("type" in it) {
-      if (!answered(it, own(responses, it.id))) return "Unanswered";
-      if (attempt.status === "reviewing" && it.type === "written")
-        return writtenScore(it, own(responses, it.id)) === null
-          ? "Needs assessment"
-          : "Assessed";
-      if (attempt.status === "completed")
-        return incorrectIds.has(it.id) ? "Needs review" : "Correct";
-      return "Answered";
-    }
+  function cardState(it: typeof item) {
     return own(responses, it.id)?.rating ? "Rated" : "Unreviewed";
   }
+  const questionMap = isExam ? (
+    <ExamQuestionMap
+      key={attempt.status}
+      questions={examMapItems}
+      position={position}
+      stage={attempt.status}
+      disabled={state.submitting}
+      onJump={(index) => void go(index)}
+    />
+  ) : null;
   if (!state.recoveryReady)
     return (
       <div className="focus-loading">
@@ -224,7 +281,7 @@ function Practice({ initial }: { initial: Attempt }) {
       </div>
     );
   return (
-    <div className="practice-frame">
+    <div className={`practice-frame${isExam ? " exam-frame" : ""}`}>
       <header className="focus-header frosted-navigation">
         <div className="focus-brand">
           <Link className="button secondary" to={returnTo}>
@@ -243,36 +300,70 @@ function Practice({ initial }: { initial: Attempt }) {
           }
         />
       </header>
-      <div className="focus-main">
-        {inProgress && attempt.settings?.timerMinutes ? (
-          <PracticeTimer
-            startedAt={attempt.startedAt}
-            minutes={attempt.settings.timerMinutes}
-          />
-        ) : null}
-        <div className="practice-progress">
-          <progress
-            max={items.length}
-            value={position + 1}
-            aria-label="Study position"
-          />
-          <Button variant="quiet" onClick={() => setNavOpen(true)}>
-            {doc.kind === "exam" ? "Question" : "Card"} {position + 1} of{" "}
-            {items.length}
-          </Button>
-        </div>
-        <p role="status" className="muted completion-count">
-          {items.length - unanswered}{" "}
-          {doc.kind === "exam" ? "answered" : "rated"} · {unanswered}{" "}
-          {doc.kind === "exam" ? "unanswered" : "unreviewed"}
-        </p>
-        <span className="sr-only" aria-live="polite">
-          {doc.kind === "exam" ? "Question" : "Card"} {position + 1} of{" "}
-          {items.length}.{" "}
-          {attempt.status === "completed"
-            ? "Assessment and saving complete."
-            : ""}
-        </span>
+      <main className="focus-main">
+        {isExam ? (
+          <div className="exam-progress">
+            <div className="exam-progress-header">
+              {inProgress ? (
+                <p role="status" className="muted">
+                  <strong>
+                    {items.length - unanswered} of {items.length} answered
+                  </strong>
+                </p>
+              ) : null}
+              {inProgress && attempt.settings?.timerMinutes ? (
+                <PracticeTimer
+                  startedAt={attempt.startedAt}
+                  minutes={attempt.settings.timerMinutes}
+                  exam
+                />
+              ) : null}
+              <Button
+                className="exam-picker"
+                aria-haspopup="dialog"
+                onClick={() => setNavOpen(true)}
+              >
+                <List size={16} aria-hidden="true" />
+                Question {position + 1} of {items.length}
+              </Button>
+            </div>
+            {inProgress ? (
+              <progress
+                max={items.length}
+                value={items.length - unanswered}
+                aria-label="Questions answered"
+              />
+            ) : null}
+          </div>
+        ) : (
+          <>
+            {inProgress && attempt.settings?.timerMinutes ? (
+              <PracticeTimer
+                startedAt={attempt.startedAt}
+                minutes={attempt.settings.timerMinutes}
+              />
+            ) : null}
+            <div className="practice-progress">
+              <progress
+                max={items.length}
+                value={position + 1}
+                aria-label="Study position"
+              />
+              <Button variant="quiet" onClick={() => setNavOpen(true)}>
+                Card {position + 1} of {items.length}
+              </Button>
+            </div>
+            <p role="status" className="muted completion-count">
+              {items.length - unanswered} rated · {unanswered} unreviewed
+            </p>
+            <span className="sr-only" aria-live="polite">
+              Card {position + 1} of {items.length}.{" "}
+              {attempt.status === "completed"
+                ? "Assessment and saving complete."
+                : ""}
+            </span>
+          </>
+        )}
         <ErrorNotice error={state.error} />
         {state.error ? (
           <Notice tone="warning">
@@ -323,13 +414,15 @@ function Practice({ initial }: { initial: Attempt }) {
                 ? "Your submitted answers are frozen. Compare your written work with the reference answers."
                 : "Your results are saved to your account."}
             </p>
-            <p className="muted">
-              This attempt uses the original version of the set from when you
-              began.
-              {attempt.sourceAttemptId
-                ? " This retry score covers only its subset of items."
-                : ""}
-            </p>
+            {attempt.status === "completed" ? (
+              <p className="muted">
+                This attempt uses the original version of the set from when you
+                began.
+                {attempt.sourceAttemptId
+                  ? " This retry score covers only its subset of items."
+                  : ""}
+              </p>
+            ) : null}
             <ScoreSummary result={attempt.result} />
             {attempt.status === "reviewing" ? (
               <div className="assessment-queue">
@@ -338,33 +431,16 @@ function Practice({ initial }: { initial: Attempt }) {
                   written answers assessed. Written score is provisional until
                   all assessments save.
                 </p>
-                <Button
-                  variant="primary"
-                  disabled={state.submitting || !pending.length}
-                  onClick={() => {
-                    const next =
-                      pending.find((i) => i > position) ?? pending[0];
-                    if (next !== undefined) void go(next);
-                  }}
-                >
-                  Next unassessed answer
-                </Button>
               </div>
             ) : null}
-            {attempt.status === "completed" && retryCount ? (
+            {attempt.status === "completed" && retryCount && !isExam ? (
               <details>
-                <summary>
-                  {retryCount}{" "}
-                  {doc.kind === "exam"
-                    ? "incorrect, partial-credit or unanswered questions"
-                    : "cards to review again"}
-                </summary>
+                <summary>{retryCount} cards to review again</summary>
                 <div className="question-nav">
                   {items.map((it, i) =>
                     incorrectIds.has(it.id) ? (
                       <Button key={it.id} onClick={() => void go(i)}>
-                        {doc.kind === "exam" ? "Question" : "Card"} {i + 1} ·{" "}
-                        {itemState(it)}
+                        Card {i + 1} · {cardState(it)}
                       </Button>
                     ) : null,
                   )}
@@ -385,6 +461,11 @@ function Practice({ initial }: { initial: Attempt }) {
                       ? "No mistakes to retry"
                       : "No cards rated Review again"}
                 </Button>
+                {firstMistake >= 0 ? (
+                  <Button onClick={() => void go(firstMistake)}>
+                    Review first mistake
+                  </Button>
+                ) : null}
                 {doc.kind === "flashcards" && unanswered > 0 ? (
                   <Button
                     busy={retrying}
@@ -423,23 +504,33 @@ function Practice({ initial }: { initial: Attempt }) {
           </section>
         ) : null}
         {doc.kind === "exam" && "type" in item ? (
-          <section className="question-stage" key={item.id}>
+          <section className="question-stage" ref={questionStage} key={item.id}>
             <div className="question-heading">
-              <span className="question-number mono">
-                {String(position + 1).padStart(2, "0")}
-              </span>
-              <div>
+              <div className="exam-question-meta">
+                <h2 className="mono" ref={questionHeading} tabIndex={-1}>
+                  Question {position + 1} of {items.length}
+                </h2>
                 <p className="muted">
                   {item.type === "single_choice"
                     ? "Single choice"
                     : "Written answer"}
                 </p>
-                <div className="study-prompt">
-                  <StudyContent
-                    source={item.prompt}
-                    label={`question ${position + 1}`}
-                  />
-                </div>
+              </div>
+              <Button
+                variant="quiet"
+                className="exam-flag"
+                aria-pressed={r?.flagged ?? false}
+                disabled={state.submitting}
+                onClick={toggleFlag}
+              >
+                <Flag size={16} aria-hidden="true" />
+                Flag for later
+              </Button>
+              <div className="study-prompt">
+                <StudyContent
+                  source={item.prompt}
+                  label={`question ${position + 1}`}
+                />
               </div>
             </div>
             {item.type === "single_choice" ? (
@@ -461,14 +552,14 @@ function Practice({ initial }: { initial: Attempt }) {
                       onChange={() => response({ selectedOptionId: option.id })}
                     />
                     <span className="mono">{String.fromCharCode(65 + i)}.</span>
-                    <StudyContent
-                      source={option.text}
-                      label={`option ${i + 1}`}
-                    />
+                    <StudyContent source={option.text} />
                     {!inProgress && option.id === item.answer ? (
                       <span className="result-label positive">
                         Correct answer
                       </span>
+                    ) : null}
+                    {!inProgress && r?.selectedOptionId === option.id ? (
+                      <span className="result-label">Your choice</span>
                     ) : null}
                   </label>
                 ))}
@@ -478,22 +569,17 @@ function Practice({ initial }: { initial: Attempt }) {
                   </Button>
                 ) : null}
               </fieldset>
-            ) : (
+            ) : inProgress ? (
               <>
                 <Field
                   label="Your answer"
-                  hint={
-                    inProgress
-                      ? "Write your reasoning. Markdown and LaTeX are supported."
-                      : undefined
-                  }
+                  hint="Write your reasoning. Markdown and LaTeX are supported."
                 >
                   <NotationEditor
                     key={item.id}
                     answerType={item.answerType}
                     className="written-answer"
-                    rows={inProgress ? undefined : 3}
-                    readOnly={!inProgress || state.submitting}
+                    readOnly={state.submitting}
                     value={r?.text ?? ""}
                     onChange={(value) => response({ text: value }, false)}
                   />
@@ -505,7 +591,7 @@ function Practice({ initial }: { initial: Attempt }) {
                   </details>
                 ) : null}
               </>
-            )}
+            ) : null}
             {!inProgress ? (
               <AnswerReview
                 question={item}
@@ -583,18 +669,20 @@ function Practice({ initial }: { initial: Attempt }) {
           key={`annotations-${item.id}`}
         >
           <summary>
-            Study notes and flags{r?.flagged ? " · Flagged" : ""}
+            {isExam
+              ? "Study notes and confidence"
+              : `Study notes and flags${r?.flagged ? " · Flagged" : ""}`}
           </summary>
           <div className="stack">
-            <Button
-              aria-pressed={r?.flagged ?? false}
-              disabled={state.submitting}
-              onClick={() =>
-                updateResponse({ ...r, flagged: r?.flagged ? undefined : true })
-              }
-            >
-              Flag for later
-            </Button>
+            {!isExam ? (
+              <Button
+                aria-pressed={r?.flagged ?? false}
+                disabled={state.submitting}
+                onClick={toggleFlag}
+              >
+                Flag for later
+              </Button>
+            ) : null}
             <Field label="Confidence">
               <select
                 value={r?.confidence ?? ""}
@@ -645,15 +733,15 @@ function Practice({ initial }: { initial: Attempt }) {
             <ArrowLeft size={16} />
             Previous
           </Button>
-          <span className="mono muted footer-count">
-            {position + 1} / {items.length}
-          </span>
+          {!isExam ? (
+            <span className="mono muted footer-count">
+              {position + 1} / {items.length}
+            </span>
+          ) : null}
           <div className="actions">
             {position < items.length - 1 ? (
               <Button
-                variant={
-                  inProgress && doc.kind === "exam" ? "primary" : "secondary"
-                }
+                variant={inProgress && isExam ? "primary" : "secondary"}
                 disabled={state.submitting}
                 onClick={() => void go(position + 1)}
               >
@@ -664,14 +752,23 @@ function Practice({ initial }: { initial: Attempt }) {
             {inProgress ? (
               <Button
                 variant={
-                  doc.kind === "exam" && position === items.length - 1
+                  isExam && position === items.length - 1
                     ? "primary"
                     : "secondary"
                 }
                 disabled={busy}
                 onClick={() => setConfirm(true)}
               >
-                {doc.kind === "exam" ? "Submit exam" : "Finish session"}
+                {isExam ? "Review and submit" : "Finish session"}
+              </Button>
+            ) : null}
+            {attempt.status === "reviewing" ? (
+              <Button
+                variant="primary"
+                disabled={state.submitting || nextPending === undefined}
+                onClick={() => void go(nextPending)}
+              >
+                Next unassessed answer
               </Button>
             ) : null}
           </div>
@@ -706,7 +803,13 @@ function Practice({ initial }: { initial: Attempt }) {
           </Field>
           <ErrorNotice error={recoveryFileError} />
         </details>
-      </div>
+      </main>
+      {isExam ? (
+        <aside className="exam-map-rail" aria-labelledby="exam-map-heading">
+          <h2 id="exam-map-heading">Question navigation</h2>
+          {navOpen ? null : questionMap}
+        </aside>
+      ) : null}
       {confirm ? (
         <Dialog
           title={
@@ -716,24 +819,27 @@ function Practice({ initial }: { initial: Attempt }) {
             if (!state.submitting) setConfirm(false);
           }}
         >
-          <p>
-            {items.length - unanswered}{" "}
-            {doc.kind === "exam" ? "answered" : "rated"}, {unanswered}{" "}
-            {doc.kind === "exam" ? "unanswered" : "unreviewed"}.
-          </p>
-          <p>
-            {unanswered}{" "}
-            {doc.kind === "exam"
-              ? "unanswered questions will receive zero. Submitted answers cannot be changed."
-              : "unreviewed cards will be included in your summary. Only cards rated Review again appear in a retry."}
-          </p>
-          {doc.kind === "exam" &&
-          doc.questions.some((q) => q.type === "written") ? (
+          <div className={isExam ? "exam-submit-summary" : undefined}>
             <p>
-              Single-choice answers are scored automatically. You will mark
-              answered written questions next.
+              {items.length - unanswered} {isExam ? "answered" : "rated"},{" "}
+              {unanswered}{" "}
+              {isExam ? `unanswered, ${flaggedCount} flagged` : "unreviewed"}.
             </p>
-          ) : null}
+            {isExam ? (
+              <p>
+                {unanswered ? "Unanswered questions earn zero points. " : ""}
+                Submitting locks your answers.
+                {writtenAnswered
+                  ? " You’ll assess your written answers next."
+                  : ""}
+              </p>
+            ) : (
+              <p>
+                {unanswered} unreviewed cards will be included in your summary.
+                Only cards rated Review again appear in a retry.
+              </p>
+            )}
+          </div>
           {omissions.length ? (
             <details>
               <summary>
@@ -741,13 +847,16 @@ function Practice({ initial }: { initial: Attempt }) {
                   ? "Review unanswered questions"
                   : "Review unreviewed cards"}
               </summary>
-              <div className="question-nav">
+              <div
+                className={`question-nav${isExam ? " exam-unanswered-list" : ""}`}
+              >
                 {omissions.map((i) => (
                   <Button
                     key={items[i].id}
                     disabled={state.submitting}
                     onClick={async () => {
-                      if (await state.moveTo(i)) setConfirm(false);
+                      if (isExam) await go(i);
+                      else if (await state.moveTo(i)) setConfirm(false);
                     }}
                   >
                     {doc.kind === "exam" ? "Question" : "Card"} {i + 1}
@@ -774,12 +883,12 @@ function Practice({ initial }: { initial: Attempt }) {
               Download recovery copy
             </Button>
           ) : null}
-          <div className="actions">
+          <div className={isExam ? "actions dialog-footer" : "actions"}>
             <Button
               disabled={state.submitting}
               onClick={() => setConfirm(false)}
             >
-              Keep studying
+              {isExam ? "Return to exam" : "Keep studying"}
             </Button>
             <Button
               variant="primary"
@@ -788,22 +897,18 @@ function Practice({ initial }: { initial: Attempt }) {
                 if (await state.submit()) setConfirm(false);
               }}
             >
-              {doc.kind === "exam"
-                ? doc.questions.some((q) => q.type === "written")
-                  ? "Submit and review answers"
-                  : "Submit exam"
-                : "Finish session"}
+              {isExam ? "Submit exam" : "Finish session"}
             </Button>
           </div>
         </Dialog>
       ) : null}
-      {navOpen ? (
-        <Dialog
-          title={
-            doc.kind === "exam" ? "Question navigation" : "Card navigation"
-          }
-          onClose={() => setNavOpen(false)}
-        >
+      {navOpen && isExam ? (
+        <Dialog title="Question navigation" onClose={() => setNavOpen(false)}>
+          {questionMap}
+          <ErrorNotice error={state.error} />
+        </Dialog>
+      ) : navOpen ? (
+        <Dialog title="Card navigation" onClose={() => setNavOpen(false)}>
           <Tabs
             label="Navigation filter"
             value={navFilter}
@@ -812,11 +917,8 @@ function Practice({ initial }: { initial: Attempt }) {
               { value: "all", label: "All" },
               {
                 value: "unanswered",
-                label: doc.kind === "exam" ? "Unanswered" : "Unreviewed",
+                label: "Unreviewed",
               },
-              ...(attempt.status === "reviewing"
-                ? [{ value: "pending", label: "Needs assessment" }]
-                : []),
               ...(attempt.status === "completed"
                 ? [{ value: "mistakes", label: "Needs review" }]
                 : []),
@@ -835,7 +937,6 @@ function Practice({ initial }: { initial: Attempt }) {
             {items.map((it, i) =>
               navFilter === "all" ||
               (navFilter === "unanswered" && omissions.includes(i)) ||
-              (navFilter === "pending" && pending.includes(i)) ||
               (navFilter === "mistakes" && incorrectIds.has(it.id)) ||
               (navFilter === "flagged" && own(responses, it.id)?.flagged) ||
               (navFilter === "uncertain" &&
@@ -846,7 +947,7 @@ function Practice({ initial }: { initial: Attempt }) {
                   key={it.id}
                   onClick={() => void go(i)}
                 >
-                  {i + 1} · {itemState(it)}
+                  {i + 1} · {cardState(it)}
                 </Button>
               ) : null,
             )}
@@ -969,6 +1070,24 @@ function PracticeRecoveryDialog({
     </Dialog>
   );
 }
+function examQuestionStatus(
+  question: Question,
+  response: Response | undefined,
+  stage: Attempt["status"],
+): ExamQuestionStatus {
+  if (!answered(question, response)) return "Unanswered";
+  if (stage === "in_progress") return "Answered";
+  if (question.type === "single_choice")
+    return response?.selectedOptionId === question.answer
+      ? "Correct"
+      : "Incorrect";
+  const score = writtenScore(question, response);
+  if (score === null) return "Needs assessment";
+  if (stage === "reviewing") return "Assessed";
+  if (score === maximum(question)) return "Correct";
+  return score > 0 ? "Partial credit" : "Incorrect";
+}
+
 function AnswerReview({
   question: q,
   response: r,
@@ -988,18 +1107,30 @@ function AnswerReview({
       : writtenScore(q, r);
   return (
     <section className="answer-review">
+      {q.type === "written" ? (
+        <div className="exam-answer-comparison">
+          <section aria-label="Your submitted answer">
+            <h3>Your answer</h3>
+            {answered(q, r) ? (
+              <StudyContent source={r?.text} label="your submitted answer" />
+            ) : (
+              <p className="muted">Unanswered</p>
+            )}
+          </section>
+          <section aria-label="Reference answer">
+            <h3>Reference answer</h3>
+            <StudyContent source={q.answer} />
+          </section>
+        </div>
+      ) : null}
       <h2>
         {score === null
           ? "Self-assessment needed"
-          : `${score} / ${maximum(q)} points${q.type === "written" ? " · self-assessed" : ""}`}
+          : `${score} / ${maximum(q)} points${q.type === "written" && answered(q, r) ? " · self-assessed" : ""}`}
       </h2>
       {q.type === "written" ? (
-        <>
-          <h3>Reference answer</h3>
-          <StudyContent source={q.answer} label="reference answer" />
-          {!answered(q, r) ? (
-            <Notice>Unanswered · zero points</Notice>
-          ) : q.rubric ? (
+        answered(q, r) ? (
+          q.rubric ? (
             <RubricList
               criteria={q.rubric}
               mode={reviewing ? "assess" : "review"}
@@ -1022,6 +1153,7 @@ function AnswerReview({
             <div className="actions">
               <Button
                 disabled={busy}
+                aria-pressed={r?.selfAssessment === "incorrect"}
                 onClick={() =>
                   onChange({ text: r!.text!, selfAssessment: "incorrect" })
                 }
@@ -1030,6 +1162,7 @@ function AnswerReview({
               </Button>
               <Button
                 disabled={busy}
+                aria-pressed={r?.selfAssessment === "correct"}
                 onClick={() =>
                   onChange({ text: r!.text!, selfAssessment: "correct" })
                 }
@@ -1043,8 +1176,8 @@ function AnswerReview({
                 ? "Marked correct"
                 : "Marked incorrect"}
             </p>
-          )}
-        </>
+          )
+        ) : null
       ) : (
         <p>
           {!r?.selectedOptionId

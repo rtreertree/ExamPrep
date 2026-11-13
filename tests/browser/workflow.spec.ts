@@ -161,8 +161,8 @@ test("complete study workflow, recovery, partial credit, flashcards, responsive 
   await page.screenshot({ path: "/tmp/examprep-library.png" });
   await page.getByRole("button", { name: /Practice/ }).click();
   await page
-    .getByRole("dialog", { name: "Set up practice" })
-    .getByRole("button", { name: "Start practice", exact: true })
+    .getByRole("dialog", { name: "Set up exam" })
+    .getByRole("button", { name: "Start exam", exact: true })
     .click();
   await page.locator("input[type=radio][value=b]").check();
   await expect(
@@ -192,10 +192,12 @@ test("complete study workflow, recovery, partial credit, flashcards, responsive 
   await expect(
     page.getByText("Saved to your account", { exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Submit exam", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Review and submit", exact: true })
+    .click();
   await page
     .getByRole("dialog")
-    .getByRole("button", { name: "Submit and review answers", exact: true })
+    .getByRole("button", { name: "Submit exam", exact: true })
     .click();
   await expect(
     page.getByRole("heading", { name: "Finish self-assessment" }),
@@ -225,7 +227,7 @@ test("complete study workflow, recovery, partial credit, flashcards, responsive 
   await page.screenshot({ path: "/tmp/examprep-results.png", fullPage: true });
   await page.getByRole("button", { name: "Retry mistakes (1)" }).click();
   await expect(
-    page.getByRole("button", { name: "Question 1 of 1" }),
+    page.getByRole("heading", { name: "Question 1 of 1" }),
   ).toBeVisible();
   await expect(page.getByLabel("Your answer", { exact: true })).toHaveValue("");
   await page.getByRole("link", { name: "Library", exact: true }).click();
@@ -345,7 +347,7 @@ test("complete study workflow, recovery, partial credit, flashcards, responsive 
     page.getByRole("heading", { name: "Exam results", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Submit exam", exact: true }),
+    page.getByRole("button", { name: "Review and submit", exact: true }),
   ).toHaveCount(0);
   expect(
     consoleErrors.filter((message) => !(throttled && message.includes("429"))),
@@ -613,11 +615,11 @@ test("multi-digit rubric awards commit on blur; invalid math warns and long form
       page.getByText("Saved to your account", { exact: true }),
     ).toBeVisible();
     await page
-      .getByRole("button", { name: "Submit exam", exact: true })
+      .getByRole("button", { name: "Review and submit", exact: true })
       .click();
     await page
       .getByRole("dialog")
-      .getByRole("button", { name: "Submit and review answers", exact: true })
+      .getByRole("button", { name: "Submit exam", exact: true })
       .click();
     await expect(
       page.getByRole("heading", { name: "Finish self-assessment" }),

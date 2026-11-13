@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { itemsOf } from "../../shared/content";
 import type { PracticeSettings } from "../../shared/attempts";
 import { api, type StudySet } from "../lib/api";
 import { Button, Dialog, ErrorNotice, Field } from "./ui";
+import "./practice-setup.css";
 
 export function PracticeSetup({
   set,
@@ -23,7 +24,10 @@ export function PracticeSetup({
       returnTo={returnTo}
     />
   ) : (
-    <Dialog title="Set up practice" onClose={onClose}>
+    <Dialog
+      title={set.kind === "exam" ? "Set up exam" : "Set up practice"}
+      onClose={onClose}
+    >
       <ErrorNotice error={new Error("This set has no items to practice.")} />
     </Dialog>
   );
@@ -46,7 +50,20 @@ function PracticeSetupForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error>();
   const navigate = useNavigate();
-  const kind = set.kind === "exam" ? "questions" : "cards";
+  const presetId = useId();
+  const isExam = set.kind === "exam";
+  const kind = isExam ? "questions" : "cards";
+  const quickCount = Math.min(total, 10);
+  const quickSelected =
+    Number(count) === quickCount && order === "shuffled" && minutes === "";
+  const simulationSelected =
+    Number(count) === total && order === "original" && Number(minutes) === 30;
+
+  function selectQuickPractice() {
+    setCount(String(quickCount));
+    setOrder("shuffled");
+    setMinutes("");
+  }
 
   async function start() {
     if (busy) return;
@@ -72,7 +89,7 @@ function PracticeSetupForm({
 
   return (
     <Dialog
-      title="Set up practice"
+      title={isExam ? "Set up exam" : "Set up practice"}
       onClose={() => {
         if (!busy) onClose();
       }}
@@ -80,19 +97,27 @@ function PracticeSetupForm({
       <p>
         {set.title} · {total} {kind} available
       </p>
-      <div className="actions" aria-label="Practice presets">
-        <Button
-          disabled={busy}
-          onClick={() => {
-            setCount(String(Math.min(total, 10)));
-            setOrder("shuffled");
-            setMinutes("");
-          }}
-        >
-          Quick practice
-        </Button>
-        {set.kind === "exam" ? (
+      {isExam ? (
+        <div className="exam-presets" role="group" aria-label="Exam presets">
           <Button
+            aria-labelledby={`${presetId}-quick`}
+            aria-describedby={`${presetId}-quick-description`}
+            aria-pressed={quickSelected}
+            className={quickSelected ? "selected" : ""}
+            disabled={busy}
+            onClick={selectQuickPractice}
+          >
+            <strong id={`${presetId}-quick`}>Quick practice</strong>
+            <span id={`${presetId}-quick-description`} className="muted">
+              {quickCount} shuffled{" "}
+              {quickCount === 1 ? "question" : "questions"} · No timer
+            </span>
+          </Button>
+          <Button
+            aria-labelledby={`${presetId}-simulation`}
+            aria-describedby={`${presetId}-simulation-description`}
+            aria-pressed={simulationSelected}
+            className={simulationSelected ? "selected" : ""}
             disabled={busy}
             onClick={() => {
               setCount(String(total));
@@ -100,10 +125,19 @@ function PracticeSetupForm({
               setMinutes("30");
             }}
           >
-            Exam simulation
+            <strong id={`${presetId}-simulation`}>Exam simulation</strong>
+            <span id={`${presetId}-simulation-description`} className="muted">
+              Full set in original order · 30 minutes
+            </span>
           </Button>
-        ) : null}
-      </div>
+        </div>
+      ) : (
+        <div className="actions" aria-label="Practice presets">
+          <Button disabled={busy} onClick={selectQuickPractice}>
+            Quick practice
+          </Button>
+        </div>
+      )}
       <form
         className="stack"
         onSubmit={(event) => {
@@ -157,7 +191,7 @@ function PracticeSetupForm({
             Cancel
           </Button>
           <Button type="submit" variant="primary" busy={busy}>
-            Start practice
+            {isExam ? "Start exam" : "Start practice"}
           </Button>
         </div>
       </form>

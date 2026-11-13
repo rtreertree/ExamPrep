@@ -339,6 +339,8 @@ for (const mode of ["Next", "Previous", "picker"] as const) {
     page,
   }) => {
     const api = await fixture(page, written, mode === "Previous" ? 1 : 0);
+    if (mode === "picker")
+      await page.setViewportSize({ width: 390, height: 844 });
     const hold = gate();
     let calls = 0;
     api.delay = async () => {
@@ -351,7 +353,7 @@ for (const mode of ["Next", "Previous", "picker"] as const) {
     if (mode === "picker") {
       await page.getByRole("button", { name: "Question 1 of 3" }).click();
       await page
-        .getByRole("button", { name: "2 · Unanswered", exact: true })
+        .getByRole("button", { name: "Question 2, Unanswered", exact: true })
         .click({ noWaitAfter: true });
       // Dialog remains open until the save confirms; close it to continue editing.
       await page
@@ -366,8 +368,8 @@ for (const mode of ["Next", "Previous", "picker"] as const) {
     hold.release();
     const target = mode === "Previous" ? 0 : 1;
     await expect(
-      page.getByRole("button", { name: `Question ${target + 1} of 3` }),
-    ).toBeVisible();
+      page.getByRole("heading", { name: `Question ${target + 1} of 3` }),
+    ).toBeFocused();
     await expect(
       page.getByText("Saved to your account", { exact: true }),
     ).toBeVisible();
@@ -422,35 +424,51 @@ test("submission failure retains context; guided assessment commits partial rubr
 }) => {
   const api = await fixture(page, mixed);
   api.attempt().responses = {
+    choice: { selectedOptionId: "a", flagged: true },
     binary: { text: "My reasoning" },
     rubric: { text: "My steps" },
   };
   api.submitFailures = 1;
   await page.goto("/practice/attempt");
-  await page.getByRole("button", { name: "Submit exam", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Review and submit", exact: true })
+    .click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog).toContainText("2 answered, 2 unanswered");
+  await expect(dialog).toContainText("3 answered, 1 unanswered, 1 flagged");
+  await expect(dialog).toContainText(
+    "You’ll assess your written answers next.",
+  );
   await dialog.getByText("Review unanswered questions").click();
   await expect(
     dialog.getByRole("button", { name: "Question 4", exact: true }),
   ).toBeVisible();
-  await dialog
-    .getByRole("button", { name: "Submit and review answers" })
-    .click();
+  await dialog.getByRole("button", { name: "Submit exam" }).click();
   await expect(dialog.getByRole("alert")).toContainText("Submission failed");
   expect(api.attempt().status).toBe("in_progress");
-  await dialog
-    .getByRole("button", { name: "Submit and review answers" })
-    .click();
+  await dialog.getByRole("button", { name: "Submit exam" }).click();
   await expect(
     page.getByRole("heading", { name: "Finish self-assessment" }),
   ).toBeFocused();
   await expect(
-    page.getByRole("button", { name: "Question 2 of 4" }),
+    page.getByRole("heading", { name: "Question 2 of 4" }),
   ).toBeVisible();
-  await expect(page.getByLabel("Your answer", { exact: true })).toHaveValue(
-    "My reasoning",
+  await expect(
+    page.getByRole("region", { name: "Your submitted answer" }),
+  ).toContainText("My reasoning");
+  await expect(
+    page.getByRole("region", { name: "Reference answer" }),
+  ).toContainText("Reference one");
+  const comparison = page.locator(".exam-answer-comparison");
+  await expect(comparison).toHaveCSS(
+    "grid-template-columns",
+    /^\d+(?:\.\d+)?px \d+(?:\.\d+)?px$/,
   );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(comparison).toHaveCSS(
+    "grid-template-columns",
+    /^\d+(?:\.\d+)?px$/,
+  );
+  await page.setViewportSize({ width: 1536, height: 1024 });
   await page
     .getByRole("button", { name: "Correct · 1 point", exact: true })
     .click();
@@ -464,7 +482,7 @@ test("submission failure retains context; guided assessment commits partial rubr
     animations: "disabled",
   });
   const one = page.getByLabel("Points for criterion 1 (maximum 1)");
-  await one.fill("0");
+  await one.fill("1");
   await one.press("Enter");
   await expect(
     page.getByText("Saved to your account", { exact: true }),
@@ -479,16 +497,51 @@ test("submission failure retains context; guided assessment commits partial rubr
   await expect(
     page.getByRole("heading", { name: "Finish self-assessment" }),
   ).toBeVisible();
+  await expect(
+    page.getByText("1 of 2 written answers assessed.", { exact: false }),
+  ).toBeVisible();
   hold.release();
   await expect(
     page.getByRole("heading", { name: "Exam results" }),
   ).toBeFocused();
   expect(api.attempt().status).toBe("completed");
   expect(api.attempt().result?.selfAssessed).toEqual({
-    earnedPoints: 1,
+    earnedPoints: 2,
     maxPoints: 5,
     pendingCount: 0,
   });
+  const map = page.getByRole("complementary", { name: "Question navigation" });
+  await expect(
+    map.getByRole("button", { name: "Question 1, Incorrect, flagged" }),
+  ).toBeVisible();
+  await expect(
+    map.getByRole("button", { name: "Question 2, Correct" }),
+  ).toBeVisible();
+  await expect(
+    map.getByRole("button", { name: "Question 3, Partial credit" }),
+  ).toBeVisible();
+  await expect(
+    map.getByRole("button", { name: "Question 4, Unanswered" }),
+  ).toBeVisible();
+  await map.getByLabel("Filter questions").selectOption("Needs review");
+  await expect(map.getByRole("button")).toHaveCount(3);
+  await page.getByRole("button", { name: "Review first mistake" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Question 1 of 4" }),
+  ).toBeFocused();
+  await expect(page.getByText("Your choice", { exact: true })).toBeVisible();
+  await expect(page.getByText("Correct answer", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Retry mistakes (3)" }).click();
+  await expect(page).toHaveURL(/\/practice\/fresh$/);
+  await expect(
+    page.getByRole("progressbar", { name: "Questions answered" }),
+  ).toHaveJSProperty("value", 0);
+  const retry = api.retries.at(-1);
+  expect(retry?.mode).toBe("mistakes");
+  expect(
+    retry?.snapshot.kind === "exam" &&
+      retry.snapshot.questions.map(({ id }) => id),
+  ).toEqual(["choice", "rubric", "blank"]);
 });
 test("library resumes without duplication and import has a bounded preview and explicit destination", async ({
   page,
@@ -834,7 +887,7 @@ test("library resumes the saved snapshot and remembers course filters across pra
     .toEqual(["Reliable"]);
   await page.getByRole("link", { name: "Resume — question 3 of 3" }).click();
   await expect(
-    page.getByRole("button", { name: "Question 3 of 3" }),
+    page.getByRole("heading", { name: "Question 3 of 3" }),
   ).toBeVisible();
   await page.getByRole("link", { name: "Library", exact: true }).click();
   await expect(page.getByLabel("Course", { exact: true })).toHaveValue(
@@ -979,8 +1032,8 @@ test("editor locates invalid fields, recovers unfinished content, and saves befo
     .getByRole("button", { name: "Save and practice", exact: true })
     .click();
   await page
-    .getByRole("dialog", { name: "Set up practice" })
-    .getByRole("button", { name: "Start practice", exact: true })
+    .getByRole("dialog", { name: "Set up exam" })
+    .getByRole("button", { name: "Start exam", exact: true })
     .click();
   await expect(page).toHaveURL(/\/practice\/fresh$/);
   const saved = api.set().content;

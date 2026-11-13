@@ -317,10 +317,10 @@ test("practice saves notation responses and leaves submitted answers read-only",
   api.attempt().status = "reviewing";
   api.attempt().responses.math.selfAssessment = "correct";
   await page.reload();
-  await expect(page.getByLabel("Your answer", { exact: true })).toHaveAttribute(
-    "readonly",
-    "",
-  );
+  await expect(
+    page.getByRole("region", { name: "Your submitted answer" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Your answer", { exact: true })).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Chemistry keyboard", exact: true }),
   ).toHaveCount(0);

@@ -165,16 +165,26 @@ test("starts a configured snapshot and resumes with the same order and timer", a
   const api = await fixture(page);
   await page.goto("/");
   await page.getByRole("button", { name: "Practice", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Set up practice" });
-  await dialog.getByRole("button", { name: "Exam simulation" }).click();
+  const dialog = page.getByRole("dialog", { name: "Set up exam" });
+  const simulation = dialog.getByRole("button", { name: "Exam simulation" });
+  const quick = dialog.getByRole("button", { name: "Quick practice" });
+  await expect(dialog.getByLabel("Number of questions")).toHaveValue("3");
+  await expect(dialog.getByLabel("Item order")).toHaveValue("original");
+  await expect(dialog.getByLabel("Timer in minutes")).toHaveValue("");
+  await expect(simulation).toHaveAttribute("aria-pressed", "false");
+  await simulation.click();
+  await expect(simulation).toHaveAttribute("aria-pressed", "true");
   await expect(dialog.getByLabel("Timer in minutes")).toHaveValue("30");
-  await dialog.getByRole("button", { name: "Quick practice" }).click();
+  await quick.click();
+  await expect(quick).toHaveAttribute("aria-pressed", "true");
+  await expect(simulation).toHaveAttribute("aria-pressed", "false");
   await expect(dialog.getByLabel("Item order")).toHaveValue("shuffled");
   await dialog.getByLabel("Number of questions").fill("2");
   await dialog.getByLabel("Timer in minutes").fill("5");
-  await dialog.getByRole("button", { name: "Start practice" }).click();
+  await expect(quick).toHaveAttribute("aria-pressed", "false");
+  await dialog.getByRole("button", { name: "Start exam" }).click();
   await expect(
-    page.getByRole("button", { name: "Question 1 of 2" }),
+    page.getByRole("heading", { name: "Question 1 of 2" }),
   ).toBeVisible();
   await expect(page.getByText("Second prompt", { exact: true })).toBeVisible();
   await expect(page.getByRole("timer")).toBeVisible();
@@ -186,6 +196,167 @@ test("starts a configured snapshot and resumes with the same order and timer", a
   await page.reload();
   await expect(page.getByText("Second prompt", { exact: true })).toBeVisible();
   await expect(page.getByRole("timer")).toBeVisible();
+});
+
+test("tracks answered progress and flags across the desktop map and mobile picker", async ({
+  page,
+}) => {
+  const api = await fixture(page);
+  const attempt = api.records.get("original")!;
+  if (attempt.snapshot.kind !== "exam") throw new Error("Expected exam");
+  attempt.snapshot = {
+    ...attempt.snapshot,
+    questions: [
+      {
+        id: "choice",
+        type: "single_choice",
+        prompt: `Evaluate ${"a very long prompt ".repeat(24)}\n\n$$\n${"x^2+".repeat(35)}1\n$$`,
+        options: [
+          { id: "a", text: "One" },
+          { id: "b", text: "Two" },
+        ],
+        answer: "a",
+      },
+      ...attempt.snapshot.questions.slice(1),
+    ],
+  };
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1200, height: 840 });
+  await page.goto("/practice/original");
+  const map = page.getByRole("complementary", { name: "Question navigation" });
+  const progress = page.getByRole("progressbar", {
+    name: "Questions answered",
+  });
+  const flag = page.getByRole("button", { name: "Flag for later" });
+  const picker = page.getByRole("button", { name: /^Question \d of 3$/ });
+  const footer = page.locator(".study-footer");
+  await expect(map).toBeVisible();
+  await expect(picker).toBeHidden();
+  await expect(footer.getByRole("button", { name: "Next" })).toBeInViewport();
+  await expect(progress).toHaveJSProperty("value", 0);
+  await expect(
+    map.getByRole("button", { name: "Question 1, Unanswered" }),
+  ).toHaveAttribute("aria-current", "step");
+  await page.getByRole("radio", { name: /One/ }).check();
+  await expect(progress).toHaveJSProperty("value", 1);
+  await page.getByRole("button", { name: "Clear answer" }).click();
+  await expect(progress).toHaveJSProperty("value", 0);
+  await map.getByLabel("Filter questions").selectOption("Flagged");
+  await expect(map.getByRole("status")).toHaveText(
+    "No questions match this filter.",
+  );
+  await flag.click();
+  await expect(
+    map.getByRole("button", { name: "Question 1, Unanswered, flagged" }),
+  ).toBeVisible();
+  await map.getByLabel("Filter questions").selectOption("All questions");
+  await page.setViewportSize({ width: 1536, height: 1024 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: "/tmp/examprep-exam-desktop.png" });
+  await map
+    .getByRole("button", { name: "Question 3, Unanswered" })
+    .press("Enter");
+  await expect(
+    page.getByRole("heading", { name: "Question 3 of 3" }),
+  ).toBeFocused();
+  await expect(
+    page.getByRole("button", { name: "Review and submit" }),
+  ).toHaveClass(/\bprimary\b/);
+  await expect.poll(() => attempt.position).toBe(2);
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Question 3 of 3" }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 1199, height: 840 });
+  await expect(map).toBeHidden();
+  await expect(picker).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(footer).toHaveCSS("position", "sticky");
+  await page.getByLabel("Your answer", { exact: true }).focus();
+  await expect(footer).toHaveCSS("position", "static");
+  await picker.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "Question navigation" });
+  await dialog.getByLabel("Filter questions").selectOption("Flagged");
+  await page.screenshot({ path: "/tmp/examprep-exam-mobile-picker.png" });
+  await dialog
+    .getByRole("button", { name: "Question 1, Unanswered, flagged" })
+    .press("Enter");
+  await expect(dialog).toBeHidden();
+  await expect(
+    page.getByRole("heading", { name: "Question 1 of 3" }),
+  ).toBeFocused();
+  await expect(flag).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".katex-display")).toBeVisible();
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 540 });
+    await expect(footer).toHaveCSS("position", "static");
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(width);
+  }
+});
+
+test("keeps the exam open at timer expiry and makes unanswered questions reachable from confirmation", async ({
+  page,
+}) => {
+  const api = await fixture(page);
+  const attempt = api.records.get("original")!;
+  await page.clock.install({ time: new Date(attempt.startedAt) });
+  attempt.settings = { count: 3, order: "original", timerMinutes: 2 };
+  await page.goto("/practice/original");
+  await expect(page.getByRole("timer")).toBeVisible();
+  await page.clock.fastForward(61_000);
+  await expect(page.getByText("One minute or less remaining.")).toBeAttached();
+  await page.clock.fastForward(60_000);
+  await expect(
+    page.getByText("Time is up. Submit when you’re ready."),
+  ).toBeVisible();
+  expect(attempt.status).toBe("in_progress");
+  await page.getByRole("button", { name: "Flag for later" }).click();
+  await page.getByRole("button", { name: "Review and submit" }).click();
+  const dialog = page.getByRole("dialog", { name: "Submit this exam?" });
+  await expect(dialog).toContainText("0 answered, 3 unanswered, 1 flagged");
+  await expect(dialog).toContainText("Unanswered questions earn zero points.");
+  await expect(dialog).not.toContainText("assess your written answers");
+  await dialog.getByText("Review unanswered questions").click();
+  await dialog.getByRole("button", { name: "Question 2", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(
+    page.getByRole("heading", { name: "Question 2 of 3" }),
+  ).toBeFocused();
+  await page
+    .getByLabel("Your answer", { exact: true })
+    .fill("Written after expiry");
+  await expect(
+    page.getByRole("progressbar", { name: "Questions answered" }),
+  ).toHaveJSProperty("value", 1);
+  expect(attempt.status).toBe("in_progress");
+});
+
+test("keeps the mobile picker open with a save error and retries the jump", async ({
+  page,
+}) => {
+  const api = await fixture(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/practice/original");
+  api.outage(true);
+  await page
+    .getByLabel("Your answer", { exact: true })
+    .fill("Keep this answer");
+  await page.getByRole("button", { name: "Question 1 of 3" }).click();
+  const dialog = page.getByRole("dialog", { name: "Question navigation" });
+  const jump = dialog.getByRole("button", { name: "Question 2, Unanswered" });
+  await jump.click();
+  await expect(dialog.getByRole("alert")).toContainText("Simulated outage");
+  api.outage(false);
+  await jump.click();
+  await expect(dialog).toBeHidden();
+  await expect(
+    page.getByRole("heading", { name: "Question 2 of 3" }),
+  ).toBeFocused();
+  expect(api.records.get("original")?.responses.one.text).toBe(
+    "Keep this answer",
+  );
 });
 
 test("restores a failed answer after a reload and asks before replacing a newer answer", async ({
@@ -260,8 +431,8 @@ test("keeps completed scores fixed while saving private notes and flagging a ret
   Object.assign(attempt, grade(attempt.snapshot, attempt.responses));
   const originalScore = attempt.result;
   await page.goto("/practice/original");
-  await page.getByText("Study notes and flags", { exact: true }).click();
   await page.getByRole("button", { name: "Flag for later" }).click();
+  await page.getByText("Study notes and confidence", { exact: true }).click();
   await page.getByLabel("Confidence", { exact: true }).selectOption("low");
   await page
     .getByLabel("Private study note")
@@ -281,7 +452,7 @@ test("keeps completed scores fixed while saving private notes and flagging a ret
     .getByRole("button", { name: "Practice flagged items (1)" })
     .click();
   await expect(
-    page.getByRole("button", { name: "Question 1 of 1" }),
+    page.getByRole("heading", { name: "Question 1 of 1" }),
   ).toBeVisible();
   expect(api.records.get("retry")?.responses).toEqual({});
 });
