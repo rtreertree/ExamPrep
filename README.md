@@ -13,7 +13,7 @@ Use Node **24.14+** (the tested version is 24.14.0) and npm. All direct dependen
 5. `npm run build`
 6. `npm start` and open [Exam Prep](http://127.0.0.1:8787).
 
-Register an account in the application. There are no seeded users, sets, or simulated saves. The supplied examples are available in Create → Create with your AI, or under `public/downloads`.
+Register an account in the application. There are no seeded users, sets, or simulated saves. Use Create → Create with your AI to customize and copy a complete prompt. Bring the generated JSON or file back to preview and save. The optional instructions and examples are also available under `public/downloads`.
 
 For frontend development, set `BETTER_AUTH_URL=http://127.0.0.1:5173` in `.env`, run `npm run dev:api` and `npm run dev` in separate terminals, and visit port 5173. Vite proxies `/api` to port 8787. Use one consistent hostname; cookies and trusted origins depend on it. Rebuild and restore the public origin when testing the packaged app.
 

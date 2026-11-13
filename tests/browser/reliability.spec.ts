@@ -196,7 +196,7 @@ async function fixture(page: Page, doc = written, position = 0) {
           page: Number(url.searchParams.get("page")),
         };
       }
-    } else if (path === "/api/sets/set") {
+    } else if (path === `/api/sets/${set.id}`) {
       if (req.method() === "PUT") {
         const content = validateContent(req.postDataJSON().content);
         set = {
@@ -553,11 +553,14 @@ test("AI settings survive closing, remain account scoped, and search filters rea
     .getByRole("button", { name: "Create with your AI", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "1. Download the instructions" }),
+    page.getByRole("heading", { name: "Create with your AI" }),
   ).toBeVisible();
   await page
     .getByLabel("Topic or source material")
     .fill("Private student A notes");
+  await page.getByText("Customize", { exact: true }).click();
+  await page.getByLabel("Set exact counts by question type").check();
+  await page.getByLabel("True/false questions").fill("3");
   await page.getByRole("button", { name: "Close dialog", exact: true }).click();
   await page.getByText("Create", { exact: true }).click();
   await page
@@ -566,6 +569,9 @@ test("AI settings survive closing, remain account scoped, and search filters rea
   await expect(page.getByLabel("Topic or source material")).toHaveValue(
     "Private student A notes",
   );
+  await expect(page.getByLabel("Total questions")).toHaveText("13 questions");
+  await page.getByText("Customize", { exact: true }).click();
+  await expect(page.getByLabel("True/false questions")).toHaveValue("3");
   api.userId = "student-b";
   await page.reload();
   await page.getByText("Create", { exact: true }).click();
@@ -573,6 +579,7 @@ test("AI settings survive closing, remain account scoped, and search filters rea
     .getByRole("button", { name: "Create with your AI", exact: true })
     .click();
   await expect(page.getByLabel("Topic or source material")).toHaveValue("");
+  await expect(page.getByLabel("Item count")).toHaveValue("10");
   await page.getByRole("button", { name: "Close dialog", exact: true }).click();
   let release!: () => void;
   api.listDelay = new Promise<void>((resolve) => {
@@ -611,6 +618,168 @@ test("AI settings survive closing, remain account scoped, and search filters rea
     )
     .toBe(true);
 });
+
+test("AI helper copies a custom exam and imports its result for editing", async ({
+  context,
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const api = await fixture(page);
+  await page.goto("/");
+  await page.getByText("Create", { exact: true }).click();
+  await page
+    .getByRole("button", { name: "Create with your AI", exact: true })
+    .click();
+  const helper = page.getByRole("dialog", { name: "Create with your AI" });
+  const copy = helper.getByRole("button", { name: "Copy prompt" });
+  await expect(copy).toBeDisabled();
+  await helper.getByLabel("Topic or source material").fill("Photosynthesis");
+  const count = helper.getByLabel("Item count");
+  await count.fill("501");
+  await expect(copy).toBeDisabled();
+  await count.fill("4.5");
+  await expect(copy).toBeDisabled();
+  await count.fill("3");
+  await expect(copy).toBeEnabled();
+  await helper.getByText("Customize", { exact: true }).click();
+  const exact = helper.getByLabel("Set exact counts by question type");
+  await exact.check();
+  const choice = helper.getByLabel("Multiple-choice questions");
+  const trueFalse = helper.getByLabel("True/false questions");
+  const writtenCount = helper.getByLabel("Written questions");
+  await expect(choice).toHaveValue("2");
+  await expect(writtenCount).toHaveValue("1");
+  await writtenCount.fill("0");
+  await expect(helper.getByLabel("Written-question rubrics")).toHaveCount(0);
+  await choice.fill("0");
+  await expect(copy).toBeDisabled();
+  await trueFalse.fill("2");
+  await writtenCount.fill("500");
+  await expect(helper.getByLabel("Total questions")).toHaveText(
+    "502 questions",
+  );
+  await expect(copy).toBeDisabled();
+  await writtenCount.fill("1");
+  await helper.getByLabel("Written-question rubrics").selectOption("always");
+  await helper.getByLabel("Answer explanations").selectOption("detailed");
+  await exact.uncheck();
+  await expect(count).toHaveValue("3");
+  await exact.check();
+  const kind = helper.getByLabel("Content type");
+  await kind.selectOption("flashcards");
+  await expect(count).toHaveValue("3");
+  await kind.selectOption("exam");
+  await expect(trueFalse).toHaveValue("2");
+  await expect(helper.getByLabel("Total questions")).toHaveText("3 questions");
+  await helper.screenshot({
+    path: "/tmp/examprep-ai-library-desktop.png",
+    animations: "disabled",
+  });
+  await copy.click();
+  const prompt = await page.evaluate(() => navigator.clipboard.readText());
+  expect(prompt).toContain(
+    "exactly 0 multiple-choice, 2 true/false, and 1 written questions",
+  );
+  expect(prompt).toContain("exactly two options for true and false");
+  expect(prompt).toContain("detailed explanation for each answer");
+  expect(prompt).toContain("marking rubric for every written question");
+  await helper.getByRole("button", { name: "Import AI result" }).click();
+
+  const importer = page.getByRole("dialog", { name: "Import a study set" });
+  await expect(
+    importer.getByRole("tab", { name: "Paste JSON" }),
+  ).toHaveAttribute("aria-selected", "true");
+  const input = importer.getByLabel("Study-set JSON");
+  const validate = importer.getByRole("button", {
+    name: "Validate and preview",
+  });
+  const doc = { ...mixed, title: "Photosynthesis review" };
+  const badChoice = { ...mixed.questions[0], answer: "missing" };
+  await input.fill(
+    "```json\n" + JSON.stringify({ ...doc, questions: [badChoice] }) + "\n```",
+  );
+  await validate.click();
+  await expect(
+    importer.getByText(
+      "Question 1, answer: Answer must match an option ID in this question.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await importer
+    .getByRole("button", { name: "Copy repair instructions" })
+    .click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
+    "/questions/0/answer",
+  );
+  await input.fill("```json\n" + JSON.stringify(doc) + "\n```");
+  await validate.click();
+  await expect(
+    importer.getByRole("heading", { name: doc.title }),
+  ).toBeVisible();
+  await importer.getByRole("button", { name: "Save to library" }).click();
+  expect(api.set().content).toEqual(doc);
+  await page.getByRole("link", { name: "Edit set", exact: true }).click();
+  await expect(page).toHaveURL(/\/sets\/imported\/edit$/);
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue(
+    doc.title,
+  );
+});
+
+test("mobile AI helper offers manual copying and file upload", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator.clipboard, "writeText", {
+      value: () => Promise.reject(new Error("Clipboard blocked")),
+    });
+  });
+  await fixture(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByText("Create", { exact: true }).click();
+  await page
+    .getByRole("button", { name: "Create with your AI", exact: true })
+    .click();
+  const helper = page.getByRole("dialog", { name: "Create with your AI" });
+  await helper.getByLabel("Topic or source material").fill("Calculus");
+  await expect(helper.getByLabel("Item count")).toHaveValue("10");
+  await helper.getByRole("button", { name: "Copy prompt" }).press("Enter");
+  const preview = helper.getByLabel("Prompt to copy");
+  await expect(preview).toBeFocused();
+  await expect(preview).toHaveValue(
+    /include both multiple-choice and written questions/,
+  );
+  await expect(
+    helper.getByText(
+      "Clipboard access failed. Copy the selected prompt manually.",
+    ),
+  ).toBeVisible();
+  expect(
+    await preview.evaluate((element) => {
+      const textarea = element as HTMLTextAreaElement;
+      return (
+        textarea.selectionStart === 0 &&
+        textarea.selectionEnd === textarea.value.length
+      );
+    }),
+  ).toBe(true);
+  expect(
+    await helper.evaluate((dialog) => dialog.scrollWidth <= dialog.clientWidth),
+  ).toBe(true);
+  await helper.getByRole("button", { name: "Import AI result" }).click();
+  const importer = page.getByRole("dialog", { name: "Import a study set" });
+  await importer.getByRole("tab", { name: "Choose file" }).click();
+  await importer.getByLabel("Choose a JSON file").setInputFiles({
+    name: "calculus.examprep.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(written)),
+  });
+  await expect(
+    importer.getByRole("heading", { name: written.title }),
+  ).toBeVisible();
+});
+
 test("library resumes the saved snapshot and remembers course filters across practice", async ({
   page,
 }) => {
@@ -895,15 +1064,18 @@ test("AI helper warns before losing notes when device storage is blocked", async
   await page
     .getByRole("button", { name: "Create with your AI", exact: true })
     .click();
-  await page.getByLabel("Topic or source material").fill("Keep my work");
+  await page.getByText("Customize", { exact: true }).click();
+  await page.getByLabel("Extra instructions (optional)").fill("Keep my work");
   await page.getByRole("button", { name: "Close dialog", exact: true }).click();
   await expect(
-    page.getByText("Your notes have not been saved on this device.", {
+    page.getByText("Your changes have not been saved on this device.", {
       exact: false,
     }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Keep my notes open" }).click();
-  await expect(page.getByLabel("Topic or source material")).toHaveValue(
+  const keepEditing = page.getByRole("button", { name: "Keep editing" });
+  await expect(keepEditing).toBeFocused();
+  await keepEditing.press("Enter");
+  await expect(page.getByLabel("Extra instructions (optional)")).toHaveValue(
     "Keep my work",
   );
 });

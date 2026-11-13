@@ -4,13 +4,15 @@ import {
   ArrowUpRight,
   BookOpen,
   Copy,
-  FileDown,
   PenLine,
   RefreshCw,
   Timer,
 } from "lucide-react";
 import { Link } from "react-router-dom";
-import { AIPromptGenerator } from "../components/AIPromptGenerator";
+import {
+  AIAuthoringDownloads,
+  AIPromptGenerator,
+} from "../components/AIPromptGenerator";
 import { defaultAISettings } from "../lib/aiSettings";
 import "./landing.css";
 
@@ -165,34 +167,26 @@ function StudyMaterials() {
             <h3>Use your AI</h3>
             <ol>
               <li>
-                <h4>Download the instructions</h4>
-                <p>SKILL.md gives your AI the format Exam Prep can import.</p>
-                <a
-                  className="button secondary"
-                  href="/downloads/SKILL.md"
-                  download
-                >
-                  <FileDown size={18} aria-hidden="true" /> Download SKILL.md
-                </a>
+                <h4>Choose what to study</h4>
+                <p>
+                  Add a topic or notes in the{" "}
+                  <a href="#prompt-generator">prompt builder</a>. Customize the
+                  questions or cards if you like.
+                </p>
               </li>
               <li>
-                <h4>Generate an exam or flashcards</h4>
-                <p>
-                  Fill in the <a href="#prompt-generator">prompt generator</a>.
-                  Attach SKILL.md to your AI chat or paste its contents. Then
-                  paste the generated prompt.
-                </p>
+                <h4>Copy the prompt into your AI tool</h4>
+                <p>The prompt includes the file format and your settings.</p>
               </li>
               <li>
                 <h4>Import the result</h4>
                 <p>
-                  Check the generated answers. Sign in to Exam Prep, open{" "}
-                  <strong>Library → Import</strong>, then upload the{" "}
-                  <code>.examprep.json</code> file or paste the JSON. Preview
-                  the set and save it to your library.
+                  Sign in and open <strong>Library → Import</strong>. Paste the
+                  JSON or upload the file, then review the set before saving.
                 </p>
               </li>
             </ol>
+            <AIAuthoringDownloads />
           </div>
 
           <section
@@ -202,10 +196,6 @@ function StudyMaterials() {
             tabIndex={-1}
           >
             <h3 id="landing-prompt-title">Prompt generator</h3>
-            <p className="muted">
-              Build and copy a prompt before signing in. Your notes stay in your
-              browser while you build it.
-            </p>
             <AIPromptGenerator settings={settings} onChange={setSettings} />
           </section>
         </div>

@@ -141,19 +141,21 @@ test("complete study workflow, recovery, partial credit, flashcards, responsive 
     .getByRole("button", { name: "Create with your AI", exact: true })
     .click();
   await page.getByLabel("Topic or source material").fill("Calculus");
-  await expect(page.getByLabel("Prompt to copy")).toHaveValue(
-    /Topic: Calculus/,
-  );
+  await page.getByText("Preview prompt", { exact: true }).click();
+  await expect(page.getByLabel("Prompt to copy")).toHaveValue(/"Calculus"/);
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.getByRole("button", { name: "Copy prompt", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Copied", exact: true }),
   ).toBeVisible();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
-    "Topic: Calculus",
+    "Exam Prep v1 file rules:",
   );
+  await page
+    .getByText("Optional instructions and examples", { exact: true })
+    .click();
   await expect(
-    page.getByRole("link", { name: "Download required instructions" }),
+    page.getByRole("link", { name: "Download SKILL.md" }),
   ).toHaveAttribute("href", "/downloads/SKILL.md");
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.screenshot({ path: "/tmp/examprep-library.png" });

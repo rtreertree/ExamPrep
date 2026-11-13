@@ -8,7 +8,7 @@ A university student imports an exam or flashcard file created by any AI tool or
 
 ## Core flow
 
-1. Open “Create with your AI” to copy a prompt and download the [authoring skill](skills/exam-prep-author/SKILL.md) and examples, or create content manually.
+1. Open “Create with your AI” to customize and copy a self-contained prompt, or create content manually. The [authoring skill](skills/exam-prep-author/SKILL.md) and examples are available as optional downloads.
 2. Receive a `.examprep.json` file containing an exam or flashcard deck.
 3. Sign in to Exam Prep, import the file, review its preview, and save it.
 4. Practice, resume unfinished attempts, review previous results, and retry mistakes.
@@ -20,7 +20,7 @@ A university student imports an exam or flashcard file created by any AI tool or
 | --- | --- |
 | Account | Register, sign in, sign out, view email, and change password using the current password. Only email and password are required at registration. |
 | Library | List the current user's study sets; filter exams/flashcards; create, open, edit, export, and delete a set. |
-| Create with your AI | A panel with a copyable prompt, downloadable `SKILL.md`, and example exam/flashcard files. Let students specify topic, level, language, item count, and content type. |
+| Create with your AI | A self-contained prompt with topic, level, language, item count, and content type. Advanced options include difficulty, extra instructions, and exam question mix, explanations, and rubrics. |
 | Import | Accept a file or pasted JSON; validate it; preview title, type, item count, and content before saving. Errors identify the affected field. |
 | Editor | Simple form editor for metadata and items, with Markdown/LaTeX preview. Add, remove, and reorder items. Recover local drafts after refresh or a crash; explicit Save updates the stored study set. |
 | Exams | Single-choice questions and written answers. Navigate freely, save progress, submit, and review answers and explanations. Optional written-answer rubrics support self-assessed partial credit. |
@@ -60,7 +60,7 @@ Only the fields listed for each shape are accepted. Single-choice and written qu
 
 ## Authoring assistance and draft recovery
 
-- “Create with your AI” prepares a prompt and downloadable instructions for use on the student's chosen AI platform. It makes no model calls and does not send study material to an external service.
+- “Create with your AI” prepares a self-contained prompt for the student's chosen AI platform and opens the import dialog on Paste JSON. The app makes no model calls and does not send study material to an external service.
 - Include examples of both file types and a written question with a rubric. Keep the prompt, skill, examples, and validator aligned with the same file contract.
 - Automatically preserve editor drafts on the current device, including temporarily invalid form content. Offer Restore or Discard after refresh or a crash; restoration never silently replaces the saved database version.
 - Scope drafts to the signed-in account and study set, or a local draft ID for a new set. Only offer recovery after confirming the matching account; clear that account's local drafts on explicit sign-out.

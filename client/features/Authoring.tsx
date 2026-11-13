@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Upload } from "lucide-react";
 import {
   parseContent,
@@ -13,6 +13,7 @@ import {
   defaultAISettings,
 } from "../lib/aiSettings";
 import { issuesOf, repairInstructions } from "../lib/issues";
+import { unwrapPastedJSON } from "../lib/importSource";
 import { decodeFile, MAX_BYTES } from "../../shared/json";
 import { api, type StudySet } from "../lib/api";
 import {
@@ -25,7 +26,10 @@ import {
 } from "../components/ui";
 import { StudyContent } from "../components/StudyContent";
 import { RubricList } from "../components/RubricList";
-import { AIPromptGenerator } from "../components/AIPromptGenerator";
+import {
+  AIAuthoringDownloads,
+  AIPromptGenerator,
+} from "../components/AIPromptGenerator";
 export function ContentPreview({
   content,
   selectedIndex,
@@ -134,13 +138,15 @@ export function ContentPreview({
   );
 }
 export function ImportPanel({
+  initialMode = "file",
   onClose,
   onSaved,
 }: {
+  initialMode?: "file" | "paste";
   onClose: () => void;
   onSaved: (set: StudySet) => void;
 }) {
-  const [mode, setMode] = useState("file");
+  const [mode, setMode] = useState<string>(initialMode);
   const [raw, setRaw] = useState("");
   const [preview, setPreview] = useState<Content>();
   const [error, setError] = useState<Error>();
@@ -154,12 +160,11 @@ export function ImportPanel({
     if (raw) setConfirmClose(true);
     else onClose();
   }
-  function validate(source: string) {
+  function validate(source: string, pasted = false) {
     setRaw(source);
     setRepairCopied(false);
     try {
-      setPreview(parseContent(source));
-      setRaw(source);
+      setPreview(parseContent(pasted ? unwrapPastedJSON(source) : source));
       setError(undefined);
     } catch (e) {
       setPreview(undefined);
@@ -254,7 +259,10 @@ export function ImportPanel({
           </div>
         ) : (
           <div className="stack">
-            <Field label="Study-set JSON">
+            <Field
+              label="Study-set JSON"
+              hint="Paste raw JSON or the JSON code block from your AI chat."
+            >
               <textarea
                 className="json-input"
                 spellCheck={false}
@@ -262,10 +270,14 @@ export function ImportPanel({
                 onChange={(e) => {
                   setRaw(e.target.value);
                   setPreview(undefined);
+                  setError(undefined);
+                  setRepairCopied(false);
                 }}
               />
             </Field>
-            <Button onClick={() => validate(raw)}>Validate and preview</Button>
+            <Button onClick={() => validate(raw, true)}>
+              Validate and preview
+            </Button>
           </div>
         )}
       </section>
@@ -305,7 +317,7 @@ export function ImportPanel({
       {preview ? (
         <>
           <Notice tone="success">
-            Valid file. Review the content below before saving.
+            Study set validated. Review the content below before saving.
           </Notice>
           <div className="dialog-footer actions import-save-actions">
             <Button onClick={close} disabled={busy}>
@@ -329,84 +341,84 @@ export function AIHandoffPanel({
   onImport: () => void;
 }) {
   const { user } = useAuth();
+  const userId = user!.id;
   const [initial] = useState(() => {
     try {
-      return { value: readAISettings(user!.id), failed: false };
+      return { value: readAISettings(userId), failed: false };
     } catch {
       return { value: undefined, failed: true };
     }
   });
   const [settings, setSettings] = useState(initial.value ?? defaultAISettings);
   const [storageFailed, setStorageFailed] = useState(initial.failed);
+  const serializedSettings = JSON.stringify(settings);
+  const lastSaved = useRef(serializedSettings);
+  const unsaved = storageFailed && serializedSettings !== lastSaved.current;
   const [leaving, setLeaving] = useState<"close" | "import">();
-  useUnsaved(storageFailed && !!settings.topic.trim());
+  const keepEditing = useRef<HTMLButtonElement>(null);
+  useUnsaved(unsaved);
+  useEffect(() => {
+    if (leaving && unsaved) keepEditing.current?.focus();
+  }, [leaving, unsaved]);
   useEffect(() => {
     try {
-      localStorage.setItem(aiSettingsKey(user!.id), JSON.stringify(settings));
+      localStorage.setItem(aiSettingsKey(userId), serializedSettings);
+      lastSaved.current = serializedSettings;
       setStorageFailed(false);
     } catch {
       setStorageFailed(true);
     }
-  }, [user!.id, settings]);
+  }, [userId, serializedSettings]);
   function leave(destination: "close" | "import") {
-    if (storageFailed && settings.topic.trim()) setLeaving(destination);
+    if (unsaved) setLeaving(destination);
     else if (destination === "close") onClose();
     else onImport();
   }
   return (
     <Dialog title="Create with your AI" onClose={() => leave("close")}>
       <p className="muted">
-        Use your preferred AI tool. Exam Prep does not send your material to an
-        AI service.
+        Choose what to study, copy the prompt into your AI tool, then import its
+        result here.
       </p>
-      <Notice tone={storageFailed ? "warning" : "info"}>
-        {storageFailed
-          ? "Device storage is unavailable. Keep this helper open or copy your prompt before leaving."
-          : "Unfinished settings and notes are saved on this device for your account. They are removed when you sign out."}
-      </Notice>
-      <h3>1. Download the instructions</h3>
-      <a className="button secondary" href="/downloads/SKILL.md" download>
-        Download required instructions
-      </a>
-      <details>
-        <summary>Optional examples and file-format help</summary>
-        <div className="download-links">
-          <a href="/downloads/example-exam.examprep.json" download>
-            Example exam with rubric
-          </a>
-          <a href="/downloads/example-flashcards.examprep.json" download>
-            Example flashcards
-          </a>
-          <a href="/downloads/examprep.schema.json" download>
-            JSON Schema
-          </a>
-        </div>
-      </details>
-      <h3>2. Attach the instructions to your AI tool and paste this prompt</h3>
+      {storageFailed ? (
+        <Notice tone="warning">
+          Device storage is unavailable. Copy your prompt before leaving to keep
+          your work.
+        </Notice>
+      ) : null}
       <AIPromptGenerator settings={settings} onChange={setSettings} />
-      <h3>3. Return with the generated file</h3>
-      <div className="dialog-footer">
-        <Button variant="primary" onClick={() => leave("import")}>
-          Import the generated file
-        </Button>
+      <div className="stack ai-handoff-import">
+        <div>
+          <h3>Bring back your result</h3>
+          <p className="muted">
+            Paste the JSON or upload the file to preview your study set.
+          </p>
+        </div>
+        <Button onClick={() => leave("import")}>Import AI result</Button>
       </div>
-      {leaving ? (
+      {leaving && unsaved ? (
         <Notice tone="warning">
           <p>
-            Your notes have not been saved on this device. Copy the prompt
+            Your changes have not been saved on this device. Copy the prompt
             before leaving, or return to keep working.
           </p>
           <div className="actions">
-            <Button onClick={() => setLeaving(undefined)}>
-              Keep my notes open
+            <Button ref={keepEditing} onClick={() => setLeaving(undefined)}>
+              Keep editing
             </Button>
             <Button
               onClick={() => (leaving === "close" ? onClose() : onImport())}
             >
-              Leave without saving notes
+              Leave without saving changes
             </Button>
           </div>
         </Notice>
+      ) : null}
+      <AIAuthoringDownloads />
+      {!storageFailed ? (
+        <p className="muted ai-draft-note">
+          Notes and settings are saved on this device until you sign out.
+        </p>
       ) : null}
     </Dialog>
   );

@@ -7,7 +7,7 @@ import {
   useId,
   useLayoutEffect,
   useRef,
-  type ButtonHTMLAttributes,
+  type ComponentPropsWithRef,
   type ReactNode,
 } from "react";
 import { X, ChevronDown, Check } from "lucide-react";
@@ -21,7 +21,7 @@ export function Button({
   children,
   className = "",
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
+}: ComponentPropsWithRef<"button"> & {
   variant?: "primary" | "secondary" | "quiet" | "danger";
   busy?: boolean;
 }) {

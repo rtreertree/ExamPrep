@@ -61,7 +61,7 @@ export function LibraryPage() {
     courses: string[];
   }>(`/sets?${query}`);
   const courses = resource.data?.courses ?? [];
-  const [panel, setPanel] = useState<"import" | "ai" | null>(null);
+  const [panel, setPanel] = useState<"import" | "ai" | "ai-import" | null>(null);
   const [deleting, setDeleting] = useState<StudySet>();
   const [editingCourse, setEditingCourse] = useState<StudySet>();
   const [courseName, setCourseName] = useState("");
@@ -521,8 +521,9 @@ export function LibraryPage() {
           </Button>
         </div>
       </section>
-      {panel === "import" ? (
+      {panel === "import" || panel === "ai-import" ? (
         <ImportPanel
+          initialMode={panel === "ai-import" ? "paste" : "file"}
           onClose={() => setPanel(null)}
           onSaved={(set) => {
             setSaved(set);
@@ -533,8 +534,9 @@ export function LibraryPage() {
         />
       ) : panel === "ai" ? (
         <AIHandoffPanel
+          key={user!.id}
           onClose={() => setPanel(null)}
-          onImport={() => setPanel("import")}
+          onImport={() => setPanel("ai-import")}
         />
       ) : null}
       {settingUp ? (

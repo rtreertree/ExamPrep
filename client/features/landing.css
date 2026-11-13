@@ -525,8 +525,8 @@
   color: var(--text);
 }
 
-.landing-material-guide .button {
-  margin-top: 12px;
+.landing-material-guide .ai-downloads {
+  margin-top: 24px;
 }
 
 .landing-prompt-panel {
@@ -544,28 +544,6 @@
 
 .landing-prompt-panel :is(input, textarea, select) {
   background: var(--canvas);
-}
-
-.landing-prompt-panel .form-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-  margin-block: 20px;
-}
-
-.landing-prompt-panel input[type="number"] {
-  max-width: none;
-}
-
-.landing-prompt-panel textarea {
-  min-height: 84px;
-}
-
-.landing-prompt-panel .prompt-input {
-  min-height: 152px;
-}
-
-.landing-prompt-panel > .button {
-  margin-top: 14px;
 }
 
 .landing-editor-path {
@@ -751,10 +729,6 @@
 @media (max-width: 370px) {
   .landing-header .landing-materials-link {
     display: none;
-  }
-
-  .landing-prompt-panel .form-grid {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 
