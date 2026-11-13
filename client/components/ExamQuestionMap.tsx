@@ -1,3 +1,4 @@
+import { Selector } from "./Selector";
 import { useEffect, useId, useRef, useState } from "react";
 import { Flag } from "lucide-react";
 import { Button } from "./ui";
@@ -95,15 +96,12 @@ export function ExamQuestionMap({
   return (
     <div className="exam-map">
       <label htmlFor={filterId}>Filter questions</label>
-      <select
+      <Selector
         id={filterId}
         value={selected.label}
-        onChange={(event) => setFilter(event.target.value)}
-      >
-        {filters.map(({ label }) => (
-          <option key={label}>{label}</option>
-        ))}
-      </select>
+        onValueChange={setFilter}
+        options={filters.map(({ label }) => ({ value: label, label }))}
+      />
       {visible.length ? (
         <ol ref={list} className="exam-map-list" aria-label="Questions">
           {visible.map(({ question, index }) => {

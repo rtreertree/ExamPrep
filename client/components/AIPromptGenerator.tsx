@@ -1,3 +1,4 @@
+import { Selector } from "./Selector";
 import { useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { buildAIPrompt } from "../lib/aiPrompt";
@@ -99,17 +100,16 @@ export function AIPromptGenerator({
           </Field>
         </div>
         <Field label="Content type">
-          <select
+          <Selector
             value={settings.kind}
-            onChange={(e) =>
-              update({
-                kind: e.target.value === "flashcards" ? "flashcards" : "exam",
-              })
+            onValueChange={(value) =>
+              update({ kind: value === "flashcards" ? "flashcards" : "exam" })
             }
-          >
-            <option value="exam">Exam</option>
-            <option value="flashcards">Flashcards</option>
-          </select>
+            options={[
+              { value: "exam", label: "Exam" },
+              { value: "flashcards", label: "Flashcards" },
+            ]}
+          />
         </Field>
         {mix ? (
           <div className="field">
@@ -194,53 +194,43 @@ export function AIPromptGenerator({
         ) : null}
         <div className="ai-prompt-grid">
           <Field label="Difficulty">
-            <select
+            <Selector
               value={settings.difficulty}
-              onChange={(e) =>
-                update({
-                  difficulty: e.target.value as AISettings["difficulty"],
-                })
+              onValueChange={(value) =>
+                update({ difficulty: value as AISettings["difficulty"] })
               }
-            >
-              {difficultyOptions.map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
+              options={difficultyOptions.map(([value, label]) => ({
+                value,
+                label,
+              }))}
+            />
           </Field>
           {exam ? (
             <Field label="Answer explanations">
-              <select
+              <Selector
                 value={settings.explanations}
-                onChange={(e) =>
-                  update({
-                    explanations: e.target.value as AISettings["explanations"],
-                  })
+                onValueChange={(value) =>
+                  update({ explanations: value as AISettings["explanations"] })
                 }
-              >
-                {explanationOptions.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
+                options={explanationOptions.map(([value, label]) => ({
+                  value,
+                  label,
+                }))}
+              />
             </Field>
           ) : null}
           {exam && (!mix || (mix.written ?? 0) > 0) ? (
             <Field label="Written-question rubrics">
-              <select
+              <Selector
                 value={settings.rubrics}
-                onChange={(e) =>
-                  update({ rubrics: e.target.value as AISettings["rubrics"] })
+                onValueChange={(value) =>
+                  update({ rubrics: value as AISettings["rubrics"] })
                 }
-              >
-                {rubricOptions.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
+                options={rubricOptions.map(([value, label]) => ({
+                  value,
+                  label,
+                }))}
+              />
             </Field>
           ) : null}
           <div className="ai-prompt-source">

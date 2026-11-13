@@ -1,3 +1,4 @@
+import { Selector } from "./Selector";
 import { useId, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { itemsOf } from "../../shared/content";
@@ -158,18 +159,17 @@ function PracticeSetupForm({
           />
         </Field>
         <Field label="Item order">
-          <select
+          <Selector
             value={order}
             disabled={busy}
-            onChange={(event) =>
-              setOrder(
-                event.target.value === "shuffled" ? "shuffled" : "original",
-              )
+            onValueChange={(value) =>
+              setOrder(value === "shuffled" ? "shuffled" : "original")
             }
-          >
-            <option value="original">Original order</option>
-            <option value="shuffled">Shuffled order</option>
-          </select>
+            options={[
+              { value: "original", label: "Original order" },
+              { value: "shuffled", label: "Shuffled order" },
+            ]}
+          />
         </Field>
         <Field
           label="Timer in minutes"

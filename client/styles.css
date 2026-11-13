@@ -48,8 +48,7 @@ body {
 }
 button,
 input,
-textarea,
-select {
+textarea {
   font: inherit;
 }
 button,
@@ -78,7 +77,6 @@ button,
 a,
 input,
 textarea,
-select,
 summary {
   touch-action: manipulation;
 }
@@ -538,8 +536,7 @@ small {
   min-width: 0;
 }
 input:not([type="radio"]),
-textarea,
-select {
+textarea {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--control);
@@ -559,8 +556,7 @@ textarea {
   min-height: 120px;
 }
 input:focus,
-textarea:focus,
-select:focus {
+textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px #d9f77e0a;
 }
@@ -960,7 +956,7 @@ input[type="file"] {
 .item-add-mobile {
   display: none;
 }
-.editor-page :is(input, textarea, select, math-field) {
+.editor-page :is(input, textarea, .selector-trigger, math-field) {
   scroll-margin-top: 180px;
   scroll-margin-bottom: 24px;
 }

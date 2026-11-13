@@ -1,3 +1,4 @@
+import { chooseOption } from "./selector";
 import "dotenv/config";
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { randomUUID } from "node:crypto";
@@ -496,7 +497,10 @@ test("server conflicts preserve editor work; save failures retain practice input
     await page.getByLabel("Question", { exact: true }).fill("What is $2+2$?");
     await page.getByLabel("Option A", { exact: true }).fill("3");
     await page.getByLabel("Option B", { exact: true }).fill("4");
-    await page.getByLabel("Correct answer", { exact: true }).selectOption("b");
+    await chooseOption(
+      page.getByLabel("Correct answer", { exact: true }),
+      "Option B",
+    );
     await page
       .getByRole("button", { name: "Written answer", exact: true })
       .click();

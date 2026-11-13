@@ -542,7 +542,7 @@
   margin-bottom: 8px;
 }
 
-.landing-prompt-panel :is(input, textarea, select) {
+.landing-prompt-panel :is(input, textarea, .selector-trigger) {
   background: var(--canvas);
 }
 

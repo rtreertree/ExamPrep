@@ -144,8 +144,9 @@ Organize the future UI into **foundations → primitives → study patterns → 
 | --- | --- |
 | `Button` | Label, optional leading/trailing icon, busy indicator; `primary`, `secondary`, `quiet`, `danger`. Busy preserves width and announces state. |
 | `IconButton` | Same state/target contract, mandatory accessible name and optional tooltip; no unlabeled click target. |
-| `Field` | Persistent label, input/textarea/select slot, helper, error; `default`, `focus`, `invalid`, `disabled`, `readOnly`. Placeholder never replaces label. |
+| `Field` | Persistent label, input, textarea, or `Selector` slot, helper, error; `default`, `focus`, `invalid`, `disabled`, `readOnly`. Placeholder never replaces label. |
 | `Surface` | `flat`, `raised`, `study`, `frostedNavigation`, `frostedOverlay`; owns the named fill/border/elevation/blur recipes. Study content always uses the matte variant; no per-screen glass experiments. |
+| `Selector` | Labeled fixed-choice combobox or editable suggestion field with one shared listbox. Uses a graphite surface, chevron on the fixed-choice trigger, lime active-row marker, and selected checkmark. Panel opens above or below the control, scrolls within available space, and supports long labels, disabled choices, and field validation. |
 | `Tabs` | Label row, shared moving underline, panel association, keyboard selection; reused for filters and editor modes. |
 | `Dialog` / `Sheet` | Title, content, action group, dismissal rules, focus management. Share one overlay/backdrop treatment. |
 | `Menu` | Anchored actions, keyboard movement, clear destructive item; used for set/attempt overflow and compact headers. |
@@ -176,16 +177,16 @@ Variants must express meaningful differences. Reuse one option row for every exa
 
 | Screen | Composition and main interactions |
 | --- | --- |
-| Library | “Your library”, optional supporting sentence, Import primary, Create secondary. Underline tabs All / Exams / Flashcards, then open rows. Create offers Exam, Flashcards, and Create with your AI. Overflow offers Edit, Export, Delete. Empty state: “Your first set starts here.” with Import and a quiet Create alternative. |
-| Import | Dialog/sheet: file drop/select or Paste JSON tabs, then validated content preview and Save. Use a quiet dashed upload boundary, not a giant illustration. Show errors at their fields and a concise summary. Warn on malformed math while preserving the source. |
-| Create with your AI | Sheet with topic, level, language, item count, and Exam/Flashcards choice; Copy prompt, Download skill, example downloads, and Import next step. Treat this as an external-tool handoff, not a fake AI chat. |
-| Editor | Persistent header with set title, separate local/database save states, Export secondary and Save primary. Item rail → labeled fields → Preview. Rubric authoring uses criteria plus maxima and a derived total. Restore banner appears above fields and never replaces content without an explicit choice. |
-| Exam practice | Ordinal, type label, authored prompt/math, options or written field. Navigation state reflects answered/current/unanswered, with no correctness hint before submit. Next is primary during navigation; Submit exam is secondary until the final question, where hierarchy swaps. Submit confirmation lists unanswered count. |
+| Library | “Your library”, optional supporting sentence, Import primary, Create secondary. Underline tabs All / Exams / Flashcards, then open rows. Use `Selector` for Course, Show sets, Sort library, and editable Course name suggestions. Create offers Exam, Flashcards, and Create with your AI. Overflow offers Edit, Export, Delete. Empty state: “Your first set starts here.” with Import and a quiet Create alternative. |
+| Import | Dialog/sheet: file drop/select or Paste JSON tabs, then validated content preview and Save. Use `Selector` for Preview item. Use a quiet dashed upload boundary, not a giant illustration. Show errors at their fields and a concise summary. Warn on malformed math while preserving the source. |
+| Create with your AI | Sheet with topic, level, language, item count, and `Selector` controls for Content type, Difficulty, Answer explanations, and Written-question rubrics. Reuse the same controls in the public generator. Provide Copy prompt, Download skill, example downloads, and Import next step. Treat this as an external-tool handoff, not a fake AI chat. |
+| Editor | Persistent header with set title, separate local/database save states, Export secondary and Save primary. Item rail → labeled fields → Preview. Use `Selector` for Selected item, Correct answer, and Answer type. Rubric authoring uses criteria plus maxima and a derived total. Restore banner appears above fields and never replaces content without an explicit choice. |
+| Exam practice | Ordinal, type label, authored prompt/math, options or written field. Navigation state reflects answered/current/unanswered, with no correctness hint before submit. Next is primary during navigation; Submit exam is secondary until the final question, where hierarchy swaps. Submit confirmation lists unanswered count. Use `Selector` for Item order in practice setup, Filter questions in both navigation layouts, and Confidence in practice. |
 | Flashcards | Front cue in one study object and Reveal answer primary. After reveal, the answer replaces the cue face and Review again / Known actions appear underneath; finishing remains separate. Never place ratings inside the exported card content. |
 | Results | Set title, honest status, separate automatic and self-assessed score typography, rubric point breakdowns, and answer review. Retry mistakes primary only when eligible; Back to library secondary. Pending written assessment shows “Finish self-assessment” and no finished-state celebration yet. |
-| History | Open chronological attempt rows with title, date, status, real results, and resume/review action. Retry relationships appear as a small text link. Long titles wrap. |
+| History | Open chronological attempt rows with title, date, status, real results, and resume/review action. Retry relationships appear as a small text link. Long titles wrap. Use `Selector` for mobile Attempt status. |
 | Sign in / Register | One 420 px form on a dark canvas with the faint ambient gradient. Wordmark and clear type provide identity. Persistent email/password labels, primary submit, secondary form switch. Errors stay near the relevant input. |
-| Account | Page header, email, change-password form using shared fields, sign-out action. Keep recovery/email delivery outside the current product scope. |
+| Account | Page header, email, change-password form using shared fields, sign-out action. Use `Selector` for Study text size. Keep recovery/email delivery outside the current product scope. |
 
 ## 7. Motion direction: small, quick, consistent
 
@@ -216,6 +217,7 @@ Use animation across navigation, selection, import, editing, studying, and compl
 | Library row hover/focus | Surface tint enters in 160 ms; active margin line reveals vertically; Practice arrow advances 3 px. A broad warm-white light at 5.5% may follow a fine pointer within the hovered row. | Instant fill/marker change; no pointer light. |
 | Matte flashcard hover | The same local surface light follows a fine pointer; border and shadow deepen in 240 ms. Text and the card stay fixed. Disable the light for reduced transparency. | Static surface; no pointer light. |
 | Menu / dialog / sheet | Menu fades/translates 4 px in 160 ms; dialog enters 12 px in 240 ms; phone sheet travels 24 px in 320 ms. Backdrop fades, never blurs the whole study canvas. | Opacity only, at most 80 ms. |
+| Selector | Panel fades and travels 4 px from the control in 160 ms. Chevron rotates over 160 ms, the lime marker moves between active rows over 240 ms, and the checkmark briefly appears on commit. | Panel, focus marker, and checkmark update instantly. |
 | File drag/drop | Boundary changes to lime; upload icon lifts 4 px on drag entry and settles on drop. Validated preview enters 240 ms. | Immediate border/preview state. |
 | Copy prompt / download | Copy icon changes to check over 160 ms; short confirmation text. No pretend success before the operation succeeds. | Instant check and confirmation. |
 | Editor item selection | Margin marker moves; field/preview group crossfades in 160 ms. Inputs remain usable immediately. | Immediate content switch. |
@@ -246,7 +248,7 @@ Every screen needs loading, empty, ready, busy, error, and session-expired treat
 
 Keep essential status adjacent to the affected task. “Draft saved on this device” is different from “Saved to your account.” If a save fails, preserve the input, show “Could not save” and Retry, and keep the failure visible. Draft conflicts offer Restore/Discard or Save as new according to requirements. Toasts must not be the only place containing data-loss or session-expiry information.
 
-Use semantic form controls and headings. Radio options operate as one labeled group. Reordering has non-drag controls. Dialogs trap focus and return it to the trigger. Sticky navigation never steals the user's typing focus. Keyboard shortcuts, if later added, must be documented and must not activate inside text fields.
+Use semantic form controls and headings. In `Selector`, focus stays on the trigger or editable input while arrows explore choices. Enter commits an active choice. Fixed-choice controls also support Space, Home, End, and type-ahead. Escape dismisses the list before the surrounding dialog. Tab and outside clicks dismiss the list and preserve the current value. An editable field accepts arbitrary text and keeps its draft when suggestions are dismissed. Radio options operate as one labeled group. Reordering has non-drag controls. Dialogs trap focus and return it to the trigger. Sticky navigation never steals the user's typing focus. Keyboard shortcuts, if later added, must be documented and must not activate inside text fields.
 
 Long mathematical expressions, long words, Unicode course titles, multiline options, and 20,000-character content fields must retain the same visual system without fixed-height clipping. Card content may expand; measure front/back surfaces before a flip and use ordinary scrolling for long cards. On small/short screens, use the fade reveal if a 3D flip would crop content.
 
@@ -255,7 +257,7 @@ Long mathematical expressions, long words, Unicode course titles, multiline opti
 1. Start with the token layer, shared material recipes, typography, AppShell variants, primitives, and shared motion presets. Establish their states before composing whole screens.
 2. Build Library, one exam question, one flashcard, and the rubric editor from those parts; extend the same families to the remaining screens. All required product screens still need completion.
 3. Treat each page as composition. Feature modules own study-specific presentation, services own persistence/scoring, and one renderer owns Markdown/math behavior.
-4. Do not introduce a new accent, type scale, radius, panel style, icon family, or transition for an isolated screen. Add a named reusable variant when a real case requires one.
+4. Do not introduce a new accent, type scale, radius, panel style, icon family, or transition for an isolated screen. Add a named reusable variant when a real case requires one. Build every dropdown and suggestion field with `Selector`.
 5. Preserve real content and product flow. Do not seed fake progress/analytics, add password recovery, or turn the app into a landing page to resemble a reference.
 6. Verify desktop at 1536 × 1024, a 1280 px laptop, a 768 px tablet, and phones at 390 px and 320 px widths, including short heights and an open keyboard. Check standard and reduced motion.
 7. Compare rendered screens with the appropriate visual references for hierarchy, spacing, palette, type, control anatomy, and responsive composition. Record intentional differences caused by this written contract or real content.

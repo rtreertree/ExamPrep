@@ -1,3 +1,4 @@
+import { chooseOption } from "./selector";
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import {
@@ -138,8 +139,8 @@ test("notation keyboard edits, preserves prose, exports v1 types, and fits deskt
       level: 1,
     }),
   ).toBeVisible();
-  await expect(page.getByLabel("Answer type", { exact: true })).toHaveValue(
-    "math",
+  await expect(page.getByLabel("Answer type", { exact: true })).toHaveText(
+    "Math · equations and symbols",
   );
   const answer = page.getByLabel("Reference answer", { exact: true });
   await answer.fill("Before $2x$ after 🦊");
@@ -171,9 +172,12 @@ test("notation keyboard edits, preserves prose, exports v1 types, and fits deskt
 
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 740 });
-    await page.getByLabel("Selected item", { exact: true }).selectOption("1");
-    await expect(page.getByLabel("Answer type", { exact: true })).toHaveValue(
-      "chem",
+    await chooseOption(
+      page.getByLabel("Selected item", { exact: true }),
+      /^2\./,
+    );
+    await expect(page.getByLabel("Answer type", { exact: true })).toHaveText(
+      "Chem · formulas and reactions",
     );
     const reference = page.getByLabel("Reference answer", { exact: true });
     await reference.fill("");
@@ -240,7 +244,10 @@ test("notation keyboard edits, preserves prose, exports v1 types, and fits deskt
     await expect(reference).toHaveValue("$$\n\\ce{2H2 + O2 -> 2H2O}\n$$");
     await noOverflow(page);
   }
-  await page.getByLabel("Answer type", { exact: true }).selectOption("simple");
+  await chooseOption(
+    page.getByLabel("Answer type", { exact: true }),
+    "Simple · text",
+  );
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(
     page.getByText("Saved to your account", { exact: true }),
@@ -256,7 +263,7 @@ test("notation keyboard edits, preserves prose, exports v1 types, and fits deskt
   expect(portable.questions[1]).toMatchObject({ answerType: "simple" });
   expect(Object.hasOwn(portable.questions[2], "answerType")).toBe(false);
   await page.reload();
-  await page.getByLabel("Selected item", { exact: true }).selectOption("1");
+  await chooseOption(page.getByLabel("Selected item", { exact: true }), /^2\./);
   await expect(
     page.getByLabel("Reference answer", { exact: true }),
   ).toHaveValue("$$\n\\ce{2H2 + O2 -> 2H2O}\n$$");

@@ -1,3 +1,4 @@
+import { chooseOption } from "./selector";
 import { expect, test } from "@playwright/test";
 
 test("visitors can copy a self-contained flashcard prompt before signing in", async ({
@@ -23,12 +24,12 @@ test("visitors can copy a self-contained flashcard prompt before signing in", as
     generator.getByRole("button", { name: "Copy prompt" }),
   ).toBeDisabled();
   await generator.getByLabel("Topic or source material").fill("Cell biology");
-  await generator.getByLabel("Content type").selectOption("flashcards");
+  await chooseOption(generator.getByLabel("Content type"), "Flashcards");
   await generator.getByLabel("Item count").fill("16");
   await generator.getByLabel("Language").fill("Thai");
   const customize = generator.getByText("Customize", { exact: true });
   await customize.press("Enter");
-  await generator.getByLabel("Difficulty").selectOption("challenging");
+  await chooseOption(generator.getByLabel("Difficulty"), "Challenging");
   await generator
     .getByLabel("Extra instructions (optional)")
     .fill("Add examples");

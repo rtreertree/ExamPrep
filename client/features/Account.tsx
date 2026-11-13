@@ -1,3 +1,4 @@
+import { Selector } from "../components/Selector";
 import { useState, type FormEvent } from "react";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
@@ -283,18 +284,19 @@ export function AccountPage() {
             device.
           </p>
           <Field label="Study text size">
-            <select
+            <Selector
               value={size}
-              onChange={(event) => {
-                const next = event.target.value as ReadingSize;
+              onValueChange={(value) => {
+                const next = value as ReadingSize;
                 setSize(next);
                 if (user) saveReadingSize(user.id, next);
               }}
-            >
-              <option value="standard">Standard</option>
-              <option value="large">Large</option>
-              <option value="extra-large">Extra large</option>
-            </select>
+              options={[
+                { value: "standard", label: "Standard" },
+                { value: "large", label: "Large" },
+                { value: "extra-large", label: "Extra large" },
+              ]}
+            />
           </Field>
         </section>
         <AccountBackup />

@@ -1,3 +1,4 @@
+import { chooseOption } from "./selector";
 import { expect, test, type Page } from "@playwright/test";
 import type { Attempt } from "../../client/lib/api";
 import {
@@ -169,7 +170,31 @@ test("starts a configured snapshot and resumes with the same order and timer", a
   const simulation = dialog.getByRole("button", { name: "Exam simulation" });
   const quick = dialog.getByRole("button", { name: "Quick practice" });
   await expect(dialog.getByLabel("Number of questions")).toHaveValue("3");
-  await expect(dialog.getByLabel("Item order")).toHaveValue("original");
+  await expect(dialog.getByLabel("Item order")).toHaveText("Original order");
+  const order = dialog.getByRole("combobox", { name: "Item order" });
+  await order.press("s");
+  await expect(order).toBeFocused();
+  await expect(order).toHaveAttribute("aria-expanded", "true");
+  await expect(order).toHaveText("Original order");
+  await expect(dialog.getByRole("listbox")).toHaveCSS(
+    "animation-name",
+    "selector-enter",
+  );
+  await page.screenshot({
+    path: "/tmp/examprep-selector-practice-desktop.png",
+    animations: "disabled",
+  });
+  await order.press("Escape");
+  await expect(dialog).toBeVisible();
+  await expect(order).toHaveAttribute("aria-expanded", "false");
+  await order.press("End");
+  await order.press("Enter");
+  await expect(order).toHaveText("Shuffled order");
+  await order.press("Home");
+  await order.press("Tab");
+  await expect(order).toHaveText("Shuffled order");
+  await expect(order).toHaveAttribute("aria-expanded", "false");
+  await chooseOption(order, "Original order");
   await expect(dialog.getByLabel("Timer in minutes")).toHaveValue("");
   await expect(simulation).toHaveAttribute("aria-pressed", "false");
   await simulation.click();
@@ -178,7 +203,7 @@ test("starts a configured snapshot and resumes with the same order and timer", a
   await quick.click();
   await expect(quick).toHaveAttribute("aria-pressed", "true");
   await expect(simulation).toHaveAttribute("aria-pressed", "false");
-  await expect(dialog.getByLabel("Item order")).toHaveValue("shuffled");
+  await expect(dialog.getByLabel("Item order")).toHaveText("Shuffled order");
   await dialog.getByLabel("Number of questions").fill("2");
   await dialog.getByLabel("Timer in minutes").fill("5");
   await expect(quick).toHaveAttribute("aria-pressed", "false");
@@ -241,7 +266,7 @@ test("tracks answered progress and flags across the desktop map and mobile picke
   await expect(progress).toHaveJSProperty("value", 1);
   await page.getByRole("button", { name: "Clear answer" }).click();
   await expect(progress).toHaveJSProperty("value", 0);
-  await map.getByLabel("Filter questions").selectOption("Flagged");
+  await chooseOption(map.getByLabel("Filter questions"), "Flagged");
   await expect(map.getByRole("status")).toHaveText(
     "No questions match this filter.",
   );
@@ -249,7 +274,7 @@ test("tracks answered progress and flags across the desktop map and mobile picke
   await expect(
     map.getByRole("button", { name: "Question 1, Unanswered, flagged" }),
   ).toBeVisible();
-  await map.getByLabel("Filter questions").selectOption("All questions");
+  await chooseOption(map.getByLabel("Filter questions"), "All questions");
   await page.setViewportSize({ width: 1536, height: 1024 });
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: "/tmp/examprep-exam-desktop.png" });
@@ -276,7 +301,7 @@ test("tracks answered progress and flags across the desktop map and mobile picke
   await expect(footer).toHaveCSS("position", "static");
   await picker.press("Enter");
   const dialog = page.getByRole("dialog", { name: "Question navigation" });
-  await dialog.getByLabel("Filter questions").selectOption("Flagged");
+  await chooseOption(dialog.getByLabel("Filter questions"), "Flagged");
   await page.screenshot({ path: "/tmp/examprep-exam-mobile-picker.png" });
   await dialog
     .getByRole("button", { name: "Question 1, Unanswered, flagged" })
@@ -433,7 +458,7 @@ test("keeps completed scores fixed while saving private notes and flagging a ret
   await page.goto("/practice/original");
   await page.getByRole("button", { name: "Flag for later" }).click();
   await page.getByText("Study notes and confidence", { exact: true }).click();
-  await page.getByLabel("Confidence", { exact: true }).selectOption("low");
+  await chooseOption(page.getByLabel("Confidence", { exact: true }), "Low");
   await page
     .getByLabel("Private study note")
     .fill("Practice the derivation again.");

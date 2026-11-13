@@ -1,3 +1,4 @@
+import { chooseOption } from "./selector";
 import { expect, test } from "@playwright/test";
 
 test("previews a backup before restoring and saves study text size", async ({
@@ -50,9 +51,9 @@ test("previews a backup before restoring and saves study text size", async ({
   await expect(
     page.getByRole("heading", { name: "Library backup" }),
   ).toBeVisible();
-  await page.getByLabel("Study text size").selectOption("extra-large");
+  await chooseOption(page.getByLabel("Study text size"), "Extra large");
   await page.reload();
-  await expect(page.getByLabel("Study text size")).toHaveValue("extra-large");
+  await expect(page.getByLabel("Study text size")).toHaveText("Extra large");
   await expect
     .poll(() =>
       page.evaluate(() =>

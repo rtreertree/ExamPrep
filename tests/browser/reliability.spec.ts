@@ -1,3 +1,4 @@
+import { chooseOption } from "./selector";
 import { test, expect, type Page } from "@playwright/test";
 import {
   grade,
@@ -523,7 +524,7 @@ test("submission failure retains context; guided assessment commits partial rubr
   await expect(
     map.getByRole("button", { name: "Question 4, Unanswered" }),
   ).toBeVisible();
-  await map.getByLabel("Filter questions").selectOption("Needs review");
+  await chooseOption(map.getByLabel("Filter questions"), "Needs review");
   await expect(map.getByRole("button")).toHaveCount(3);
   await page.getByRole("button", { name: "Review first mistake" }).click();
   await expect(
@@ -571,7 +572,12 @@ test("library resumes without duplication and import has a bounded preview and e
   await page.getByLabel("Study-set JSON").fill(JSON.stringify(large));
   await page.getByRole("button", { name: "Validate and preview" }).click();
   await expect(page.locator(".content-preview > section")).toHaveCount(1);
-  await page.getByLabel("Preview item").selectOption("499");
+  const previewItem = page.getByRole("combobox", { name: "Preview item" });
+  await previewItem.press("End");
+  const lastItem = page.getByRole("option", { name: "Item 500", exact: true });
+  await expect(lastItem).toBeInViewport({ ratio: 0.9 });
+  await previewItem.press("Enter");
+  await expect(previewItem).toHaveText("Item 500");
   await expect(page.locator(".content-preview")).toContainText("Question 500");
   await page.getByRole("button", { name: "Save to library" }).click();
   await expect(
@@ -714,15 +720,21 @@ test("AI helper copies a custom exam and imports its result for editing", async 
   );
   await expect(copy).toBeDisabled();
   await writtenCount.fill("1");
-  await helper.getByLabel("Written-question rubrics").selectOption("always");
-  await helper.getByLabel("Answer explanations").selectOption("detailed");
+  await chooseOption(
+    helper.getByLabel("Written-question rubrics"),
+    "For every written question",
+  );
+  await chooseOption(
+    helper.getByLabel("Answer explanations"),
+    "Detailed explanations",
+  );
   await exact.uncheck();
   await expect(count).toHaveValue("3");
   await exact.check();
   const kind = helper.getByLabel("Content type");
-  await kind.selectOption("flashcards");
+  await chooseOption(kind, "Flashcards");
   await expect(count).toHaveValue("3");
-  await kind.selectOption("exam");
+  await chooseOption(kind, "Exam");
   await expect(trueFalse).toHaveValue("2");
   await expect(helper.getByLabel("Total questions")).toHaveText("3 questions");
   await helper.screenshot({
@@ -863,10 +875,11 @@ test("library resumes the saved snapshot and remembers course filters across pra
   await page.getByRole("button", { name: "Pin set" }).click();
   await expect(page.locator(".set-meta")).toContainText("Pinned");
   await page.getByText("Library filters", { exact: true }).click();
-  await page
-    .getByLabel("Course", { exact: true })
-    .selectOption("course:Organic chemistry");
-  await page.getByLabel("Sort library").selectOption("studied");
+  await chooseOption(
+    page.getByLabel("Course", { exact: true }),
+    "Organic chemistry",
+  );
+  await chooseOption(page.getByLabel("Sort library"), "Last studied");
   await page.getByLabel("Search library").pressSequentially("Reliable");
   await expect(page).toHaveURL(
     (url) =>
@@ -890,10 +903,10 @@ test("library resumes the saved snapshot and remembers course filters across pra
     page.getByRole("heading", { name: "Question 3 of 3" }),
   ).toBeVisible();
   await page.getByRole("link", { name: "Library", exact: true }).click();
-  await expect(page.getByLabel("Course", { exact: true })).toHaveValue(
-    "course:Organic chemistry",
+  await expect(page.getByLabel("Course", { exact: true })).toHaveText(
+    "Organic chemistry",
   );
-  await expect(page.getByLabel("Sort library")).toHaveValue("studied");
+  await expect(page.getByLabel("Sort library")).toHaveText("Last studied");
   await expect(page.getByLabel("Search library")).toHaveValue("Reliable");
   await page.screenshot({
     path: "/tmp/examprep-v1-library-organization-desktop.png",
@@ -904,7 +917,7 @@ test("library resumes the saved snapshot and remembers course filters across pra
   await expect(
     page.getByRole("link", { name: "Reliable study", exact: true }),
   ).toHaveCount(0);
-  await page.getByLabel("Show sets").selectOption("archived");
+  await chooseOption(page.getByLabel("Show sets"), "Archived");
   await expect(
     page.getByRole("link", { name: "Reliable study", exact: true }),
   ).toBeVisible();
@@ -916,6 +929,64 @@ test("library resumes the saved snapshot and remembers course filters across pra
     page.getByRole("heading", { name: "Copy of Reliable study", level: 1 }),
   ).toBeVisible();
 });
+
+test.describe("course suggestions on touch screens", () => {
+  test.use({ hasTouch: true, reducedMotion: "reduce" });
+
+  test("selects an existing course and accepts a blank name", async ({
+    page,
+  }) => {
+    const api = await fixture(page, written);
+    await page.goto("/");
+    const actions = page
+      .locator("summary")
+      .filter({ hasText: "Actions for Reliable study" });
+    await actions.tap();
+    await page.getByRole("button", { name: "Set course", exact: true }).tap();
+    const dialog = page.getByRole("dialog", { name: "Set course" });
+    const course = dialog.getByRole("combobox", { name: "Course name" });
+    await course.fill("Organic chemistry");
+    await dialog.getByRole("button", { name: "Save course" }).tap();
+    await expect.poll(() => api.set().course).toBe("Organic chemistry");
+    await expect(dialog).toBeHidden();
+    await expect(page.locator(".set-meta")).toContainText("Organic chemistry");
+
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 740 });
+      await actions.tap();
+      await page.getByRole("button", { name: "Set course", exact: true }).tap();
+      await course.fill("chem");
+      const list = dialog.getByRole("listbox");
+      await expect(list).toBeVisible();
+      await page.setViewportSize({ width, height: 460 });
+      await expect(list).toHaveCSS("animation-name", "none");
+      const bounds = await list.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.y).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+      expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(460);
+      if (width === 320)
+        await page.screenshot({
+          path: "/tmp/examprep-selector-course-320.png",
+        });
+      await list.getByRole("option", { name: "Organic chemistry" }).tap();
+      await expect(course).toHaveValue("Organic chemistry");
+      await expect(course).toBeFocused();
+      await expect(list).toBeHidden();
+      await dialog.getByRole("button", { name: "Cancel" }).tap();
+    }
+
+    await actions.tap();
+    await page.getByRole("button", { name: "Set course", exact: true }).tap();
+    await course.fill("");
+    await dialog.getByRole("button", { name: "Save course" }).tap();
+    await expect.poll(() => api.set().course).toBe("");
+    await expect(page.locator(".set-meta")).not.toContainText(
+      "Organic chemistry",
+    );
+  });
+});
 test("editor searches inside answers, duplicates with a new ID and moves directly on mobile", async ({
   page,
 }) => {
@@ -925,7 +996,7 @@ test("editor searches inside answers, duplicates with a new ID and moves directl
   await page.getByRole("button", { name: "Search questions" }).click();
   await page.getByLabel("Find a question").fill("Second step");
   await expect(page.getByText("1 of 4 items match.")).toBeVisible();
-  await page.getByLabel("Selected item", { exact: true }).selectOption("2");
+  await chooseOption(page.getByLabel("Selected item", { exact: true }), /^3\./);
   await page.getByRole("button", { name: "Duplicate item" }).click();
   await expect(page.getByText("Item 4 of 5", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Move item to position" }).click();
@@ -1015,6 +1086,9 @@ test("editor locates invalid fields, recovers unfinished content, and saves befo
     "true",
   );
   await page.reload();
+  await expect(
+    page.getByRole("combobox", { name: "Answer type" }),
+  ).toBeDisabled();
   await page
     .getByRole("button", { name: "Restore draft", exact: true })
     .click();
@@ -1023,8 +1097,8 @@ test("editor locates invalid fields, recovers unfinished content, and saves befo
     "Question 2, question: Enter some text.",
   );
   await page.getByRole("button", { name: "Next issue", exact: true }).click();
-  await expect(page.getByLabel("Selected item", { exact: true })).toHaveValue(
-    "1",
+  await expect(page.getByLabel("Selected item", { exact: true })).toHaveText(
+    /^2\./,
   );
   await expect(page.getByLabel("Question", { exact: true })).toBeFocused();
   await page.getByLabel("Question", { exact: true }).fill("Repaired prompt");
@@ -1234,37 +1308,55 @@ test("removing the correct option requires an explicit replacement and Undo pres
   await page
     .getByRole("button", { name: "Remove option 2", exact: true })
     .click();
-  await expect(page.getByLabel("Correct answer", { exact: true })).toHaveValue(
-    "",
+  await expect(page.getByLabel("Correct answer", { exact: true })).toHaveText(
+    "Select a correct answer",
   );
   await expect(
     page.getByText(
       "The correct option was removed. Select a replacement correct answer.",
     ),
   ).toBeVisible();
-  await expect(
-    page.getByLabel("Selected item").locator("option:checked"),
-  ).toContainText("Needs attention");
+  await expect(page.getByLabel("Selected item")).toContainText(
+    "Needs attention",
+  );
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText(
     "Some fields need attention",
   );
+  const correctAnswer = page.getByLabel("Correct answer", { exact: true });
+  await page.getByRole("button", { name: "Next issue", exact: true }).click();
+  await expect(correctAnswer).toBeFocused();
+  await expect(correctAnswer).toHaveAttribute("aria-invalid", "true");
+  await correctAnswer.press("Space");
+  await expect(
+    page.getByRole("option", { name: "Select a correct answer" }),
+  ).toBeDisabled();
+  await correctAnswer.press("Home");
+  const activeOption = await correctAnswer.getAttribute(
+    "aria-activedescendant",
+  );
+  await expect(page.locator(`[id="${activeOption}"]`)).toHaveText("Option A");
+  await correctAnswer.press("Escape");
+  await expect(correctAnswer).toHaveText("Select a correct answer");
   expect(api.set().revision).toBe(1);
   await page.getByRole("button", { name: "Undo", exact: true }).click();
-  await expect(page.getByLabel("Correct answer", { exact: true })).toHaveValue(
-    "b",
+  await expect(page.getByLabel("Correct answer", { exact: true })).toHaveText(
+    "Option B",
   );
   await expect(page.getByLabel("Option B", { exact: true })).toHaveValue("Two");
   await page
     .getByRole("button", { name: "Remove option 2", exact: true })
     .click();
-  await page.getByLabel("Correct answer", { exact: true }).selectOption("c");
+  await chooseOption(
+    page.getByLabel("Correct answer", { exact: true }),
+    "Option B",
+  );
   await page
     .getByLabel("Question", { exact: true })
     .fill("Edited after removal");
   await page.getByRole("button", { name: "Undo", exact: true }).click();
-  await expect(page.getByLabel("Correct answer", { exact: true })).toHaveValue(
-    "c",
+  await expect(page.getByLabel("Correct answer", { exact: true })).toHaveText(
+    "Option C",
   );
   await expect(page.getByLabel("Question", { exact: true })).toHaveValue(
     "Edited after removal",
@@ -1311,7 +1403,7 @@ test("Undo restores a complete question at its position and the last rubric crit
     .getByLabel("Question", { exact: true })
     .fill("Other edits survive");
   await page.getByRole("button", { name: "Undo", exact: true }).click();
-  await expect(page.getByLabel("Selected item")).toHaveValue("2");
+  await expect(page.getByLabel("Selected item")).toHaveText(/^3\./);
   await expect(page.getByLabel("Explanation (optional)")).toHaveValue(
     "Keep this explanation",
   );
@@ -1343,7 +1435,7 @@ test("card removal can be undone with unsaved front and back intact", async ({
   await page.getByRole("button", { name: "Remove item", exact: true }).click();
   await expect(page.getByText("Card removed.", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Undo", exact: true }).click();
-  await expect(page.getByLabel("Selected item")).toHaveValue("2");
+  await expect(page.getByLabel("Selected item")).toHaveText(/^3\./);
   await expect(page.getByLabel("Front", { exact: true })).toHaveValue(
     "Unsaved front",
   );
@@ -1472,12 +1564,13 @@ test("search empty states recover existing content and mobile History exposes Co
     page.getByRole("heading", { name: "Reliable study" }),
   ).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
-  await page
-    .getByRole("combobox", { name: "Attempt status", exact: true })
-    .selectOption("completed");
+  await chooseOption(
+    page.getByRole("combobox", { name: "Attempt status", exact: true }),
+    "Completed",
+  );
   await expect(
     page.getByRole("combobox", { name: "Attempt status", exact: true }),
-  ).toHaveValue("completed");
+  ).toHaveText("Completed");
   await expect(
     page.getByRole("heading", { name: "No attempts match these filters." }),
   ).toBeVisible();

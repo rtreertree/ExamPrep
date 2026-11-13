@@ -76,11 +76,6 @@
   font-size: 14px;
 }
 
-.exam-map select {
-  min-width: 0;
-  width: 100%;
-}
-
 .exam-map-list {
   display: grid;
   gap: 6px;
@@ -250,7 +245,7 @@
     position: sticky;
   }
 
-  .exam-frame .focus-main :is(input, textarea, select, button, summary) {
+  .exam-frame .focus-main :is(input, textarea, button, summary) {
     scroll-margin-bottom: 110px;
   }
 }

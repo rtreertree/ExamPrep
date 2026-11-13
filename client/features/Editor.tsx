@@ -1,3 +1,4 @@
+import { Selector } from "../components/Selector";
 import {
   useDeferredValue,
   useEffect,
@@ -196,8 +197,9 @@ function Editor({
         `[data-field-path="${CSS.escape(issue.path)}"]`,
       );
       const control =
-        field?.querySelector<HTMLElement>("input,textarea,select") ??
-        document.querySelector<HTMLElement>(".edit-column textarea");
+        field?.querySelector<HTMLElement>(
+          "input,textarea,button[role=combobox]",
+        ) ?? document.querySelector<HTMLElement>(".edit-column textarea");
       control?.focus();
       control?.scrollIntoView({ block: "center", behavior: "instant" });
     });
@@ -792,31 +794,37 @@ function Editor({
               <h2>{content.kind === "exam" ? "Questions" : "Cards"}</h2>
               <div className="item-picker">
                 <Field label="Selected item">
-                  <select
-                    value={index}
-                    onChange={(e) => setIndex(Number(e.target.value))}
-                  >
-                    {!listedItems.some((entry) => entry.index === index) ? (
-                      <option value={index} disabled>
-                        Item {index + 1} · outside search results
-                      </option>
-                    ) : null}
-                    {listedItems.map(({ item, index: i }) => (
-                      <option key={item.id} value={i}>
-                        {i + 1}.{" "}
-                        {visibleIssues.some((issue) =>
+                  <Selector
+                    value={String(index)}
+                    disabled={busy || !!recovery}
+                    onValueChange={(value) => setIndex(Number(value))}
+                    options={[
+                      ...(!listedItems.some((entry) => entry.index === index)
+                        ? [
+                            {
+                              value: String(index),
+                              label: `Item ${index + 1} · outside search results`,
+                              disabled: true,
+                            },
+                          ]
+                        : []),
+                      ...listedItems.map(({ item, index: i }) => {
+                        const needsAttention = visibleIssues.some((issue) =>
                           issue.path.startsWith(
                             `/${content.kind === "exam" ? "questions" : "cards"}/${i}/`,
                           ),
-                        )
-                          ? "Needs attention · "
-                          : ""}{" "}
-                        {"prompt" in item
-                          ? item.prompt.slice(0, 35) || "Untitled question"
-                          : item.front.slice(0, 35) || "Untitled card"}
-                      </option>
-                    ))}
-                  </select>
+                        );
+                        const label =
+                          "prompt" in item
+                            ? item.prompt.slice(0, 35) || "Untitled question"
+                            : item.front.slice(0, 35) || "Untitled card";
+                        return {
+                          value: String(i),
+                          label: `${i + 1}. ${needsAttention ? "Needs attention · " : ""}${label}`,
+                        };
+                      }),
+                    ]}
+                  />
                 </Field>
                 <Button
                   className="item-search-toggle"
@@ -959,6 +967,7 @@ function Editor({
                   key={item.id}
                   path={`/${content.kind === "exam" ? "questions" : "cards"}/${index}`}
                   item={item}
+                  disabled={busy || !!recovery}
                   onChange={updateItem}
                   onRemove={rememberRemoval}
                 />
@@ -1052,12 +1061,14 @@ function Editor({
 }
 function ItemFields({
   item,
+  disabled,
   onChange,
   path,
   onRemove,
 }: {
   path: string;
   item: Question | Card;
+  disabled: boolean;
   onChange: (item: Question | Card) => void;
   onRemove: (removal: Removal) => void;
 }) {
@@ -1184,19 +1195,19 @@ function ItemFields({
             Add option
           </Button>
           <Field path={`${path}/answer`} label="Correct answer">
-            <select
+            <Selector
               value={q.answer}
-              onChange={(e) => onChange({ ...q, answer: e.target.value })}
-            >
-              <option value="" disabled>
-                Select a correct answer
-              </option>
-              {q.options.map((o, i) => (
-                <option key={o.id} value={o.id}>
-                  Option {String.fromCharCode(65 + i)}
-                </option>
-              ))}
-            </select>
+              disabled={disabled}
+              onValueChange={(value) => onChange({ ...q, answer: value })}
+              placeholder="Select a correct answer"
+              options={[
+                { value: "", label: "Select a correct answer", disabled: true },
+                ...q.options.map((option, i) => ({
+                  value: option.id,
+                  label: `Option ${String.fromCharCode(65 + i)}`,
+                })),
+              ]}
+            />
           </Field>
         </>
       ) : (
@@ -1205,16 +1216,18 @@ function ItemFields({
             label="Answer type"
             hint="Choose the preferred keyboard for this written answer."
           >
-            <select
+            <Selector
               value={q.answerType ?? "simple"}
-              onChange={(event) =>
-                onChange({ ...q, answerType: event.target.value as AnswerType })
+              disabled={disabled}
+              onValueChange={(value) =>
+                onChange({ ...q, answerType: value as AnswerType })
               }
-            >
-              <option value="simple">Simple · text</option>
-              <option value="math">Math · equations and symbols</option>
-              <option value="chem">Chem · formulas and reactions</option>
-            </select>
+              options={[
+                { value: "simple", label: "Simple · text" },
+                { value: "math", label: "Math · equations and symbols" },
+                { value: "chem", label: "Chem · formulas and reactions" },
+              ]}
+            />
           </Field>
           <Field path={`${path}/answer`} label="Reference answer">
             <NotationEditor

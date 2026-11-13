@@ -1,3 +1,4 @@
+import { Selector } from "../components/Selector";
 import { NotationEditor } from "../components/NotationEditor";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -684,22 +685,22 @@ function Practice({ initial }: { initial: Attempt }) {
               </Button>
             ) : null}
             <Field label="Confidence">
-              <select
+              <Selector
                 value={r?.confidence ?? ""}
                 disabled={state.submitting}
-                onChange={(event) =>
+                onValueChange={(value) =>
                   updateResponse({
                     ...r,
-                    confidence: (event.target.value ||
-                      undefined) as Response["confidence"],
+                    confidence: (value || undefined) as Response["confidence"],
                   })
                 }
-              >
-                <option value="">Not recorded</option>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
+                options={[
+                  { value: "", label: "Not recorded" },
+                  { value: "low", label: "Low" },
+                  { value: "medium", label: "Medium" },
+                  { value: "high", label: "High" },
+                ]}
+              />
             </Field>
             <Field
               label="Private study note"

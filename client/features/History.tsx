@@ -1,3 +1,4 @@
+import { Selector } from "../components/Selector";
 import { Link } from "react-router-dom";
 import { useResource } from "../lib/hooks";
 import { listPage, useListQuery } from "../lib/listQuery";
@@ -69,16 +70,11 @@ export function HistoryPage() {
       </Field>
       <div className="history-status-select">
         <Field label="Attempt status">
-          <select
+          <Selector
             value={status}
-            onChange={(event) => setStatus(event.target.value)}
-          >
-            {statuses.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+            onValueChange={setStatus}
+            options={statuses}
+          />
         </Field>
       </div>
       <div className="history-status-tabs">

@@ -1,4 +1,5 @@
-import { useEffect, useId, useState } from "react";
+import { Selector } from "../components/Selector";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Upload, Plus, ArrowRight, Ellipsis } from "lucide-react";
 import { useResource } from "../lib/hooks";
@@ -61,11 +62,12 @@ export function LibraryPage() {
     courses: string[];
   }>(`/sets?${query}`);
   const courses = resource.data?.courses ?? [];
-  const [panel, setPanel] = useState<"import" | "ai" | "ai-import" | null>(null);
+  const [panel, setPanel] = useState<"import" | "ai" | "ai-import" | null>(
+    null,
+  );
   const [deleting, setDeleting] = useState<StudySet>();
   const [editingCourse, setEditingCourse] = useState<StudySet>();
   const [courseName, setCourseName] = useState("");
-  const courseSuggestionsId = useId();
   const [error, setError] = useState<Error>();
   const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
@@ -210,55 +212,56 @@ export function LibraryPage() {
         <summary>Library filters{archived ? " · Archived" : ""}</summary>
         <div className="library-filter-fields">
           <Field label="Course">
-            <select
+            <Selector
               value={course === null ? "all" : `course:${course}`}
-              onChange={(e) =>
+              onValueChange={(value) =>
                 update({
-                  course:
-                    e.target.value === "all" ? null : e.target.value.slice(7),
+                  course: value === "all" ? null : value.slice(7),
                   page: null,
                 })
               }
-            >
-              <option value="all">All courses</option>
-              <option value="course:">No course</option>
-              {course && !courses.includes(course) ? (
-                <option value={`course:${course}`}>{course}</option>
-              ) : null}
-              {courses.map((name) => (
-                <option key={name} value={`course:${name}`}>
-                  {name}
-                </option>
-              ))}
-            </select>
+              options={[
+                { value: "all", label: "All courses" },
+                { value: "course:", label: "No course" },
+                ...(course && !courses.includes(course)
+                  ? [{ value: `course:${course}`, label: course }]
+                  : []),
+                ...courses.map((name) => ({
+                  value: `course:${name}`,
+                  label: name,
+                })),
+              ]}
+            />
           </Field>
           <Field label="Show sets">
-            <select
+            <Selector
               value={archived ? "archived" : "active"}
-              onChange={(e) =>
+              onValueChange={(value) =>
                 update({
-                  archived: e.target.value === "archived" ? "true" : null,
+                  archived: value === "archived" ? "true" : null,
                   page: null,
                 })
               }
-            >
-              <option value="active">Active</option>
-              <option value="archived">Archived</option>
-            </select>
+              options={[
+                { value: "active", label: "Active" },
+                { value: "archived", label: "Archived" },
+              ]}
+            />
           </Field>
           <Field label="Sort library">
-            <select
+            <Selector
               value={sort}
-              onChange={(e) =>
+              onValueChange={(value) =>
                 update({
-                  sort: e.target.value === "studied" ? "studied" : null,
+                  sort: value === "studied" ? "studied" : null,
                   page: null,
                 })
               }
-            >
-              <option value="updated">Recently updated</option>
-              <option value="studied">Last studied</option>
-            </select>
+              options={[
+                { value: "updated", label: "Recently updated" },
+                { value: "studied", label: "Last studied" },
+              ]}
+            />
           </Field>
         </div>
       </details>
@@ -560,18 +563,14 @@ export function LibraryPage() {
               remove the course.
             </p>
             <Field label="Course name">
-              <input
-                list={courseSuggestionsId}
+              <Selector
+                editable
                 maxLength={100}
                 value={courseName}
-                onChange={(e) => setCourseName(e.target.value)}
+                onValueChange={setCourseName}
+                options={courses.map((name) => ({ value: name, label: name }))}
               />
             </Field>
-            <datalist id={courseSuggestionsId}>
-              {courses.map((name) => (
-                <option key={name} value={name} />
-              ))}
-            </datalist>
             <ErrorNotice error={error} />
             <div className="actions">
               <Button onClick={() => setEditingCourse(undefined)}>

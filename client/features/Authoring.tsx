@@ -1,3 +1,4 @@
+import { Selector } from "../components/Selector";
 import { useEffect, useRef, useState } from "react";
 import { Upload } from "lucide-react";
 import {
@@ -60,16 +61,14 @@ export function ContentPreview({
       <StudyContent source={content.description} label="description" />
       {selectedIndex === undefined && items.length > 1 ? (
         <Field label="Preview item">
-          <select
-            value={selected}
-            onChange={(e) => setIndex(Number(e.target.value))}
-          >
-            {items.map((item, i) => (
-              <option key={item.id} value={i}>
-                Item {i + 1}
-              </option>
-            ))}
-          </select>
+          <Selector
+            value={String(selected)}
+            onValueChange={(value) => setIndex(Number(value))}
+            options={items.map((_, i) => ({
+              value: String(i),
+              label: `Item ${i + 1}`,
+            }))}
+          />
         </Field>
       ) : null}
       {item ? (
