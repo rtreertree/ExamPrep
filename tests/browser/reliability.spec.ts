@@ -759,7 +759,57 @@ test("AI helper copies a custom exam and imports its result for editing", async 
   const validate = importer.getByRole("button", {
     name: "Validate and preview",
   });
-  const doc = { ...mixed, title: "Photosynthesis review" };
+  const doc = {
+    schemaVersion: 1,
+    kind: "exam",
+    title: "Photosynthesis review",
+    questions: [
+      {
+        id: "q1",
+        type: "single_choice",
+        prompt: "Plants release oxygen during photosynthesis.",
+        options: [
+          { id: "true", text: "True" },
+          { id: "false", text: "False" },
+        ],
+        answer: "true",
+        explanation: "Oxygen is released when water is split.",
+      },
+      {
+        id: "q2",
+        type: "single_choice",
+        prompt: "Plants release oxygen during photosynthesis.",
+        options: [
+          { id: "true", text: "True" },
+          { id: "false", text: "False" },
+        ],
+        answer: "true",
+        explanation: "Splitting water releases oxygen.",
+      },
+      {
+        id: "q3",
+        type: "written",
+        prompt: "What are the products of photosynthesis?",
+        answer: "Carbohydrates and oxygen.",
+        explanation: "The process stores energy in sugars.",
+        rubric: [
+          { id: "products", description: "Names both products", points: 2 },
+        ],
+      },
+    ],
+  } satisfies StudyContent;
+  await input.fill('{"kind":');
+  await validate.click();
+  await expect(
+    importer
+      .getByRole("alert")
+      .getByText("Study set: Expected a JSON value (line 1, column 9).", {
+        exact: true,
+      }),
+  ).toBeVisible();
+  await expect(
+    importer.getByRole("button", { name: "Save to library" }),
+  ).toHaveCount(0);
   const badChoice = { ...mixed.questions[0], answer: "missing" };
   await input.fill(
     "```json\n" + JSON.stringify({ ...doc, questions: [badChoice] }) + "\n```",
@@ -771,18 +821,50 @@ test("AI helper copies a custom exam and imports its result for editing", async 
       { exact: true },
     ),
   ).toBeVisible();
-  await importer
-    .getByRole("button", { name: "Copy repair instructions" })
-    .click();
+  await importer.getByRole("button", { name: "Copy feedback for AI" }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
     "/questions/0/answer",
   );
+  await input.fill(
+    JSON.stringify({ ...doc, questions: doc.questions.slice(0, 1) }),
+  );
+  await validate.click();
+  const save = importer.getByRole("button", { name: "Save to library" });
+  await expect(save).toBeDisabled();
+  await expect(
+    importer.getByText("Study set: Expected 3 items; found 1.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    importer.getByRole("heading", { name: doc.title }),
+  ).toBeVisible();
+  await importer.getByRole("button", { name: "Copy feedback for AI" }).click();
+  const feedback = await page.evaluate(() => navigator.clipboard.readText());
+  expect(feedback).toContain("Items: exactly 3");
+  expect(feedback).toContain(
+    "[/questions]: Study set: Expected 3 items; found 1.",
+  );
+  expect(feedback).toContain(
+    "Preserve unaffected items, their IDs, and their order",
+  );
   await input.fill("```json\n" + JSON.stringify(doc) + "\n```");
+  await expect(save).toHaveCount(0);
   await validate.click();
   await expect(
     importer.getByRole("heading", { name: doc.title }),
   ).toBeVisible();
-  await importer.getByRole("button", { name: "Save to library" }).click();
+  await expect(
+    importer.getByText("Possible repetitions to review"),
+  ).toBeVisible();
+  await expect(save).toBeEnabled();
+  await importer
+    .getByRole("button", { name: "Copy answer review prompt" })
+    .click();
+  const audit = await page.evaluate(() => navigator.clipboard.readText());
+  expect(audit).toContain("Solve each question independently");
+  expect(audit).toContain("Report each finding by item ID");
+  await save.click();
   expect(api.set().content).toEqual(doc);
   await page.getByRole("link", { name: "Edit set", exact: true }).click();
   await expect(page).toHaveURL(/\/sets\/imported\/edit$/);
@@ -809,6 +891,7 @@ test("mobile AI helper offers manual copying and file upload", async ({
   const helper = page.getByRole("dialog", { name: "Create with your AI" });
   await helper.getByLabel("Topic or source material").fill("Calculus");
   await expect(helper.getByLabel("Item count")).toHaveValue("10");
+  await helper.getByLabel("Item count").fill("3");
   await helper.getByRole("button", { name: "Copy prompt" }).press("Enter");
   const preview = helper.getByLabel("Prompt to copy");
   await expect(preview).toBeFocused();
@@ -835,13 +918,54 @@ test("mobile AI helper offers manual copying and file upload", async ({
   await helper.getByRole("button", { name: "Import AI result" }).click();
   const importer = page.getByRole("dialog", { name: "Import a study set" });
   await importer.getByRole("tab", { name: "Choose file" }).click();
-  await importer.getByLabel("Choose a JSON file").setInputFiles({
+  const upload = importer.getByLabel("Choose a JSON file");
+  const incorrect = { ...written, questions: written.questions.slice(0, 1) };
+  await upload.setInputFiles({
     name: "calculus.examprep.json",
     mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(written)),
+    buffer: Buffer.from(JSON.stringify(incorrect)),
   });
   await expect(
     importer.getByRole("heading", { name: written.title }),
+  ).toBeVisible();
+  await expect(
+    importer.getByRole("button", { name: "Save to library" }),
+  ).toBeDisabled();
+  await importer.getByRole("button", { name: "Copy feedback for AI" }).click();
+  const feedback = importer.getByLabel("Feedback for AI", { exact: true });
+  await expect(feedback).toBeFocused();
+  await expect(feedback).toHaveValue(/Expected 3 items; found 1/);
+  await expect(importer.getByLabel("Original imported source")).toHaveValue(
+    JSON.stringify(incorrect),
+  );
+  await expect(importer.getByLabel("Original imported source")).toBeVisible();
+  await importer.getByRole("tab", { name: "Paste JSON" }).click();
+  await expect(importer.getByLabel("Study-set JSON")).toHaveValue(
+    JSON.stringify(incorrect),
+  );
+  await importer.getByRole("tab", { name: "Choose file" }).click();
+  const corrected = {
+    ...written,
+    title: "Corrected calculus review",
+    questions: written.questions.map((question) => ({
+      ...question,
+      explanation: "The reasoning behind this result.",
+    })),
+  };
+  await upload.setInputFiles({
+    name: "calculus.examprep.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(corrected)),
+  });
+  await expect(
+    importer.getByRole("heading", { name: corrected.title }),
+  ).toBeVisible();
+  await expect(
+    importer.getByRole("button", { name: "Copy feedback for AI" }),
+  ).toHaveCount(0);
+  await importer.getByRole("button", { name: "Save to library" }).click();
+  await expect(
+    page.getByText(`“${corrected.title}” is saved to your account.`),
   ).toBeVisible();
 });
 

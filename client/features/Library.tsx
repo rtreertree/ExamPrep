@@ -6,6 +6,7 @@ import { useResource } from "../lib/hooks";
 import { api, exportContent, type StudySet } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { accountDrafts, type Draft } from "../lib/drafts";
+import type { AISettings } from "../lib/aiSettings";
 import { listPage, useListQuery } from "../lib/listQuery";
 import {
   Button,
@@ -62,9 +63,9 @@ export function LibraryPage() {
     courses: string[];
   }>(`/sets?${query}`);
   const courses = resource.data?.courses ?? [];
-  const [panel, setPanel] = useState<"import" | "ai" | "ai-import" | null>(
-    null,
-  );
+  const [panel, setPanel] = useState<
+    "import" | "ai" | { aiSettings: AISettings } | null
+  >(null);
   const [deleting, setDeleting] = useState<StudySet>();
   const [editingCourse, setEditingCourse] = useState<StudySet>();
   const [courseName, setCourseName] = useState("");
@@ -524,9 +525,9 @@ export function LibraryPage() {
           </Button>
         </div>
       </section>
-      {panel === "import" || panel === "ai-import" ? (
+      {panel && panel !== "ai" ? (
         <ImportPanel
-          initialMode={panel === "ai-import" ? "paste" : "file"}
+          aiSettings={panel === "import" ? undefined : panel.aiSettings}
           onClose={() => setPanel(null)}
           onSaved={(set) => {
             setSaved(set);
@@ -539,7 +540,7 @@ export function LibraryPage() {
         <AIHandoffPanel
           key={user!.id}
           onClose={() => setPanel(null)}
-          onImport={() => setPanel("ai-import")}
+          onImport={(aiSettings) => setPanel({ aiSettings })}
         />
       ) : null}
       {settingUp ? (

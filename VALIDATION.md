@@ -19,7 +19,7 @@ Practice records are separate from portable files. The server verifies response 
 
 Database constraints check metadata consistency and basic state/position invariants. Triggers protect ownership, snapshots, source links, valid transitions, and completed results. Optimistic conditional updates prevent stale saves, and repeated/concurrent submission returns the already frozen result. Retry selection uses the source snapshot, with fresh empty responses and no inherited score.
 
-The application validates file structure and permitted content constructs. It does not verify subject-matter correctness or author-written rubric quality.
+**Import AI result** also checks the selected content type, item count, exact mix, and explanation and rubric requirements when the quiz setup is complete. Generated true/false questions use the v1 option IDs `true` and `false`, with labels in the requested language. Identical choice text blocks this import path. Repeated questions and flashcard fronts appear as review warnings. Subject-matter accuracy and rubric quality require separate review.
 
 ## v1 progress boundary
 

@@ -1,5 +1,5 @@
 import { Selector } from "../components/Selector";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Upload } from "lucide-react";
 import {
   parseContent,
@@ -12,10 +12,16 @@ import {
   readAISettings,
   aiSettingsKey,
   defaultAISettings,
+  type AISettings,
 } from "../lib/aiSettings";
-import { issuesOf, repairInstructions } from "../lib/issues";
+import { checkAIImport, hasCompleteAISetup } from "../lib/aiImport";
+import {
+  buildAIAnswerReviewPrompt,
+  buildAIRepairPrompt,
+} from "../lib/aiPrompt";
+import { issueLabel, issuesOf, repairInstructions } from "../lib/issues";
 import { unwrapPastedJSON } from "../lib/importSource";
-import { decodeFile, MAX_BYTES } from "../../shared/json";
+import { decodeFile, MAX_BYTES, ValidationError } from "../../shared/json";
 import { api, type StudySet } from "../lib/api";
 import {
   Button,
@@ -27,6 +33,7 @@ import {
 } from "../components/ui";
 import { StudyContent } from "../components/StudyContent";
 import { RubricList } from "../components/RubricList";
+import { ImportCopyButton } from "../components/ImportCopyButton";
 import {
   AIAuthoringDownloads,
   AIPromptGenerator,
@@ -137,22 +144,51 @@ export function ContentPreview({
   );
 }
 export function ImportPanel({
-  initialMode = "file",
+  aiSettings,
   onClose,
   onSaved,
 }: {
-  initialMode?: "file" | "paste";
+  aiSettings?: AISettings;
   onClose: () => void;
   onSaved: (set: StudySet) => void;
 }) {
-  const [mode, setMode] = useState<string>(initialMode);
+  const [mode, setMode] = useState(aiSettings ? "paste" : "file");
   const [raw, setRaw] = useState("");
+  const [fileName, setFileName] = useState("");
   const [preview, setPreview] = useState<Content>();
   const [error, setError] = useState<Error>();
+  const [saveError, setSaveError] = useState<Error>();
   const [busy, setBusy] = useState(false);
+  const [readingFile, setReadingFile] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [repairCopied, setRepairCopied] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
+  const fileRead = useRef(0);
+  const originalSource = useRef<HTMLDetailsElement>(null);
+  const findings = useMemo(
+    () =>
+      preview && aiSettings ? checkAIImport(preview, aiSettings) : undefined,
+    [preview, aiSettings],
+  );
+  const completeSetup = aiSettings && hasCompleteAISetup(aiSettings);
+  const blockers = findings?.errors ?? [];
+  const warnings = findings?.warnings ?? [];
+  const validationError =
+    error ?? (blockers.length ? new ValidationError(blockers) : undefined);
+  const validationIssues = issuesOf(
+    aiSettings ? validationError : (validationError ?? saveError),
+  );
+  const feedback =
+    aiSettings && (validationError || warnings.length)
+      ? buildAIRepairPrompt(
+          validationIssues.length
+            ? validationIssues
+            : validationError
+              ? [{ path: "/", message: validationError.message }]
+              : [],
+          warnings,
+          completeSetup ? aiSettings : undefined,
+        )
+      : undefined;
   useUnsaved(!!raw);
   function close() {
     if (busy) return;
@@ -161,7 +197,7 @@ export function ImportPanel({
   }
   function validate(source: string, pasted = false) {
     setRaw(source);
-    setRepairCopied(false);
+    setSaveError(undefined);
     try {
       setPreview(parseContent(pasted ? unwrapPastedJSON(source) : source));
       setError(undefined);
@@ -171,23 +207,41 @@ export function ImportPanel({
     }
   }
   async function file(file?: File) {
-    if (!file) return;
+    if (!file || busy) return;
+    const read = ++fileRead.current;
+    setFileName(file.name);
+    setReadingFile(true);
+    setPreview(undefined);
+    setError(undefined);
+    setSaveError(undefined);
     try {
       if (file.size > MAX_BYTES) throw new Error("File exceeds 2 MiB.");
-      validate(decodeFile(await file.arrayBuffer()));
+      const bytes = await file.arrayBuffer();
+      if (read === fileRead.current) validate(decodeFile(bytes));
     } catch (e) {
-      setPreview(undefined);
-      setError(e as Error);
+      if (read === fileRead.current) setError(e as Error);
+    } finally {
+      if (read === fileRead.current) setReadingFile(false);
     }
   }
+  function editPaste(source: string) {
+    fileRead.current++;
+    setReadingFile(false);
+    setFileName("");
+    setRaw(source);
+    setPreview(undefined);
+    setError(undefined);
+    setSaveError(undefined);
+  }
   async function save() {
-    if (!preview) return;
+    if (!preview || readingFile || busy || blockers.length) return;
     setBusy(true);
+    setSaveError(undefined);
     try {
       const set = await api<StudySet>("/sets", "POST", preview);
       onSaved(set);
     } catch (e) {
-      setError(e as Error);
+      setSaveError(e as Error);
     } finally {
       setBusy(false);
     }
@@ -215,7 +269,9 @@ export function ImportPanel({
   return (
     <Dialog title="Import a study set" onClose={close}>
       <p className="muted">
-        Bring a file from your AI tool, or one you wrote yourself.
+        {aiSettings
+          ? "Paste or upload the result from your AI tool to check it before saving."
+          : "Bring a file from your AI tool, or one you wrote yourself."}
       </p>
       <Tabs
         label="Import method"
@@ -251,9 +307,17 @@ export function ImportPanel({
               <input
                 type="file"
                 accept=".json,application/json"
-                onChange={(e) => void file(e.target.files?.[0])}
+                disabled={busy}
+                onChange={(e) => {
+                  const selected = e.target.files?.[0];
+                  if (aiSettings) e.target.value = "";
+                  void file(selected);
+                }}
               />
             </Field>
+            {aiSettings && fileName ? (
+              <p className="muted">{fileName}</p>
+            ) : null}
             <small>UTF-8 · Up to 2 MiB · 500 items</small>
           </div>
         ) : (
@@ -266,45 +330,58 @@ export function ImportPanel({
                 className="json-input"
                 spellCheck={false}
                 value={raw}
-                onChange={(e) => {
-                  setRaw(e.target.value);
-                  setPreview(undefined);
-                  setError(undefined);
-                  setRepairCopied(false);
-                }}
+                disabled={busy}
+                onChange={(e) => editPaste(e.target.value)}
               />
             </Field>
-            <Button onClick={() => validate(raw, true)}>
+            <Button
+              disabled={busy || readingFile}
+              onClick={() => validate(raw, true)}
+            >
               Validate and preview
             </Button>
           </div>
         )}
       </section>
-      <ErrorNotice error={error} />
-      {issuesOf(error).length ? (
-        <Button
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(
-                repairInstructions(issuesOf(error)),
-              );
-              setRepairCopied(true);
-            } catch {
-              setError(
-                new Error(
-                  "Clipboard access failed. Select the validation details above to copy them.",
-                ),
-              );
-            }
-          }}
-        >
-          {repairCopied
-            ? "Repair instructions copied"
-            : "Copy repair instructions"}
-        </Button>
+      {readingFile ? <p role="status">Checking file…</p> : null}
+      <ErrorNotice error={validationError} />
+      <ErrorNotice error={saveError} />
+      {warnings.length ? (
+        <Notice tone="warning">
+          <p>Possible repetitions to review</p>
+          <ul>
+            {warnings.map((issue) => (
+              <li key={issue.path}>{issueLabel(issue)}</li>
+            ))}
+          </ul>
+        </Notice>
       ) : null}
-      {raw && !preview && mode === "file" ? (
-        <details>
+      {feedback ? (
+        <div className="import-review">
+          <p className="muted">
+            Send this feedback to the AI chat that generated the result. Bring
+            the corrected file back to check it again.
+          </p>
+          <ImportCopyButton
+            label="Copy feedback for AI"
+            text={feedback}
+            fallbackLabel="Feedback for AI"
+            copiedLabel="Feedback copied"
+            onCopyFailure={() => {
+              if (originalSource.current) originalSource.current.open = true;
+            }}
+          />
+        </div>
+      ) : !aiSettings && validationIssues.length ? (
+        <ImportCopyButton
+          label="Copy repair instructions"
+          text={repairInstructions(validationIssues)}
+          fallbackLabel="Repair instructions"
+          copiedLabel="Repair instructions copied"
+        />
+      ) : null}
+      {raw && mode === "file" && (!preview || feedback) ? (
+        <details ref={originalSource}>
           <summary>View original source</summary>
           <textarea
             readOnly
@@ -315,14 +392,40 @@ export function ImportPanel({
       ) : null}
       {preview ? (
         <>
-          <Notice tone="success">
-            Study set validated. Review the content below before saving.
-          </Notice>
+          {!aiSettings ? (
+            <Notice tone="success">
+              Study set validated. Review the content below before saving.
+            </Notice>
+          ) : (
+            <div className="import-review">
+              <p className="muted">
+                {blockers.length
+                  ? "Correct the errors before saving."
+                  : completeSetup
+                    ? "File and quiz settings checks passed."
+                    : "File checks passed. Add a topic and valid item count in the AI helper to check quiz settings on a future import."}{" "}
+                Review the answers for accuracy. For a second opinion, paste the
+                review prompt into a fresh AI chat with your study set and
+                source notes.
+              </p>
+              <ImportCopyButton
+                label="Copy answer review prompt"
+                text={buildAIAnswerReviewPrompt(preview.kind)}
+                fallbackLabel="Answer review prompt"
+                copiedLabel="Answer review prompt copied"
+              />
+            </div>
+          )}
           <div className="dialog-footer actions import-save-actions">
             <Button onClick={close} disabled={busy}>
               Cancel
             </Button>
-            <Button variant="primary" busy={busy} onClick={save}>
+            <Button
+              variant="primary"
+              busy={busy}
+              disabled={blockers.length > 0 || readingFile}
+              onClick={save}
+            >
               Save to library
             </Button>
           </div>
@@ -337,7 +440,7 @@ export function AIHandoffPanel({
   onImport,
 }: {
   onClose: () => void;
-  onImport: () => void;
+  onImport: (settings: AISettings) => void;
 }) {
   const { user } = useAuth();
   const userId = user!.id;
@@ -371,7 +474,7 @@ export function AIHandoffPanel({
   function leave(destination: "close" | "import") {
     if (unsaved) setLeaving(destination);
     else if (destination === "close") onClose();
-    else onImport();
+    else onImport(settings);
   }
   return (
     <Dialog title="Create with your AI" onClose={() => leave("close")}>
@@ -406,7 +509,9 @@ export function AIHandoffPanel({
               Keep editing
             </Button>
             <Button
-              onClick={() => (leaving === "close" ? onClose() : onImport())}
+              onClick={() =>
+                leaving === "close" ? onClose() : onImport(settings)
+              }
             >
               Leave without saving changes
             </Button>

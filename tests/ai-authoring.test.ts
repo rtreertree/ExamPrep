@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAIPrompt } from "../client/lib/aiPrompt";
+import { checkAIImport } from "../client/lib/aiImport";
 import {
   aiItemTotal,
   aiSettingsKey,
@@ -78,6 +79,39 @@ describe("AI authoring", () => {
       /Question mix|explanation|rubric|single_choice/,
     );
   });
+
+  it.each(["exam", "flashcards"] as const)(
+    "includes an importable %s example and a final validation checklist",
+    (kind) => {
+      const settings = {
+        ...defaultAISettings,
+        kind,
+        difficulty: "challenging" as const,
+      };
+      const prompt = buildAIPrompt(settings);
+      expect(prompt).toContain(
+        "Require deeper reasoning or several justified steps within the stated level.",
+      );
+      expect(prompt).toContain(
+        "If detailed source material is supplied, use it to define the scope and support the answers.",
+      );
+      const example = prompt.match(/^\{[\s\S]+?^\}$/m)?.[0];
+      expect(example).toBeDefined();
+      const content = parseContent(example!);
+      expect(content.kind).toBe(kind);
+      expect(
+        checkAIImport(content, {
+          ...settings,
+          topic: "Fractions",
+          count: 1,
+          exactMix: kind === "exam",
+          mix: { choice: 1, trueFalse: 1, written: 1 },
+        }),
+      ).toEqual({ errors: [], warnings: [] });
+      expect(prompt).toContain("Count the items in the final JSON array.");
+      expect(prompt).toContain("parse the final JSON with a strict parser");
+    },
+  );
 
   it.each([null, 0, -1, 1.5, 501])("rejects a total of %s", (count) => {
     expect(validAIItemTotal(aiItemTotal({ ...defaultAISettings, count }))).toBe(
