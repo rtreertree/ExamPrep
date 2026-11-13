@@ -424,7 +424,12 @@ export function Menu({
   useEffect(() => {
     const close = (event: Event) => {
       const menu = ref.current;
-      if (menu?.open && !menu.contains(event.target as Node)) menu.open = false;
+      const target = event.target;
+      if (!menu?.open || !(target instanceof Node) || menu.contains(target))
+        return;
+      // Safari can focus a containing landmark before dispatching a menu item's click.
+      if (event.type === "focusin" && target.contains(menu)) return;
+      menu.open = false;
     };
     document.addEventListener("click", close);
     document.addEventListener("focusin", close);

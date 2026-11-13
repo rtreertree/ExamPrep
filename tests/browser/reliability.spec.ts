@@ -2089,6 +2089,47 @@ test("keyboard navigation opens menus and restores focus after dismissal", async
   await expect(create).toBeFocused();
 });
 
+test("Create options activate when Safari focuses the workspace on pointer down", async ({
+  page,
+}) => {
+  await fixture(page);
+  // Safari can focus the surrounding workspace when a link or button is pressed.
+  await page.addInitScript(() => {
+    document.addEventListener("mousedown", (event) => {
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest(".page-header .menu-content")
+      ) {
+        event.preventDefault();
+        document.getElementById("main")?.focus({ preventScroll: true });
+      }
+    });
+  });
+
+  await page.goto("/");
+  const create = page.locator("summary").filter({ hasText: "Create" });
+  for (const { label, route, heading } of [
+    { label: "Exam", route: /\/new\/exam\//, heading: "Questions" },
+    { label: "Flashcards", route: /\/new\/flashcards\//, heading: "Cards" },
+  ]) {
+    await create.click();
+    await page.getByRole("link", { name: label, exact: true }).click();
+    await expect(page).toHaveURL(route);
+    await expect(
+      page.getByRole("heading", { name: heading, exact: true }),
+    ).toBeVisible();
+    await page.getByRole("link", { name: "Library", exact: true }).click();
+  }
+  await create.click();
+  await page
+    .getByRole("button", { name: "Create with your AI", exact: true })
+    .click();
+  await expect(
+    page.getByRole("dialog", { name: "Create with your AI" }),
+  ).toBeVisible();
+});
+
 test("changing library pages returns focus to the new results", async ({
   page,
 }) => {
