@@ -33,6 +33,7 @@ const PracticePage = lazy(() =>
 const DueReviewPage = lazy(() =>
   import("./features/DueReview").then((m) => ({ default: m.DueReviewPage })),
 );
+const SharedSetPage = lazy(() => import("./features/SharedSet"));
 import { Button, ErrorNotice, LoadingRows } from "./components/ui";
 function Root() {
   const { pathname } = useLocation();
@@ -191,6 +192,7 @@ const router = createBrowserRouter([
               { path: "/history", element: <HistoryPage /> },
               { path: "/review/:id", element: <DueReviewPage /> },
               { path: "/account", element: <AccountPage /> },
+              { path: "/share", element: <SharedSetPage /> },
               { path: "/sets/:id/edit", element: <EditorPage /> },
               { path: "/new/:kind/:draftId", element: <EditorPage /> },
             ],

@@ -90,6 +90,7 @@ async function fixture(page: Page, doc = written, position = 0) {
     kind: doc.kind,
     content: structuredClone(doc),
     revision: 1,
+    ownershipRole: "primary",
     updatedAt: now,
     course: "",
     pinned: false,
@@ -151,6 +152,8 @@ async function fixture(page: Page, doc = written, position = 0) {
       value = { success: true };
     } else if (path === "/api/account/recovery") {
       value = { enabled: true };
+    } else if (path === "/api/ownership-invitations") {
+      value = [];
     } else if (path === "/api/sets") {
       if (req.method() === "POST") {
         const content = validateContent(req.postDataJSON());

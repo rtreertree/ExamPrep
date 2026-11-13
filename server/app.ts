@@ -1,18 +1,13 @@
 import { Hono } from "hono";
+import { sqltag as sql } from "@prisma/client/runtime/wasm-compiler-edge";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
-import type { Prisma, StudySet } from "../generated/prisma/client";
+import type { Prisma } from "../generated/prisma/client";
 import type { Database } from "./db";
 import { createAuth, type Config } from "./auth";
 import { encodeStorage, decodeStorage } from "./storage";
-import {
-  parseJSON,
-  decodeFile,
-  ValidationError,
-  MAX_BYTES,
-  BACKUP_BYTES,
-} from "../shared/json";
+import { ValidationError, MAX_BYTES, BACKUP_BYTES } from "../shared/json";
 import {
   validateContent,
   serializeContent,
@@ -44,7 +39,6 @@ import { safeDiagnostic } from "./diagnostics";
 import { readInsights } from "./insights";
 import {
   changeReviewLimit,
-  lockReviewDeck,
   readReviewQueue,
   recordSpacedReview,
   startSpacedReview,
@@ -59,6 +53,19 @@ import {
   type CourseSummary,
 } from "../shared/listing";
 import { readHistory } from "./history";
+import { read, schema } from "./request";
+import {
+  joinCoOwner,
+  lockOwnedSet,
+  organizeSets,
+  ownedSetIds,
+  ownerPreferences,
+  ownershipRole,
+  readLockedOwnedSet,
+  readOwnedSet,
+  type OwnedSet,
+} from "./setAccess";
+import { registerSharing } from "./sharing";
 
 export type Context = {
   Variables: {
@@ -70,20 +77,6 @@ export type Context = {
   };
 };
 const json = (value: unknown) => encodeStorage(value) as Prisma.InputJsonValue;
-const schema = <T>(s: z.ZodType<T>, value: unknown): T => {
-  const p = s.safeParse(value);
-  if (!p.success)
-    throw new ValidationError(
-      p.error.issues.map((i) => ({
-        path: "/" + i.path.join("/"),
-        message: i.message,
-      })),
-    );
-  return p.data;
-};
-async function read(request: Request, max = MAX_BYTES + 1024) {
-  return parseJSON(decodeFile(await request.arrayBuffer(), max), max);
-}
 const unavailable = () =>
   new HTTPException(404, {
     message: "This item is unavailable or belongs to another account.",
@@ -173,7 +166,10 @@ export function createApp(
     }
     const db = connectDatabase(config.DATABASE_URL);
     c.set("db", db);
-    c.set("auth", createAuth(db, config, c.req.path === "/api/auth/reset-password"));
+    c.set(
+      "auth",
+      createAuth(db, config, c.req.path === "/api/auth/reset-password"),
+    );
     try {
       await next();
     } finally {
@@ -217,6 +213,7 @@ export function createApp(
     return c.json({ id }, started ? 201 : 200);
   });
   registerBackup(app);
+  registerSharing(app, config.BETTER_AUTH_SECRET);
   app.get("/api/sets", async (c) => {
     const page = listPage(c.req.query("page"));
     const kind = c.req.query("kind");
@@ -234,9 +231,9 @@ export function createApp(
     const userId = c.get("userId");
     // Project metadata in PostgreSQL: a page must not load thirty 2-MiB documents.
     const [sets, courses] = await Promise.all([
-      db.$queryRaw<(Omit<StudySet, "content"> & { count: number })[]>`
+      db.$queryRaw<(Omit<OwnedSet, "content"> & { count: number })[]>(sql`
         SELECT s.id, s."userId", s.title, s.kind, s.revision, s."createdAt",
-          s."updatedAt", s.course, s.pinned, s.archived, s."lastStudiedAt",
+          s."updatedAt", ${ownershipRole}, ${ownerPreferences},
           COALESCE(jsonb_array_length(s.content->'questions'), jsonb_array_length(s.content->'cards')) AS count,
           (SELECT jsonb_build_object(
             'id', a.id, 'status', a.status, 'position', a.position, 'result', a.result, 'kind', a.snapshot->>'kind',
@@ -245,19 +242,23 @@ export function createApp(
           )
           FROM "Attempt" a WHERE a."studySetId" = s.id AND a."userId" = ${userId}
           AND a.status IN ('in_progress', 'reviewing') ORDER BY a."updatedAt" DESC, a.id ASC LIMIT 1) AS continuation
-        FROM "StudySet" s WHERE s."userId" = ${userId}
-          AND s.archived = ${archived}
+        FROM "StudySet" s ${joinCoOwner(userId)}
+        WHERE s.id IN ${ownedSetIds(userId)}
+          AND COALESCE(co.archived, s.archived) = ${archived}
           AND (${kind ?? null}::text IS NULL OR s.kind = ${kind ?? null}::text)
-          AND (${storedCourse}::text IS NULL OR s.course = ${storedCourse}::text)
+          AND (${storedCourse}::text IS NULL OR COALESCE(co.course, s.course) = ${storedCourse}::text)
           AND strpos(lower(s.title), lower(${search})) > 0
-        ORDER BY s.pinned DESC,
-          CASE WHEN ${sort} = 'studied' THEN s."lastStudiedAt" END DESC NULLS LAST,
+        ORDER BY pinned DESC,
+          CASE WHEN ${sort} = 'studied' THEN
+            CASE WHEN co."userId" IS NULL THEN s."lastStudiedAt" ELSE co."lastStudiedAt" END
+          END DESC NULLS LAST,
           s."updatedAt" DESC, s.id ASC LIMIT ${LIST_PAGE_SIZE + 1} OFFSET ${page * LIST_PAGE_SIZE}
-      `,
-      db.$queryRaw<{ course: string }[]>`
-        SELECT DISTINCT course FROM "StudySet"
-        WHERE "userId" = ${userId} AND course <> '' ORDER BY course
-      `,
+      `),
+      db.$queryRaw<{ course: string }[]>(sql`
+        SELECT DISTINCT COALESCE(co.course, s.course) AS course
+        FROM "StudySet" s ${joinCoOwner(userId)}
+        WHERE s.id IN ${ownedSetIds(userId)} AND COALESCE(co.course, s.course) <> '' ORDER BY course
+      `),
     ]);
     return c.json(
       decodeStorage({
@@ -271,12 +272,16 @@ export function createApp(
   app.get("/api/sets/courses", async (c) => {
     const page = listPage(c.req.query("page"));
     const archived = archiveFilter(c.req.query("archived"));
-    const rows = await c.get("db").$queryRaw<CourseSummary[]>`
-      SELECT course, COUNT(*)::int AS count
-      FROM "StudySet" WHERE "userId" = ${c.get("userId")} AND archived = ${archived}
+    const userId = c.get("userId");
+    const rows = await c.get("db").$queryRaw<CourseSummary[]>(sql`
+      SELECT course, COUNT(*)::int AS count FROM (
+        SELECT COALESCE(co.course, s.course) AS course
+        FROM "StudySet" s ${joinCoOwner(userId)}
+        WHERE s.id IN ${ownedSetIds(userId)} AND COALESCE(co.archived, s.archived) = ${archived}
+      ) courses
       GROUP BY course ORDER BY (course = ''), lower(course), course
       LIMIT ${LIST_PAGE_SIZE + 1} OFFSET ${page * LIST_PAGE_SIZE}
-    `;
+    `);
     return c.json(
       decodeStorage({
         items: rows.slice(0, LIST_PAGE_SIZE),
@@ -307,32 +312,14 @@ export function createApp(
         ),
       await read(c.req.raw),
     );
-    const userId = c.get("userId");
-    const storedCourse = encodeStorage(course);
-    const changed = await c.get("db").$transaction(async (tx) => {
-      // Lock in a stable order so an overlapping batch cannot change membership mid-update.
-      const owned = await tx.$queryRaw<{ id: string }[]>`
-        SELECT id FROM "StudySet" WHERE "userId" = ${userId}
-        AND id IN (SELECT jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb))
-        ORDER BY id FOR UPDATE
-      `;
-      if (owned.length !== ids.length) throw unavailable();
-      return tx.studySet.updateMany({
-        where: {
-          userId,
-          id: { in: ids },
-          OR: [
-            ...(storedCourse === undefined
-              ? []
-              : [{ course: { not: storedCourse } }]),
-            ...(pinned === undefined ? [] : [{ pinned: !pinned }]),
-            ...(archived === undefined ? [] : [{ archived: !archived }]),
-          ],
-        },
-        data: { course: storedCourse, pinned, archived },
-      });
-    });
-    return c.json({ updated: changed.count });
+    const updated = await organizeSets(
+      c.get("db"),
+      c.get("userId"),
+      ids,
+      { course, pinned, archived },
+      true,
+    );
+    return c.json({ updated });
   });
   app.post("/api/sets", async (c) => {
     const content = validateContent(await read(c.req.raw, MAX_BYTES));
@@ -344,13 +331,14 @@ export function createApp(
         content: json(content),
       },
     });
-    return c.json(decodeStorage(set), 201);
+    return c.json(decodeStorage({ ...set, ownershipRole: "primary" }), 201);
   });
   app.get("/api/sets/:id", async (c) => {
-    const set = await c.get("db").studySet.findFirst({
-      where: { id: c.req.param("id"), userId: c.get("userId") },
-    });
-    if (!set) throw unavailable();
+    const set = await readOwnedSet(
+      c.get("db"),
+      c.req.param("id"),
+      c.get("userId"),
+    );
     return c.json(decodeStorage(set));
   });
   app.put("/api/sets/:id", async (c) => {
@@ -364,10 +352,11 @@ export function createApp(
     const id = c.req.param("id");
     const storedContent = json(content);
     const set = await db.$transaction(async (tx) => {
+      await lockOwnedSet(tx, id, userId);
       const changed = await tx.studySet.updateMany({
         where: {
           id,
-          userId,
+          OR: [{ userId }, { coOwners: { some: { userId } } }],
           revision: input.revision,
           NOT: { content: { equals: storedContent } },
         },
@@ -378,35 +367,36 @@ export function createApp(
           revision: { increment: 1 },
         },
       });
-      const saved = await tx.studySet.findFirst({ where: { id, userId } });
-      if (!saved) throw unavailable();
+      const saved = await readOwnedSet(tx, id, userId);
       if (!changed.count && saved.revision !== input.revision) throw conflict();
       return saved;
     });
     return c.json(decodeStorage(set));
   });
   app.patch("/api/sets/:id/organization", async (c) => {
-    const { course, ...flags } = schema(
+    const changes = schema(
       z
         .strictObject(organizationFields)
-        .refine((fields) => Object.keys(fields).length > 0, "Choose a field to update."),
+        .refine(
+          (fields) => Object.keys(fields).length > 0,
+          "Choose a field to update.",
+        ),
       await read(c.req.raw),
     );
-    const changed = await c.get("db").studySet.updateMany({
-      where: { id: c.req.param("id"), userId: c.get("userId") },
-      data: { ...flags, course: encodeStorage(course) },
-    });
-    if (!changed.count) throw unavailable();
+    await organizeSets(
+      c.get("db"),
+      c.get("userId"),
+      [c.req.param("id")],
+      changes,
+      false,
+    );
     return c.json({ updated: true });
   });
   app.post("/api/sets/:id/duplicate", async (c) => {
     schema(z.strictObject({}), await read(c.req.raw));
     const db = c.get("db");
     const userId = c.get("userId");
-    const original = await db.studySet.findFirst({
-      where: { id: c.req.param("id"), userId },
-    });
-    if (!original) throw unavailable();
+    const original = await readOwnedSet(db, c.req.param("id"), userId);
     const content = validateContent(decodeStorage(original.content));
     const titled = {
       ...content,
@@ -425,7 +415,7 @@ export function createApp(
         content: json(copy),
       },
     });
-    return c.json(decodeStorage(set), 201);
+    return c.json(decodeStorage({ ...set, ownershipRole: "primary" }), 201);
   });
   app.delete("/api/sets/:id", async (c) => {
     const input = schema(
@@ -444,10 +434,11 @@ export function createApp(
     return c.json({ deleted: true });
   });
   app.get("/api/sets/:id/export", async (c) => {
-    const set = await c.get("db").studySet.findFirst({
-      where: { id: c.req.param("id"), userId: c.get("userId") },
-    });
-    if (!set) throw unavailable();
+    const set = await readOwnedSet(
+      c.get("db"),
+      c.req.param("id"),
+      c.get("userId"),
+    );
     const content = validateContent(decodeStorage(set.content));
     c.header(
       "Content-Disposition",
@@ -465,10 +456,7 @@ export function createApp(
     const db = c.get("db");
     const userId = c.get("userId");
     const attempt = await db.$transaction(async (tx) => {
-      const set = await tx.studySet.findFirst({
-        where: { id: c.req.param("id"), userId },
-      });
-      if (!set) throw unavailable();
+      const set = await readLockedOwnedSet(tx, c.req.param("id"), userId);
       const { settings, snapshot, fullSet } = practiceSnapshot(
         validateContent(decodeStorage(set.content)),
         input,
@@ -561,11 +549,15 @@ export function createApp(
             );
       const scored =
         current.status === "reviewing" ? grade(snapshot, responses) : undefined;
-      const position = current.status === "completed" ? current.position : input.position;
+      const position =
+        current.status === "completed" ? current.position : input.position;
       const now = new Date();
       // Study-set writes precede attempt writes, matching review completion.
-      if (current.status !== "completed")
-        await markStudied(tx, where.userId, current.studySetId, now);
+      const studySetId =
+        current.status === "completed" ||
+        (await markStudied(tx, where.userId, current.studySetId, now))
+          ? current.studySetId
+          : null;
       const changed = await tx.attempt.updateMany({
         where: { ...where, revision: input.revision, status: current.status },
         data: {
@@ -587,14 +579,14 @@ export function createApp(
       return "changes" in input
         ? {
             ...metadataOnly(current),
+            studySetId,
             position,
             revision: current.revision + 1,
             ...(scored
               ? {
                   status: scored.status,
                   result: scored.result,
-                  completedAt:
-                    scored.status === "completed" ? now : null,
+                  completedAt: scored.status === "completed" ? now : null,
                 }
               : {}),
           }
@@ -625,14 +617,17 @@ export function createApp(
           ? readProgressContent(decodeStorage(current.progressContent))
           : progressContent(
               validateContent(
-                decodeStorage((await tx.attempt.findFirstOrThrow({ where })).snapshot),
+                decodeStorage(
+                  (await tx.attempt.findFirstOrThrow({ where })).snapshot,
+                ),
               ),
             );
-      const scored = grade(rules, decodeStorage(current.responses) as Responses);
+      const scored = grade(
+        rules,
+        decodeStorage(current.responses) as Responses,
+      );
       const now = new Date();
-      if (current.reviewMode && current.studySetId)
-        await lockReviewDeck(tx, where.userId, current.studySetId);
-      await markStudied(tx, where.userId, current.studySetId, now);
+      const role = await markStudied(tx, where.userId, current.studySetId, now);
       const changed = await tx.attempt.updateMany({
         where: { ...where, status: "in_progress", revision: input.revision },
         data: {
@@ -642,11 +637,17 @@ export function createApp(
           completedAt: scored.status === "completed" ? now : null,
         },
       });
-      if (changed.count && current.reviewMode && scored.status === "completed")
+      if (
+        role &&
+        changed.count &&
+        current.reviewMode &&
+        scored.status === "completed"
+      )
         await recordSpacedReview(
           tx,
           await tx.attempt.findFirstOrThrow({ where }),
           now,
+          role === "primary",
         );
       const saved = compact
         ? await readAttemptProgress(tx, where.id, where.userId)
@@ -654,8 +655,10 @@ export function createApp(
       if (!saved) throw unavailable();
       if (
         !changed.count &&
-        (saved.status === "in_progress" || (compact && saved.revision > input.revision + 1))
-      ) throw conflict();
+        (saved.status === "in_progress" ||
+          (compact && saved.revision > input.revision + 1))
+      )
+        throw conflict();
       return compact ? metadataOnly(saved) : saved;
     });
     return c.json(decodeStorage(attempt));
@@ -681,11 +684,19 @@ export function createApp(
       );
       if (!snapshot) return null;
       const startedAt = new Date();
-      await markStudied(tx, where.userId, source.studySetId, startedAt);
+      const role = await markStudied(
+        tx,
+        where.userId,
+        source.studySetId,
+        startedAt,
+      );
+      const studySetId = role
+        ? (await tx.attempt.findFirstOrThrow({ where })).studySetId
+        : null;
       return tx.attempt.create({
         data: {
           userId: c.get("userId"),
-          studySetId: source.studySetId,
+          studySetId,
           studySetRevision: source.studySetRevision,
           sourceAttemptId: source.id,
           settings: json({

@@ -159,6 +159,114 @@ describe.skipIf(!enabled)(
         ),
       ).toEqual([set.id]);
     });
+    it("shares the latest saved exam through revocable copy links and imports each action once", async () => {
+      const create = await a("/sets", "POST", {
+        ...exam,
+        title: "Copy link exam",
+      });
+      expect(create.value).toMatchObject({
+        ownershipRole: "primary",
+        revision: 1,
+      });
+      const path = `/sets/${create.value.id}`;
+      expect((await b(path)).status).toBe(404);
+      expect((await b(path + "/sharing")).status).toBe(404);
+      expect(
+        (await b(path + "/sharing/link", "PUT", { enabled: true })).status,
+      ).toBe(404);
+      const enabled = await a(path + "/sharing/link", "PUT", { enabled: true });
+      expect(enabled.value.link).toMatch(/^\/share#/);
+      expect((await a(path + "/sharing")).value.link).toBe(enabled.value.link);
+      const token = enabled.value.link.split("#")[1];
+      const guest = client();
+      expect((await guest("/shares/preview", "POST", { token })).status).toBe(
+        401,
+      );
+      expect(
+        (await b("/shares/preview", "POST", { token: token.slice(0, -1) }))
+          .status,
+      ).toBe(404);
+      const preview = await b("/shares/preview", "POST", { token });
+      expect(preview.value).toEqual({
+        title: "Copy link exam",
+        kind: "exam",
+        count: exam.questions.length,
+      });
+      expect(preview.headers.get("Cache-Control")).toBe("no-store, private");
+      const updated = { ...exam, title: "Copy link exam updated" };
+      expect(
+        (await a(path, "PUT", { revision: 1, content: updated })).status,
+      ).toBe(200);
+      const importBody = { token, requestId: randomUUID() };
+      const concurrent = await Promise.all([
+        b("/shares/import", "POST", importBody),
+        b("/shares/import", "POST", importBody),
+      ]);
+      expect(concurrent.map(({ status }) => status).sort()).toEqual([200, 201]);
+      const copy = concurrent[0].value.id;
+      expect(concurrent[1].value.id).toBe(copy);
+      expect(copy).not.toBe(create.value.id);
+      expect((await b(`/sets/${copy}`)).value).toMatchObject({
+        ownershipRole: "primary",
+        revision: 1,
+        content: updated,
+        course: "",
+        pinned: false,
+        archived: false,
+        lastStudiedAt: null,
+      });
+      expect((await a(`/sets/${copy}`)).status).toBe(404);
+      expect((await b(path)).status).toBe(404);
+      const another = await b("/shares/import", "POST", {
+        token,
+        requestId: randomUUID(),
+      });
+      expect(another.status).toBe(201);
+      expect(another.value.id).not.toBe(copy);
+      expect(
+        (await a(path + "/sharing/link", "PUT", { enabled: false })).value.link,
+      ).toBeNull();
+      expect((await b("/shares/preview", "POST", { token })).status).toBe(404);
+      expect(
+        (await b("/shares/import", "POST", { token, requestId: randomUUID() }))
+          .status,
+      ).toBe(404);
+      expect((await b("/shares/import", "POST", importBody)).value.id).toBe(
+        copy,
+      );
+      const reenabled = await a(path + "/sharing/link", "PUT", {
+        enabled: true,
+      });
+      expect(reenabled.value.link).not.toBe(enabled.value.link);
+      expect((await b("/shares/preview", "POST", { token })).status).toBe(404);
+      const invited = await a(path + "/sharing/invitations", "POST", {
+        email: emails[1],
+      });
+      const invitationId = invited.value.invitations[0].id;
+      const accepted = await b(`/ownership-invitations/${invitationId}/respond`, "POST", {
+        accept: true,
+      });
+      expect(accepted.status).toBe(200);
+      expect((await b(path)).value).toMatchObject({
+        ownershipRole: "co_owner",
+        content: updated,
+      });
+      expect((await a(path, "DELETE", { revision: 2 })).status).toBe(200);
+      expect((await b(path)).status).toBe(404);
+      expect(
+        (
+          await b("/shares/preview", "POST", {
+            token: reenabled.value.link.split("#")[1],
+          })
+        ).status,
+      ).toBe(404);
+      expect((await b(`/sets/${copy}`, "DELETE", { revision: 1 })).status).toBe(
+        200,
+      );
+      expect((await b("/shares/import", "POST", importBody)).status).toBe(404);
+      await b(`/sets/${another.value.id}`, "DELETE", { revision: 1 });
+    }, 60000);
+
     it("enforces ownership, revisions, immutable snapshots, grading, retries, transitions, and idempotent submission", async () => {
       const unicode = {
         ...deck,
@@ -900,6 +1008,294 @@ describe.skipIf(!enabled)(
       expect(insights.value.recurring).toEqual([expect.objectContaining({ itemId: "q1", prompt: "Count electrons", misses: 3 })]);
       expect((await b(`/insights?setId=${set.id}`)).value).toEqual({ trends: [], recurring: [], pending: null, retry: null });
     }, 120000);
+    it("lets accepted co-owners study and edit one deck with private schedules, settings and backups", async () => {
+      const collaborator = client();
+      const collaboratorEmail = `acceptance-${randomUUID()}@example.test`;
+      emails.push(collaboratorEmail);
+      const registered = await collaborator("/auth/sign-up/email", "POST", {
+        email: collaboratorEmail,
+        password,
+        name: "Test",
+      });
+      expect(registered.status).toBe(200);
+      const coOwner = registered.value.user;
+      const stranger = b;
+      const document = {
+        ...deck,
+        title: "Co-owned test deck",
+        cards: deck.cards.slice(0, 2),
+      };
+      const original = (await a("/sets", "POST", document)).value;
+      const path = `/sets/${original.id}`;
+      const invitations = "/ownership-invitations";
+      const invite = (email: string) =>
+        a(path + "/sharing/invitations", "POST", { email });
+      const respond = (id: string) => `${invitations}/${id}/respond`;
+      expect((await invite(emails[0])).status).toBe(409);
+      expect((await invite(`absent-${randomUUID()}@example.test`)).status).toBe(
+        404,
+      );
+      const first = (await invite(coOwner.email.toUpperCase())).value
+        .invitations[0].id;
+      expect((await invite(coOwner.email)).value.invitations).toEqual([
+        { id: first, email: coOwner.email },
+      ]);
+      expect((await collaborator(path)).status).toBe(404);
+      expect((await stranger(invitations)).value).toEqual([]);
+      expect(
+        (await stranger(respond(first), "POST", { accept: true })).status,
+      ).toBe(404);
+      expect(
+        (await a(path + `/sharing/invitations/${first}`, "DELETE", {})).status,
+      ).toBe(200);
+      expect(
+        (await collaborator(respond(first), "POST", { accept: true })).status,
+      ).toBe(404);
+      const second = (await invite(coOwner.email)).value.invitations[0].id;
+      expect(
+        (await collaborator(respond(second), "POST", { accept: false })).value
+          .accepted,
+      ).toBe(false);
+      const third = (await invite(coOwner.email)).value.invitations[0].id;
+      expect((await collaborator(invitations)).value).toEqual([
+        {
+          id: third,
+          title: document.title,
+          kind: "flashcards",
+          ownerEmail: emails[0],
+        },
+      ]);
+      expect(
+        (await collaborator(respond(third), "POST", { accept: true })).value,
+      ).toEqual({ studySetId: original.id, accepted: true });
+      expect((await collaborator(path)).value).toMatchObject({
+        ownershipRole: "co_owner",
+        content: document,
+        lastStudiedAt: null,
+      });
+      expect((await collaborator(path + "/sharing")).status).toBe(404);
+      expect(
+        (await collaborator(path + "/sharing/link", "PUT", { enabled: true }))
+          .status,
+      ).toBe(404);
+      expect((await collaborator(path, "DELETE", { revision: 1 })).status).toBe(
+        404,
+      );
+      expect((await stranger(path)).status).toBe(404);
+      expect((await stranger(path + "/export")).status).toBe(404);
+      expect((await stranger(path + "/attempts", "POST", {})).status).toBe(404);
+
+      const revised = { ...document, title: "Co-owned revised deck" };
+      expect(
+        (await collaborator(path, "PUT", { revision: 1, content: revised }))
+          .value.revision,
+      ).toBe(2);
+      expect(
+        (await a(path, "PUT", { revision: 1, content: document })).status,
+      ).toBe(409);
+      expect((await collaborator(path + "/export")).value).toEqual(revised);
+      expect((await a(path)).value).toMatchObject({
+        content: revised,
+        course: "",
+        pinned: false,
+      });
+      const duplicate = await collaborator(path + "/duplicate", "POST", {});
+      expect(duplicate.value.ownershipRole).toBe("primary");
+      await collaborator(`/sets/${duplicate.value.id}`, "DELETE", {
+        revision: 1,
+      });
+      expect(
+        (
+          await collaborator("/sets/organization", "PATCH", {
+            ids: [original.id],
+            course: "Private co-owner course",
+            pinned: true,
+          })
+        ).value.updated,
+      ).toBe(1);
+      expect((await collaborator("/sets/courses")).value.items).toContainEqual({
+        course: "Private co-owner course",
+        count: 1,
+      });
+      expect((await a("/sets/courses")).value.items).not.toContainEqual({
+        course: "Private co-owner course",
+        count: 1,
+      });
+      expect(
+        (await collaborator("/sets?course=Private%20co-owner%20course")).value
+          .items[0],
+      ).toMatchObject({
+        id: original.id,
+        ownershipRole: "co_owner",
+        pinned: true,
+      });
+      expect(
+        (
+          await collaborator(path + "/organization", "PATCH", {
+            archived: true,
+          })
+        ).status,
+      ).toBe(200);
+      expect((await collaborator(path + "/review")).value.archived).toBe(true);
+      expect((await a(path + "/review")).value.archived).toBe(false);
+      await collaborator(path + "/organization", "PATCH", { archived: false });
+
+      expect(
+        (await collaborator(path + "/review", "PATCH", { limit: 1 })).value
+          .limit,
+      ).toBe(1);
+      expect((await a(path + "/review")).value.limit).toBe(20);
+      const review = (await collaborator(path + "/review", "POST", {})).value
+        .id;
+      const ownerAttempt = (await a(path + "/attempts", "POST", {})).value.id;
+      expect((await a(`/attempts/${review}`)).status).toBe(404);
+      expect((await collaborator(`/attempts/${ownerAttempt}`)).status).toBe(
+        404,
+      );
+      const cardId = document.cards[0].id;
+      const saved = await collaborator(
+        `/attempts/${review}/progress`,
+        "PATCH",
+        {
+          revision: 1,
+          position: 0,
+          responses: {
+            [cardId]: {
+              revealed: true,
+              rating: "known",
+              note: "Private co-owner note",
+            },
+          },
+        },
+      );
+      expect(saved.status).toBe(200);
+      expect(
+        (
+          await collaborator(`/attempts/${review}/submit`, "POST", {
+            revision: saved.value.revision,
+          })
+        ).status,
+      ).toBe(200);
+      expect((await collaborator(path + "/review")).value).toMatchObject({
+        due: 1,
+        reviewedToday: 1,
+      });
+      expect((await a(path + "/review")).value).toMatchObject({
+        due: 2,
+        reviewedToday: 0,
+      });
+      const enabledLink = await a(path + "/sharing/link", "PUT", {
+        enabled: true,
+      });
+      const token = enabledLink.value.link.split("#")[1];
+      const preview = await stranger("/shares/preview", "POST", { token });
+      expect(preview.value).toEqual({
+        title: revised.title,
+        kind: "flashcards",
+        count: 2,
+      });
+      const imported = await stranger("/shares/import", "POST", {
+        token,
+        requestId: randomUUID(),
+      });
+      expect(imported.status).toBe(201);
+      const importedPath = `/sets/${imported.value.id}`;
+      expect((await stranger(importedPath)).value).toMatchObject({
+        ownershipRole: "primary",
+        content: revised,
+        lastStudiedAt: null,
+        reviewLimit: 20,
+      });
+      expect((await stranger(importedPath, "DELETE", { revision: 1 })).status).toBe(200);
+      expect(
+        (await collaborator(`/attempts/groups?setId=${original.id}`)).value
+          .items[0],
+      ).toMatchObject({
+        setId: original.id,
+        title: revised.title,
+        count: 1,
+      });
+
+      const coBackup = await collaborator("/backup?history=1");
+      const primaryBackup = await a("/backup?history=1");
+      expect(coBackup.value.library.sets).toContainEqual(
+        expect.objectContaining({
+          id: original.id,
+          course: "Private co-owner course",
+        }),
+      );
+      expect(coBackup.value.history.reviews).toContainEqual(
+        expect.objectContaining({ studySetId: original.id, cardId }),
+      );
+      expect(primaryBackup.value.history.reviews).not.toContainEqual(
+        expect.objectContaining({ studySetId: original.id }),
+      );
+      expect(primaryBackup.value.history.attempts).not.toContainEqual(
+        expect.objectContaining({ id: review }),
+      );
+      const coSet = coBackup.value.library.sets.find(
+        ({ id }: { id: string }) => id === original.id,
+      );
+      const restored = await collaborator("/backup/restore", "POST", {
+        library: { ...coBackup.value.library, sets: [coSet] },
+        history: {
+          ...coBackup.value.history,
+          attempts: coBackup.value.history.attempts.filter(
+            ({ studySetId }: { studySetId: string }) =>
+              studySetId === original.id,
+          ),
+          reviews: coBackup.value.history.reviews.filter(
+            ({ studySetId }: { studySetId: string }) =>
+              studySetId === original.id,
+          ),
+        },
+      });
+      expect(restored.value).toMatchObject({
+        setCount: 1,
+        attemptCount: 1,
+        reviewCount: 1,
+      });
+      const copy = (
+        await collaborator("/sets?course=Private%20co-owner%20course")
+      ).value.items.find(({ id }: { id: string }) => id !== original.id);
+      expect(copy.ownershipRole).toBe("primary");
+      expect((await collaborator(`/sets/${copy.id}/sharing`)).value).toEqual({
+        link: null,
+        coOwners: [],
+        invitations: [],
+      });
+      expect((await collaborator(`/sets/${copy.id}/review`)).value.due).toBe(1);
+
+      expect(
+        (await a(path + `/sharing/co-owners/${coOwner.id}`, "DELETE", {}))
+          .status,
+      ).toBe(200);
+      expect((await collaborator(path)).status).toBe(404);
+      expect((await collaborator(path + "/review")).status).toBe(404);
+      expect((await collaborator(`/attempts/${review}`)).value).toMatchObject({
+        studySetId: null,
+        responses: {
+          [cardId]: expect.objectContaining({ note: "Private co-owner note" }),
+        },
+      });
+      expect(
+        (
+          await collaborator(`/attempts/${review}/retry`, "POST", {
+            mode: "flagged",
+          })
+        ).status,
+      ).toBe(422);
+      const reinvite = (await invite(coOwner.email)).value.invitations[0].id;
+      await collaborator(respond(reinvite), "POST", { accept: true });
+      const active = (await collaborator(path + "/attempts", "POST", {})).value
+        .id;
+      expect((await a(path, "DELETE", { revision: 2 })).status).toBe(200);
+      expect((await collaborator(path)).status).toBe(404);
+      expect(
+        (await collaborator(`/attempts/${active}`)).value.studySetId,
+      ).toBeNull();
+      await collaborator(`/sets/${copy.id}`, "DELETE", { revision: 2 });
+    }, 90000);
     it("changes password, revokes other sessions, and expires logout sessions", async () => {
       const other = client();
       expect(

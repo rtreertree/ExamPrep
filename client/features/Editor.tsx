@@ -15,6 +15,7 @@ import {
   ListOrdered,
   Plus,
   Search,
+  Share2,
   Trash2,
   Download,
 } from "lucide-react";
@@ -57,6 +58,7 @@ import { ContentPreview } from "./Authoring";
 import { RubricList } from "../components/RubricList";
 import { NotationEditor } from "../components/NotationEditor";
 import { PracticeSetup } from "../components/PracticeSetup";
+import { SetSharing } from "./SetSharing";
 import "./library-editor.css";
 
 type Loaded = { set?: StudySet; draft?: Draft; missing: boolean };
@@ -158,6 +160,10 @@ function Editor({
     initial.set?.revision ?? null,
   );
   const [setId, setSetId] = useState(initial.set?.id);
+  const [ownershipRole, setOwnershipRole] = useState(
+    initial.set?.ownershipRole,
+  );
+  const [sharing, setSharing] = useState(false);
   const [baseline, setBaseline] = useState(() =>
     JSON.stringify(initial.set?.content ?? content),
   );
@@ -330,6 +336,7 @@ function Editor({
       setFieldIssues([]);
       setRevision(set.revision);
       setSetId(set.id);
+      setOwnershipRole(set.ownershipRole);
       setBaseline(JSON.stringify(captured));
       setConflict(false);
       setDatabaseStatus("Saved");
@@ -586,6 +593,15 @@ function Editor({
         title={content.title || "Untitled study set"}
         actions={
           <>
+            {setId && ownershipRole === "primary" ? (
+              <Button
+                aria-label="Share and manage access"
+                title="Share and manage access"
+                onClick={() => setSharing(true)}
+              >
+                <Share2 size={18} aria-hidden="true" />
+              </Button>
+            ) : null}
             <Button
               onClick={() => {
                 try {
@@ -609,6 +625,9 @@ function Editor({
           </>
         }
       />
+      {sharing && setId ? (
+        <SetSharing id={setId} onClose={() => setSharing(false)} />
+      ) : null}
       <div className="editor-persistent-controls">
         <div className="editor-savebar">
           <div className="editor-save-state">

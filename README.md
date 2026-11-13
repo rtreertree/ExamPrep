@@ -108,6 +108,14 @@ The application remains **1.0.0** and study-set files still use **schemaVersion 
 - Use Due review for per-deck spaced repetition. Only completed due sessions update the schedule. Edits to either side reset the changed card's schedule. Daily limits reset at midnight UTC, displayed in local time.
 - Use Account → Library backup to download all study sets and optionally a separate history file with attempts, private notes, and scheduled cards. Restore previews the pair, imports copies, and skips entries already restored from that backup. Individual study-set exports still contain only study content.
 
+### Sharing and co-ownership
+
+From a saved exam or flashcard deck, choose **Share and manage access** in its editor or library menu. A copy link lets a signed-in recipient save the latest version, including answers, as an independent set. Turning off the link stops future imports.
+
+Invite a registered account by email to edit the same set together. The recipient accepts in **Your library**. Each owner has private library settings, practice history, notes, and review schedules. The primary owner manages access and can delete the original for everyone. Previous attempts stay in each person's History when access ends.
+
+Backups include sets you co-own and your own study data. Restore creates independently owned copies with sharing off. Apply the study-set sharing migration before deploying the app update. After co-ownership is in use, fix regressions forward so owners retain access during recovery.
+
 ### Password recovery
 
 Set `RESEND_API_KEY` and `RESET_EMAIL_FROM` in the Node environment or Worker bindings to enable recovery. Use a sending-only Resend key and an address on a verified sending domain. Use test inboxes when checking delivery. Requests return the same confirmation for registered and unregistered addresses. Links expire after 30 minutes and a successful reset revokes active sessions. See [Resend's domain setup](https://resend.com/docs/dashboard/domains/introduction).

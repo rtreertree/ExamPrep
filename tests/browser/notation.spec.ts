@@ -48,6 +48,7 @@ async function mockAPI(page: Page) {
     kind: "exam",
     content: structuredClone(content),
     revision: 1,
+    ownershipRole: "primary",
     updatedAt: new Date().toISOString(),
     course: "",
     pinned: false,

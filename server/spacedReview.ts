@@ -1,3 +1,4 @@
+import { sqltag as sql } from "@prisma/client/runtime/wasm-compiler-edge";
 import { HTTPException } from "hono/http-exception";
 import type { Attempt, Prisma } from "../generated/prisma/client";
 import { own, type Response, type Responses } from "../shared/attempts";
@@ -5,10 +6,17 @@ import { validateContent, type Card } from "../shared/content";
 import type { ReviewQueue } from "../shared/spacedReview";
 import type { Database } from "./db";
 import { markStudied } from "./practice";
+import { readLockedOwnedSet, readOwnedSet, type OwnedSet } from "./setAccess";
 import { progressContent, SNAPSHOT_VERSION } from "./snapshots";
 import { decodeStorage, encodeStorage } from "./storage";
 
-type ReviewDb = Pick<Database, "$queryRaw" | "studySet" | "attempt">;
+type ReviewDb = Pick<Database, "$queryRaw">;
+type ReviewSchedule = {
+  cardId: string;
+  fingerprint: string;
+  streak: number;
+  dueAt: Date;
+};
 const day = 24 * 60 * 60 * 1000;
 const successIntervals = [1, 3, 7, 14, 30];
 const unavailable = () =>
@@ -38,15 +46,33 @@ export function nextCardReview(
   return { streak, dueAt: new Date(at.getTime() + interval * day) };
 }
 
-export async function lockReviewDeck(
+function reviewStorage(userId: string, primary: boolean) {
+  return primary
+    ? {
+        table: sql`"CardReview"`,
+        ownerColumn: sql``,
+        ownerValue: sql``,
+        ownerFilter: sql``,
+      }
+    : {
+        table: sql`"CoOwnerCardReview"`,
+        ownerColumn: sql`, "userId"`,
+        ownerValue: sql`, ${userId}`,
+        ownerFilter: sql`AND "userId" = ${userId}`,
+      };
+}
+
+function readSchedules(
   db: Pick<ReviewDb, "$queryRaw">,
-  userId: string,
   setId: string,
+  userId: string,
+  primary: boolean,
 ) {
-  const rows = await db.$queryRaw<{ id: string }[]>`
-    SELECT id FROM "StudySet" WHERE id = ${setId} AND "userId" = ${userId} FOR UPDATE
-  `;
-  return rows.length > 0;
+  const { table, ownerFilter } = reviewStorage(userId, primary);
+  return db.$queryRaw<ReviewSchedule[]>(sql`
+    SELECT "cardId", fingerprint, streak, "dueAt" FROM ${table}
+    WHERE "studySetId" = ${setId} ${ownerFilter}
+  `);
 }
 
 async function activeReview(
@@ -65,14 +91,10 @@ export async function recordSpacedReview(
   db: ReviewDb,
   attempt: Attempt,
   completedAt: Date,
+  primary: boolean,
 ) {
   const { userId, studySetId, startedAt } = attempt;
-  if (
-    !attempt.reviewMode ||
-    !studySetId ||
-    !(await lockReviewDeck(db, userId, studySetId))
-  )
-    return;
+  if (!attempt.reviewMode || !studySetId) return;
   const snapshot = validateContent(decodeStorage(attempt.snapshot));
   if (snapshot.kind !== "flashcards") return;
   const responses = decodeStorage(attempt.responses) as Responses;
@@ -82,13 +104,10 @@ export async function recordSpacedReview(
   });
   if (!rated.length) return;
   const existing = new Map(
-    (
-      await db.$queryRaw<
-        { cardId: string; streak: number; fingerprint: string }[]
-      >`
-    SELECT "cardId", streak, fingerprint FROM "CardReview" WHERE "studySetId" = ${studySetId}
-  `
-    ).map((row) => [row.cardId, row]),
+    (await readSchedules(db, studySetId, userId, primary)).map((row) => [
+      row.cardId,
+      row,
+    ]),
   );
   const updates = await Promise.all(
     rated.map(async ({ card, rating }) => {
@@ -105,15 +124,16 @@ export async function recordSpacedReview(
       };
     }),
   );
-  await db.$queryRaw`
-    INSERT INTO "CardReview" ("studySetId", "cardId", fingerprint, streak, "dueAt", "attemptStartedAt")
-    SELECT ${studySetId}, u."cardId", u.fingerprint, u.streak, u."dueAt", ${startedAt}
+  const { table, ownerColumn, ownerValue } = reviewStorage(userId, primary);
+  await db.$queryRaw(sql`
+    INSERT INTO ${table} ("studySetId" ${ownerColumn}, "cardId", fingerprint, streak, "dueAt", "attemptStartedAt")
+    SELECT ${studySetId} ${ownerValue}, u."cardId", u.fingerprint, u.streak, u."dueAt", ${startedAt}
     FROM jsonb_to_recordset(${JSON.stringify(updates)}::jsonb) AS u("cardId" text, fingerprint text, streak int, "dueAt" timestamp)
-    ON CONFLICT ("studySetId", "cardId") DO UPDATE SET fingerprint = EXCLUDED.fingerprint,
+    ON CONFLICT ("studySetId" ${ownerColumn}, "cardId") DO UPDATE SET fingerprint = EXCLUDED.fingerprint,
       streak = EXCLUDED.streak, "dueAt" = EXCLUDED."dueAt", "attemptStartedAt" = EXCLUDED."attemptStartedAt"
-    WHERE "CardReview"."attemptStartedAt" < EXCLUDED."attemptStartedAt"
+    WHERE ${table}."attemptStartedAt" < EXCLUDED."attemptStartedAt"
     RETURNING "cardId"
-  `;
+  `);
 }
 
 async function planReview(
@@ -121,19 +141,15 @@ async function planReview(
   userId: string,
   setId: string,
   now: Date,
+  set: OwnedSet,
 ) {
-  const set = await db.studySet.findFirst({
-    where: { id: setId, userId, kind: "flashcards" },
-  });
-  if (!set) throw unavailable();
+  if (set.kind !== "flashcards") throw unavailable();
   const doc = validateContent(decodeStorage(set.content));
   if (doc.kind !== "flashcards") throw unavailable();
   const today = new Date(Math.floor(now.getTime() / day) * day);
   const tomorrow = new Date(today.getTime() + day);
   const [schedules, counted, activeAttemptId] = await Promise.all([
-    db.$queryRaw<{ cardId: string; fingerprint: string; dueAt: Date }[]>`
-      SELECT "cardId", fingerprint, "dueAt" FROM "CardReview" WHERE "studySetId" = ${setId}
-    `,
+    readSchedules(db, setId, userId, set.ownershipRole === "primary"),
     db.$queryRaw<{ count: number }[]>`
       SELECT COALESCE(SUM(COALESCE((result->>'known')::int, 0)
         + COALESCE((result->>'reviewAgain')::int, 0)), 0)::int AS count FROM "Attempt"
@@ -191,7 +207,15 @@ export async function readReviewQueue(
   userId: string,
   setId: string,
 ) {
-  return (await planReview(db, userId, setId, new Date())).queue;
+  return (
+    await planReview(
+      db,
+      userId,
+      setId,
+      new Date(),
+      await readOwnedSet(db, setId, userId),
+    )
+  ).queue;
 }
 
 export async function changeReviewLimit(
@@ -201,18 +225,26 @@ export async function changeReviewLimit(
   limit: number,
 ) {
   return db.$transaction(async (tx) => {
-    if (!(await lockReviewDeck(tx, userId, setId))) throw unavailable();
+    const set = await readLockedOwnedSet(tx, setId, userId);
     if (await activeReview(tx, userId, setId))
       throw new HTTPException(409, {
         message:
           "Finish the open review session before changing its daily limit.",
       });
-    const updated = await tx.studySet.updateMany({
-      where: { id: setId, userId, kind: "flashcards" },
-      data: { reviewLimit: limit },
-    });
-    if (!updated.count) throw unavailable();
-    return (await planReview(tx, userId, setId, new Date())).queue;
+    if (set.kind !== "flashcards") throw unavailable();
+    if (set.ownershipRole === "primary")
+      await tx.$executeRaw`UPDATE "StudySet" SET "reviewLimit" = ${limit} WHERE id = ${setId}`;
+    else
+      await tx.$executeRaw`
+        UPDATE "StudySetCoOwner" SET "reviewLimit" = ${limit}
+        WHERE "studySetId" = ${setId} AND "userId" = ${userId}
+      `;
+    return (
+      await planReview(tx, userId, setId, new Date(), {
+        ...set,
+        reviewLimit: limit,
+      })
+    ).queue;
   });
 }
 
@@ -222,13 +254,14 @@ export async function startSpacedReview(
   setId: string,
 ) {
   return db.$transaction(async (tx) => {
-    if (!(await lockReviewDeck(tx, userId, setId))) throw unavailable();
+    const set = await readLockedOwnedSet(tx, setId, userId);
     const now = new Date();
     const { queue, due, doc, revision } = await planReview(
       tx,
       userId,
       setId,
       now,
+      set,
     );
     if (queue.activeAttemptId)
       return { id: queue.activeAttemptId, started: false };

@@ -1,4 +1,5 @@
 import { serializeContent, type StudyContent } from "../../shared/content";
+import type { OwnershipRole } from "../../shared/sharing";
 import type {
   PracticeSettings,
   Responses,
@@ -11,6 +12,7 @@ export type StudySet = {
   kind: StudyContent["kind"];
   content: StudyContent;
   revision: number;
+  ownershipRole: OwnershipRole;
   updatedAt: string;
   course: string;
   pinned: boolean;

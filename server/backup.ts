@@ -1,3 +1,4 @@
+import { sqltag as sql } from "@prisma/client/runtime/wasm-compiler-edge";
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { CardReview } from "../generated/prisma/client";
@@ -7,6 +8,12 @@ import { practiceSettingsSchema } from "../shared/attempts";
 import { BACKUP_BYTES, decodeFile, parseJSON } from "../shared/json";
 import type { Context } from "./app";
 import type { Database } from "./db";
+import {
+  joinCoOwner,
+  ownedSetIds,
+  ownerPreferences,
+  ownershipRole,
+} from "./setAccess";
 import { progressContent, SNAPSHOT_VERSION } from "./snapshots";
 import { decodeStorage, encodeStorage } from "./storage";
 
@@ -55,18 +62,27 @@ async function exportBackup(
         | null;
       reviews: CardReview[] | null;
     }[]
-  >`
-    WITH sets AS (
+  >(sql`
+    WITH accessible_sets AS (
+      SELECT s.id, s.content, s.revision, s."createdAt", s."updatedAt",
+        ${ownerPreferences}, ${ownershipRole}
+      FROM "StudySet" s ${joinCoOwner(userId)} WHERE s.id IN ${ownedSetIds(userId)}
+    ), sets AS (
       SELECT id, content, revision, course, pinned, archived, "reviewLimit",
-        "lastStudiedAt", "createdAt", "updatedAt" FROM "StudySet" WHERE "userId" = ${userId}
+        "lastStudiedAt", "createdAt", "updatedAt" FROM accessible_sets
     ), attempts AS (
       SELECT id, "studySetId", "studySetRevision", "sourceAttemptId", snapshot,
         settings, "reviewMode", "fullSet", responses, result, status, position,
         "startedAt", "updatedAt", "completedAt" FROM "Attempt"
       WHERE ${includeHistory} AND "userId" = ${userId}
     ), reviews AS (
-      SELECT r.* FROM "CardReview" r JOIN sets s ON s.id = r."studySetId"
-      WHERE ${includeHistory} AND s.content->>'kind' = 'flashcards'
+      SELECT r.* FROM "CardReview" r JOIN accessible_sets s ON s.id = r."studySetId"
+      WHERE ${includeHistory} AND s.content->>'kind' = 'flashcards' AND s."ownershipRole" = 'primary'
+      UNION ALL
+      SELECT r."studySetId", r."cardId", r.fingerprint, r.streak, r."dueAt", r."attemptStartedAt"
+      FROM "CoOwnerCardReview" r JOIN accessible_sets s ON s.id = r."studySetId"
+      WHERE ${includeHistory} AND s.content->>'kind' = 'flashcards' AND r."userId" = ${userId}
+        AND s."ownershipRole" = 'co_owner'
     ), size AS (
       SELECT (
         COALESCE((SELECT sum(pg_column_size(s)) FROM sets s), 0) +
@@ -78,7 +94,7 @@ async function exportBackup(
       CASE WHEN NOT "tooLarge" THEN (SELECT jsonb_agg(s ORDER BY id) FROM sets s) END AS sets,
       CASE WHEN NOT "tooLarge" THEN (SELECT jsonb_agg(a ORDER BY id) FROM attempts a) END AS attempts,
       CASE WHEN NOT "tooLarge" THEN (SELECT jsonb_agg(r ORDER BY "studySetId", "cardId") FROM reviews r) END AS reviews
-    FROM size`;
+    FROM size`);
   if (rows.tooLarge)
     throw new HTTPException(413, {
       message:

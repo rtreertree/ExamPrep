@@ -137,6 +137,11 @@ not undone automatically. Review lock duration and take/verify a Neon recovery
 point before risky changes. CI does not exercise migrations against a database;
 validate schema upgrades and backfills locally against a dedicated test database.
 
+The study-set sharing migration adds ownership, invitation, and copy-link tables
+while retaining the existing primary-owner data. Once co-owners have access,
+use a forward fix for sharing regressions so those owners can still reach their
+sets and review schedules.
+
 For an application rollback, pause new releases, inspect the currently deployed
 version and schema compatibility, then use an authorized shell:
 

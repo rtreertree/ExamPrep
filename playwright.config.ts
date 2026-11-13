@@ -7,7 +7,7 @@ export default defineConfig({
   projects: [
     {
       name: "mocked",
-      testMatch: /(?:account|landing|notation|practice|reliability)\.spec\.ts/,
+      testMatch: /(?:account|landing|notation|practice|reliability|sharing)\.spec\.ts/,
       use: { baseURL: process.env.TEST_BASE_URL || "http://127.0.0.1:5173" },
     },
     { name: "live", testMatch: /workflow\.spec\.ts/ },

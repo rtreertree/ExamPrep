@@ -26,6 +26,9 @@ model User {
   accounts      Account[]
   studySets     StudySet[]
   attempts      Attempt[]
+  coOwnedSets   StudySetCoOwner[]
+  invitations   StudySetInvitation[]
+  copyImports   StudySetCopyImport[]
 
   @@map("user")
 }
@@ -104,9 +107,71 @@ model StudySet {
   updatedAt     DateTime     @updatedAt
   attempts      Attempt[]
   cardReviews   CardReview[]
+  coOwners      StudySetCoOwner[]
+  invitations   StudySetInvitation[]
+  copyLink      StudySetCopyLink?
+  copyImport    StudySetCopyImport?
 
   @@index([userId, updatedAt])
   @@index([userId, archived, pinned, lastStudiedAt])
+}
+
+model StudySetCoOwner {
+  studySetId    String
+  studySet      StudySet @relation(fields: [studySetId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course        String   @default("")
+  pinned        Boolean  @default(false)
+  archived      Boolean  @default(false)
+  lastStudiedAt DateTime?
+  reviewLimit   Int      @default(20)
+  cardReviews   CoOwnerCardReview[]
+
+  @@id([studySetId, userId])
+  @@index([userId, archived, pinned, lastStudiedAt])
+}
+
+model CoOwnerCardReview {
+  studySetId       String
+  userId           String
+  owner            StudySetCoOwner @relation(fields: [studySetId, userId], references: [studySetId, userId], onDelete: Cascade)
+  cardId           String
+  fingerprint      String
+  streak           Int
+  dueAt            DateTime
+  attemptStartedAt DateTime
+
+  @@id([studySetId, userId, cardId])
+}
+
+model StudySetInvitation {
+  id         String   @id @default(uuid())
+  studySetId String
+  studySet   StudySet @relation(fields: [studySetId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([studySetId, userId])
+  @@index([userId, createdAt])
+}
+
+model StudySetCopyLink {
+  studySetId String   @id
+  studySet   StudySet @relation(fields: [studySetId], references: [id], onDelete: Cascade)
+  nonce      String   @unique
+}
+
+model StudySetCopyImport {
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requestId String
+  linkNonce String
+  copyId    String?   @unique
+  copy      StudySet? @relation(fields: [copyId], references: [id], onDelete: SetNull)
+
+  @@id([userId, requestId])
 }
 
 model CardReview {

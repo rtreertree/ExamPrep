@@ -26,6 +26,7 @@ import {
 import { AIHandoffPanel, ImportPanel } from "./Authoring";
 import { SurfaceLight } from "../components/SurfaceLight";
 import { PracticeSetup } from "../components/PracticeSetup";
+import { OwnershipInvitations, SetSharing } from "./SetSharing";
 import {
   ArchiveScope,
   BulkOrganizationDialog,
@@ -80,6 +81,8 @@ export function LibraryPage() {
     "import" | "ai" | { aiSettings: AISettings } | null
   >(null);
   const [deleting, setDeleting] = useState<StudySet>();
+  const [sharing, setSharing] = useState<StudySet>();
+  const [courseVersion, setCourseVersion] = useState(0);
   const [editingCourse, setEditingCourse] = useState<StudySet>();
   const [courseName, setCourseName] = useState("");
   const [error, setError] = useState<Error>();
@@ -300,6 +303,12 @@ export function LibraryPage() {
           </>
         }
       />
+      <OwnershipInvitations
+        onAccept={() => {
+          resource.refresh();
+          if (byCourse) setCourseVersion((version) => version + 1);
+        }}
+      />
       {saved ? (
         <Notice tone="success">
           <p>“{saved.title}” is saved to your account.</p>
@@ -338,6 +347,7 @@ export function LibraryPage() {
       </div>
       {byCourse ? (
         <LibraryCourses
+          key={courseVersion}
           archived={archived}
           page={page}
           onPageChange={(next) =>
@@ -567,6 +577,9 @@ export function LibraryPage() {
                       {set.pinned ? (
                         <span className="library-course">Pinned</span>
                       ) : null}
+                      {set.ownershipRole === "co_owner" ? (
+                        <span className="library-course">Co-owned</span>
+                      ) : null}
                       {set.continuation?.isOlderVersion ? (
                         <span className="library-course">
                           Attempt uses an earlier set version
@@ -617,6 +630,11 @@ export function LibraryPage() {
                           All attempts for this set
                         </Link>
                         <Link to={`/sets/${set.id}/edit`}>Edit set</Link>
+                        {set.ownershipRole === "primary" ? (
+                          <button onClick={() => setSharing(set)}>
+                            Share and manage access
+                          </button>
+                        ) : null}
                         <button
                           disabled={busy}
                           onClick={() => void duplicate(set)}
@@ -663,12 +681,17 @@ export function LibraryPage() {
                         >
                           Export
                         </button>
-                        <button
-                          className="negative"
-                          onClick={() => setDeleting(set)}
-                        >
-                          Delete
-                        </button>
+                        {set.ownershipRole === "primary" ? (
+                          <button
+                            className="negative"
+                            onClick={() => {
+                              setError(undefined);
+                              setDeleting(set);
+                            }}
+                          >
+                            Delete
+                          </button>
+                        ) : null}
                       </Menu>
                     </div>
                   </SurfaceLight>
@@ -835,14 +858,17 @@ export function LibraryPage() {
           </details>
         </Dialog>
       ) : null}
+      {sharing ? (
+        <SetSharing id={sharing.id} onClose={() => setSharing(undefined)} />
+      ) : null}
       {deleting ? (
         <Dialog
           title="Delete this study set?"
           onClose={() => setDeleting(undefined)}
         >
           <p>
-            “{deleting.title}” will be removed from your library. Past attempts
-            and their original content remain in History.
+            “{deleting.title}” will be removed from the library of every owner.
+            Everyone keeps their own past attempts in History.
           </p>
           <ErrorNotice error={error} />
           <div className="actions">

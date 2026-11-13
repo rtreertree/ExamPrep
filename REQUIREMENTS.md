@@ -30,7 +30,9 @@ A university student imports an exam or flashcard file created by any AI tool or
 
 The initial release excluded timers, randomization, spaced repetition, and email delivery. The current v1 adds configurable sessions, due review, and optional email-based password recovery. The current v1 also includes course organization, practice recovery, editor shortcuts, progress insights, private practice annotations, account backup, and adjustable study text size. See the [v1 study workflows](README.md#v1-study-workflows).
 
-Built-in AI, document extraction, media attachments, public sharing, classes, payments, offline synchronization, social login, and registration email verification remain outside the current scope.
+Built-in AI, document extraction, media attachments, a public discovery library, an admin page, classes, payments, offline synchronization, social login, and registration email verification remain outside the current scope.
+
+Primary owners can share saved exams and flashcard decks through revocable copy links and invite registered accounts to co-own a set. Signed-in recipients can import independent copies through links or accept ownership invitations in their library. Co-owners edit the same content and study with private settings, attempts, and schedules.
 
 ## File contract
 

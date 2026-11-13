@@ -9,6 +9,7 @@ import {
 } from "../shared/listing";
 import type { Database } from "./db";
 import { decodeStorage, encodeStorage } from "./storage";
+import { joinCoOwner, ownerAccess } from "./setAccess";
 
 type HistoryQuery = Record<string, string | undefined>;
 type AttemptSummary = Omit<Attempt, "snapshot" | "responses"> & {
@@ -64,7 +65,7 @@ function historyConditions(userId: string, query: HistoryQuery) {
       search
         ? sql`
       AND (strpos(lower(a.snapshot->>'title'), lower(${search})) > 0 OR EXISTS (
-        SELECT 1 FROM "StudySet" s WHERE s.id = a."studySetId" AND s."userId" = ${userId}
+        SELECT 1 FROM "StudySet" s ${joinCoOwner(userId)} WHERE s.id = a."studySetId" AND ${ownerAccess(userId)}
         AND strpos(lower(s.title), lower(${search})) > 0
       ))
     `
@@ -93,7 +94,10 @@ export async function readHistory(
           ORDER BY "latestStartedAt" DESC, "setId" ASC NULLS LAST
           ${window}
         ) grouped
-        LEFT JOIN "StudySet" s ON s.id = grouped."setId" AND s."userId" = ${userId}
+        LEFT JOIN LATERAL (
+          SELECT s.title FROM "StudySet" s ${joinCoOwner(userId)}
+          WHERE s.id = grouped."setId" AND ${ownerAccess(userId)}
+        ) s ON true
         ORDER BY grouped."latestStartedAt" DESC, grouped."setId" ASC NULLS LAST
       `)
     : await db.$queryRaw<AttemptSummary[]>(sql`
