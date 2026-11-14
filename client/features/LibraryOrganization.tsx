@@ -9,6 +9,7 @@ import {
   type SortOrder,
 } from "../../shared/listing";
 import { ListOrdering } from "../components/ListOrdering";
+import { PositionForm } from "../components/PositionForm";
 import { Selector } from "../components/Selector";
 import {
   Button,
@@ -462,8 +463,16 @@ export function PositionDialog({
         if (!busy) onClose();
       }}
     >
-      <form
-        className="stack"
+      <PositionForm
+        label="Position"
+        submitLabel="Move"
+        value={position}
+        max={item.order.count}
+        inputMode="numeric"
+        busy={busy}
+        submitDisabled={!valid}
+        onChange={setPosition}
+        onCancel={onClose}
         onSubmit={async (event) => {
           event.preventDefault();
           if (busy || !valid) return;
@@ -477,29 +486,7 @@ export function PositionDialog({
         }}
       >
         <p>{item.title}</p>
-        <Field
-          label="Position"
-          hint={`Choose a position from 1 to ${item.order.count}.`}
-        >
-          <input
-            type="number"
-            inputMode="numeric"
-            min={1}
-            max={item.order.count}
-            required
-            value={position}
-            onChange={(event) => setPosition(event.target.value)}
-          />
-        </Field>
-        <div className="actions">
-          <Button disabled={busy} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button variant="primary" busy={busy} disabled={!valid} type="submit">
-            Move
-          </Button>
-        </div>
-      </form>
+      </PositionForm>
     </Dialog>
   );
 }

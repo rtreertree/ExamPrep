@@ -1,4 +1,5 @@
-import { itemsOf, type StudyContent } from "../../shared/content";
+import { itemsOf } from "../../shared/contentItems";
+import type { StudyContent } from "../../shared/content";
 import type { Issue } from "../../shared/json";
 import {
   activeQuestionMix,

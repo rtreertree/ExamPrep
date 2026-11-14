@@ -50,6 +50,7 @@ function fixture(legacy = false) {
   };
   const readSnapshot = vi.fn(async () => record);
   const queries: string[] = [];
+  const writes: Record<string, unknown>[] = [];
   const tx = {
     $executeRaw: async () => 1,
     $queryRaw: async (
@@ -77,6 +78,7 @@ function fixture(legacy = false) {
           where.status !== record.status
         )
           return { count: 0 };
+        writes.push(data);
         Object.assign(record, data, { revision: record.revision + 1 });
         return { count: 1 };
       },
@@ -87,7 +89,13 @@ function fixture(legacy = false) {
     $transaction: async (work: (tx: unknown) => Promise<unknown>) => work(tx),
     $disconnect: async () => {},
   } as unknown as Database;
-  return { app: createApp(config, () => db), record, queries, readSnapshot };
+  return {
+    app: createApp(config, () => db),
+    record,
+    queries,
+    readSnapshot,
+    writes,
+  };
 }
 async function request(
   app: ReturnType<typeof createApp>,
@@ -129,7 +137,7 @@ describe("progress API trust boundary", () => {
     });
   });
   it("merges deltas and returns compact acknowledgements, protecting ownership and revisions", async () => {
-    const { app, record, readSnapshot, queries } = fixture();
+    const { app, record, readSnapshot, queries, writes } = fixture();
     let result = await request(app, "/attempts/attempt/progress", {
       revision: 1,
       position: 0,
@@ -142,6 +150,8 @@ describe("progress API trust boundary", () => {
     expect(metadata).not.toHaveProperty("responses");
     expect(readSnapshot).not.toHaveBeenCalled();
     expect(queries[0]).not.toMatch(/[, ]snapshot[, ]/);
+    expect(writes[0]).not.toHaveProperty("progressContent");
+    expect(writes[0]).not.toHaveProperty("snapshotVersion");
     expect(
       (
         await request(app, "/attempts/attempt/progress", {
@@ -194,7 +204,7 @@ describe("progress API trust boundary", () => {
     });
   });
   it("validates and upgrades legacy snapshots once, keeping legacy full-map clients working", async () => {
-    const { app, readSnapshot, record } = fixture(true);
+    const { app, readSnapshot, record, writes } = fixture(true);
     expect(
       (
         await request(app, "/attempts/attempt/progress", {
@@ -206,6 +216,7 @@ describe("progress API trust boundary", () => {
     ).toBe(200);
     expect(readSnapshot).toHaveBeenCalledTimes(1);
     expect(record.snapshotVersion).toBe(1);
+    expect(writes[0]).toHaveProperty("progressContent");
     expect(
       (
         await request(app, "/attempts/attempt/progress", {
@@ -216,6 +227,7 @@ describe("progress API trust boundary", () => {
       ).status,
     ).toBe(200);
     expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(writes[1]).not.toHaveProperty("progressContent");
     const response = await request(app, "/attempts/attempt/progress", {
       revision: 3,
       position: 0,

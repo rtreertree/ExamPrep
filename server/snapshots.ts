@@ -1,7 +1,12 @@
 import type { Database } from "./db";
 import type { Attempt } from "../generated/prisma/client";
 import { z } from "zod";
-import { contentId, type StudyContent } from "../shared/content";
+import {
+  contentId,
+  validateContent,
+  type StudyContent,
+} from "../shared/content";
+import { decodeStorage } from "./storage";
 
 // Private database format, independent of the unchanged portable v1 contract.
 // Only created after full validation at the immutable snapshot boundary.
@@ -97,6 +102,24 @@ const rulesSchema = z.discriminatedUnion("kind", [
 ]);
 export const readProgressContent = (value: unknown): StudyContent =>
   rulesSchema.parse(value);
+
+export async function resolveProgressRules(
+  current: Pick<Attempt, "snapshotVersion" | "progressContent">,
+  readSnapshot: () => Promise<unknown>,
+) {
+  if (current.snapshotVersion === SNAPSHOT_VERSION && current.progressContent)
+    return {
+      rules: readProgressContent(decodeStorage(current.progressContent)),
+      needsUpgrade: false,
+    };
+  return {
+    rules: progressContent(
+      validateContent(decodeStorage(await readSnapshot())),
+    ),
+    needsUpgrade: true,
+  };
+}
+
 export async function readAttemptProgress(
   db: Pick<Database, "$queryRaw">,
   id: string,

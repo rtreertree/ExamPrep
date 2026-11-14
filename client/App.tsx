@@ -1,4 +1,11 @@
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   createBrowserRouter,
   Navigate,
@@ -10,8 +17,11 @@ import {
 } from "react-router-dom";
 import { BookOpen, History, UserRound, Menu, X } from "lucide-react";
 import { AuthProvider, useAuth } from "./lib/auth";
-import { AuthPage, AccountPage } from "./features/Account";
+import { AuthPage } from "./features/AuthPage";
 import { applyReadingSize, readingSize } from "./lib/readingSize";
+const AccountPage = lazy(() =>
+  import("./features/Account").then((m) => ({ default: m.AccountPage })),
+);
 const LandingPage = lazy(() => import("./features/Landing"));
 const PasswordRecoveryPage = lazy(() =>
   import("./features/PasswordRecovery").then((m) => ({

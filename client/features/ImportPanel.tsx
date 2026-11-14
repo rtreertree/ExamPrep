@@ -1,28 +1,8 @@
-import { Selector } from "../components/Selector";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Upload } from "lucide-react";
-import {
-  parseContent,
-  itemsOf,
-  type StudyContent as Content,
-} from "../../shared/content";
-import { useAuth } from "../lib/auth";
-import { useUnsaved } from "../lib/hooks";
-import {
-  readAISettings,
-  aiSettingsKey,
-  defaultAISettings,
-  type AISettings,
-} from "../lib/aiSettings";
-import { checkAIImport, hasCompleteAISetup } from "../lib/aiImport";
-import {
-  buildAIAnswerReviewPrompt,
-  buildAIRepairPrompt,
-} from "../lib/aiPrompt";
-import { issueLabel, issuesOf, repairInstructions } from "../lib/issues";
-import { unwrapPastedJSON } from "../lib/importSource";
+import type { StudyContent as Content } from "../../shared/content";
 import { decodeFile, MAX_BYTES, ValidationError } from "../../shared/json";
-import { api, type StudySet } from "../lib/api";
+import { ImportCopyButton } from "../components/ImportCopyButton";
 import {
   Button,
   Dialog,
@@ -31,118 +11,17 @@ import {
   Notice,
   Tabs,
 } from "../components/ui";
-import { StudyContent } from "../components/StudyContent";
-import { RubricList } from "../components/RubricList";
-import { ImportCopyButton } from "../components/ImportCopyButton";
+import { checkAIImport, hasCompleteAISetup } from "../lib/aiImport";
 import {
-  AIAuthoringDownloads,
-  AIPromptGenerator,
-} from "../components/AIPromptGenerator";
-export function ContentPreview({
-  content,
-  selectedIndex,
-}: {
-  content: Content;
-  selectedIndex?: number;
-}) {
-  const [index, setIndex] = useState(0);
-  const items = itemsOf(content);
-  const selected = Math.min(
-    selectedIndex ?? index,
-    Math.max(0, items.length - 1),
-  );
-  const item = items[selected];
-  return (
-    <div className="content-preview">
-      <h3>{content.title}</h3>
-      <p className="muted">
-        {content.kind === "exam" ? "Exam" : "Flashcards"} · {items.length}{" "}
-        {content.kind === "exam"
-          ? items.length === 1
-            ? "question"
-            : "questions"
-          : items.length === 1
-            ? "card"
-            : "cards"}
-      </p>
-      <StudyContent source={content.description} label="description" />
-      {selectedIndex === undefined && items.length > 1 ? (
-        <Field label="Preview item">
-          <Selector
-            value={String(selected)}
-            onValueChange={(value) => setIndex(Number(value))}
-            options={items.map((_, i) => ({
-              value: String(i),
-              label: `Item ${i + 1}`,
-            }))}
-          />
-        </Field>
-      ) : null}
-      {item ? (
-        <section key={item.id}>
-          <span className="mono muted">
-            {selectedIndex === undefined
-              ? "Item"
-              : `Preview of ${content.kind === "exam" ? "question" : "card"}`}{" "}
-            {selected + 1} of {items.length}
-          </span>
-          {"type" in item ? (
-            <>
-              <StudyContent
-                source={item.prompt}
-                label={`question ${selected + 1}`}
-              />
-              {item.type === "single_choice"
-                ? item.options.map((o, j) => (
-                    <div className="preview-option" key={o.id}>
-                      <span className="mono">
-                        {String.fromCharCode(65 + j)}
-                      </span>
-                      <StudyContent source={o.text} label={`option ${j + 1}`} />
-                    </div>
-                  ))
-                : null}
-              <details>
-                <summary>Show solution and explanation</summary>
-                {item.type === "single_choice" ? (
-                  <p>
-                    Correct option:{" "}
-                    {item.options.some((o) => o.id === item.answer)
-                      ? String.fromCharCode(
-                          65 +
-                            item.options.findIndex((o) => o.id === item.answer),
-                        )
-                      : "Select a correct answer in the editor"}
-                  </p>
-                ) : (
-                  <>
-                    <h4>Reference answer</h4>
-                    <StudyContent
-                      source={item.answer}
-                      label="reference answer"
-                    />
-                    {item.rubric ? (
-                      <RubricList criteria={item.rubric} mode="review" />
-                    ) : null}
-                  </>
-                )}
-                <StudyContent source={item.explanation} label="explanation" />
-              </details>
-            </>
-          ) : (
-            <>
-              <StudyContent source={item.front} label="card front" />
-              <details>
-                <summary>Show back</summary>
-                <StudyContent source={item.back} label="card back" />
-              </details>
-            </>
-          )}
-        </section>
-      ) : null}
-    </div>
-  );
-}
+  buildAIAnswerReviewPrompt,
+  buildAIRepairPrompt,
+} from "../lib/aiPrompt";
+import type { AISettings } from "../lib/aiSettings";
+import { api, type StudySet } from "../lib/api";
+import { useUnsaved } from "../lib/hooks";
+import { unwrapPastedJSON } from "../lib/importSource";
+import { issueLabel, issuesOf, repairInstructions } from "../lib/issues";
+
 export function ImportPanel({
   aiSettings,
   onClose,
@@ -155,7 +34,11 @@ export function ImportPanel({
   const [mode, setMode] = useState(aiSettings ? "paste" : "file");
   const [raw, setRaw] = useState("");
   const [fileName, setFileName] = useState("");
-  const [preview, setPreview] = useState<Content>();
+  const [validated, setValidated] = useState<{
+    content: Content;
+    Preview: typeof import("./ImportPreview").ContentPreview;
+  }>();
+  const preview = validated?.content;
   const [error, setError] = useState<Error>();
   const [saveError, setSaveError] = useState<Error>();
   const [busy, setBusy] = useState(false);
@@ -195,14 +78,18 @@ export function ImportPanel({
     if (raw) setConfirmClose(true);
     else onClose();
   }
-  function validate(source: string, pasted = false) {
+  async function validate(source: string, read: number, pasted = false) {
     setRaw(source);
     setSaveError(undefined);
     try {
-      setPreview(parseContent(pasted ? unwrapPastedJSON(source) : source));
+      const { parseContent, ContentPreview } = await import("./ImportPreview");
+      if (read !== fileRead.current) return;
+      const content = parseContent(pasted ? unwrapPastedJSON(source) : source);
+      setValidated({ content, Preview: ContentPreview });
       setError(undefined);
     } catch (e) {
-      setPreview(undefined);
+      if (read !== fileRead.current) return;
+      setValidated(undefined);
       setError(e as Error);
     }
   }
@@ -211,13 +98,13 @@ export function ImportPanel({
     const read = ++fileRead.current;
     setFileName(file.name);
     setReadingFile(true);
-    setPreview(undefined);
+    setValidated(undefined);
     setError(undefined);
     setSaveError(undefined);
     try {
       if (file.size > MAX_BYTES) throw new Error("File exceeds 2 MiB.");
       const bytes = await file.arrayBuffer();
-      if (read === fileRead.current) validate(decodeFile(bytes));
+      if (read === fileRead.current) await validate(decodeFile(bytes), read);
     } catch (e) {
       if (read === fileRead.current) setError(e as Error);
     } finally {
@@ -229,7 +116,7 @@ export function ImportPanel({
     setReadingFile(false);
     setFileName("");
     setRaw(source);
-    setPreview(undefined);
+    setValidated(undefined);
     setError(undefined);
     setSaveError(undefined);
   }
@@ -336,7 +223,7 @@ export function ImportPanel({
             </Field>
             <Button
               disabled={busy || readingFile}
-              onClick={() => validate(raw, true)}
+              onClick={() => void validate(raw, ++fileRead.current, true)}
             >
               Validate and preview
             </Button>
@@ -390,7 +277,7 @@ export function ImportPanel({
           />
         </details>
       ) : null}
-      {preview ? (
+      {preview && validated ? (
         <>
           {!aiSettings ? (
             <Notice tone="success">
@@ -429,100 +316,8 @@ export function ImportPanel({
               Save to library
             </Button>
           </div>
-          <ContentPreview content={preview} />
+          <validated.Preview content={preview} />
         </>
-      ) : null}
-    </Dialog>
-  );
-}
-export function AIHandoffPanel({
-  onClose,
-  onImport,
-}: {
-  onClose: () => void;
-  onImport: (settings: AISettings) => void;
-}) {
-  const { user } = useAuth();
-  const userId = user!.id;
-  const [initial] = useState(() => {
-    try {
-      return { value: readAISettings(userId), failed: false };
-    } catch {
-      return { value: undefined, failed: true };
-    }
-  });
-  const [settings, setSettings] = useState(initial.value ?? defaultAISettings);
-  const [storageFailed, setStorageFailed] = useState(initial.failed);
-  const serializedSettings = JSON.stringify(settings);
-  const lastSaved = useRef(serializedSettings);
-  const unsaved = storageFailed && serializedSettings !== lastSaved.current;
-  const [leaving, setLeaving] = useState<"close" | "import">();
-  const keepEditing = useRef<HTMLButtonElement>(null);
-  useUnsaved(unsaved);
-  useEffect(() => {
-    if (leaving && unsaved) keepEditing.current?.focus();
-  }, [leaving, unsaved]);
-  useEffect(() => {
-    try {
-      localStorage.setItem(aiSettingsKey(userId), serializedSettings);
-      lastSaved.current = serializedSettings;
-      setStorageFailed(false);
-    } catch {
-      setStorageFailed(true);
-    }
-  }, [userId, serializedSettings]);
-  function leave(destination: "close" | "import") {
-    if (unsaved) setLeaving(destination);
-    else if (destination === "close") onClose();
-    else onImport(settings);
-  }
-  return (
-    <Dialog title="Create with your AI" onClose={() => leave("close")}>
-      <p className="muted">
-        Choose what to study, copy the prompt into your AI tool, then import its
-        result here.
-      </p>
-      {storageFailed ? (
-        <Notice tone="warning">
-          Device storage is unavailable. Copy your prompt before leaving to keep
-          your work.
-        </Notice>
-      ) : null}
-      <AIPromptGenerator settings={settings} onChange={setSettings} />
-      <div className="stack ai-handoff-import">
-        <div>
-          <h3>Bring back your result</h3>
-          <p className="muted">
-            Paste the JSON or upload the file to preview your study set.
-          </p>
-        </div>
-        <Button onClick={() => leave("import")}>Import AI result</Button>
-      </div>
-      {leaving && unsaved ? (
-        <Notice tone="warning">
-          <p>
-            Your changes have not been saved on this device. Copy the prompt
-            before leaving, or return to keep working.
-          </p>
-          <div className="actions">
-            <Button ref={keepEditing} onClick={() => setLeaving(undefined)}>
-              Keep editing
-            </Button>
-            <Button
-              onClick={() =>
-                leaving === "close" ? onClose() : onImport(settings)
-              }
-            >
-              Leave without saving changes
-            </Button>
-          </div>
-        </Notice>
-      ) : null}
-      <AIAuthoringDownloads />
-      {!storageFailed ? (
-        <p className="muted ai-draft-note">
-          Notes and settings are saved on this device until you sign out.
-        </p>
       ) : null}
     </Dialog>
   );

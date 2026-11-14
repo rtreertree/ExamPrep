@@ -1,0 +1,18 @@
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  padding: 8px 0;
+}
+.katex {
+  font-size: 1.15em;
+}
+
+/* Inline equations need the same local overflow containment as display math. */
+.study-content :not(.katex-display) > .katex {
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  vertical-align: middle;
+}

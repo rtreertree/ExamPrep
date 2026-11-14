@@ -13,7 +13,7 @@ import {
   LoadingRows,
   Notice,
 } from "../components/ui";
-import { AuthForm } from "../features/Account";
+import { AuthForm } from "../components/AuthForm";
 type User = { id: string; email: string };
 const AuthContext = createContext<{
   user: User | null;

@@ -1,3 +1,20 @@
+/* The sample card uses these fonts without loading the study renderer. */
+@font-face {
+  font-display: block;
+  font-family: "Landing Math Main";
+  font-style: normal;
+  font-weight: 400;
+  src: url("katex/dist/fonts/KaTeX_Main-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-display: block;
+  font-family: "Landing Math Italic";
+  font-style: italic;
+  font-weight: 400;
+  src: url("katex/dist/fonts/KaTeX_Math-Italic.woff2") format("woff2");
+}
+
 .landing {
   --landing-gutter: clamp(24px, 6.7vw, 104px);
   --landing-rule: #45494a;
@@ -299,14 +316,14 @@
   justify-content: center;
   gap: 0.19em;
   align-self: center;
-  font-family: KaTeX_Main, Georgia, serif;
+  font-family: "Landing Math Main", Georgia, serif;
   font-size: clamp(36px, 5.1vw, 78px);
   line-height: 1;
   white-space: nowrap;
 }
 
 .landing-equation i {
-  font-family: KaTeX_Math, Georgia, serif;
+  font-family: "Landing Math Italic", Georgia, serif;
 }
 
 .landing-equation sup {

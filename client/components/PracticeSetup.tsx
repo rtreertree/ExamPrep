@@ -1,9 +1,9 @@
 import { Selector } from "./Selector";
 import { useId, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { itemsOf } from "../../shared/content";
+import { itemsOf } from "../../shared/contentItems";
 import type { PracticeSettings } from "../../shared/attempts";
-import { api, type StudySet } from "../lib/api";
+import { api, type StudySet, type StudySetMetadata } from "../lib/api";
 import { Button, Dialog, ErrorNotice, Field } from "./ui";
 import "./practice-setup.css";
 
@@ -12,11 +12,12 @@ export function PracticeSetup({
   onClose,
   returnTo,
 }: {
-  set: StudySet;
+  set: StudySet | StudySetMetadata;
   onClose: () => void;
   returnTo?: string;
 }) {
-  const count = set.content ? itemsOf(set.content).length : set.count;
+  const count =
+    "content" in set && set.content ? itemsOf(set.content).length : set.count;
   return count ? (
     <PracticeSetupForm
       set={set}
@@ -40,7 +41,7 @@ function PracticeSetupForm({
   onClose,
   returnTo,
 }: {
-  set: StudySet;
+  set: StudySetMetadata;
   total: number;
   onClose: () => void;
   returnTo?: string;

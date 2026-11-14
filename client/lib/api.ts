@@ -1,4 +1,4 @@
-import { serializeContent, type StudyContent } from "../../shared/content";
+import type { StudyContent } from "../../shared/content";
 import type { OwnershipRole } from "../../shared/sharing";
 import type {
   PracticeSettings,
@@ -6,11 +6,10 @@ import type {
   Result,
   Status,
 } from "../../shared/attempts";
-export type StudySet = {
+export type StudySetMetadata = {
   id: string;
   title: string;
   kind: StudyContent["kind"];
-  content: StudyContent;
   revision: number;
   ownershipRole: OwnershipRole;
   updatedAt: string;
@@ -30,6 +29,8 @@ export type StudySet = {
       })
     | null;
 };
+export type StudySet = StudySetMetadata & { content: StudyContent };
+
 export type Attempt = {
   id: string;
   snapshot: StudyContent;
@@ -108,11 +109,4 @@ export function download(
   a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-export function exportContent(content: StudyContent) {
-  download(
-    serializeContent(content),
-    (content.title.replace(/[^\p{L}\p{N}_-]/gu, "-").slice(0, 80) ||
-      "study-set") + ".examprep.json",
-  );
 }

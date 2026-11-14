@@ -1,6 +1,6 @@
 import { Selector } from "../components/Selector";
 import { NotationEditor } from "../components/NotationEditor";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Link,
   useBlocker,
@@ -9,15 +9,10 @@ import {
   useParams,
 } from "react-router-dom";
 import { ArrowLeft, ArrowRight, Flag, List } from "lucide-react";
-import { itemsOf, type Question } from "../../shared/content";
+import { itemsOf } from "../../shared/content";
 import {
-  answered,
   MAX_NOTE_CHARACTERS,
-  maximum,
-  mistakes,
   own,
-  retrySnapshot,
-  writtenScore,
   type Response,
   type RetryMode,
 } from "../../shared/attempts";
@@ -25,11 +20,7 @@ import { api, download, type Attempt } from "../lib/api";
 import { useResource, useUnsaved } from "../lib/hooks";
 import { useAttempt } from "../lib/useAttempt";
 import { useAuth } from "../lib/auth";
-import {
-  planPracticeRecovery,
-  readPracticeRecoveryFile,
-  type PracticeCheckpoint,
-} from "../lib/practiceRecovery";
+import { readPracticeRecoveryFile } from "../lib/practiceRecovery";
 import {
   Button,
   Dialog,
@@ -38,18 +29,19 @@ import {
   LoadingRows,
   Notice,
   SaveStatus,
-  Tabs,
 } from "../components/ui";
 import { StudyContent } from "../components/StudyContent";
-import { RubricList } from "../components/RubricList";
 import { ScoreSummary } from "../components/ScoreSummary";
 import { FlashcardStage } from "../components/FlashcardStage";
 import { PracticeTimer } from "../components/PracticeTimer";
+import { ExamQuestionMap } from "../components/ExamQuestionMap";
+import { AnswerReview } from "./AnswerReview";
 import {
-  ExamQuestionMap,
-  type ExamMapItem,
-  type ExamQuestionStatus,
-} from "../components/ExamQuestionMap";
+  PracticeNavigationDialog,
+  PracticeRecoveryDialog,
+  PracticeSubmitDialog,
+} from "./PracticeDialogs";
+import { summarizePractice } from "./practiceSummary";
 import "./exam-practice.css";
 export function PracticePage() {
   const { id } = useParams();
@@ -104,6 +96,7 @@ function Practice({
   const doc = attempt.snapshot;
   const isExam = doc.kind === "exam";
   const items = itemsOf(doc);
+  const itemIds = useMemo(() => items.map((item) => item.id), [items]);
   const item = items[position];
   const r = own(responses, item.id);
   const navigate = useNavigate();
@@ -208,54 +201,25 @@ function Practice({
     }
   }
   const inProgress = attempt.status === "in_progress";
-  const eligible =
-    attempt.status === "completed" ? mistakes(doc, responses) : null;
-  const retryCount = eligible ? itemsOf(eligible).length : 0;
-  const flagged =
-    !isExam || !inProgress ? retrySnapshot(doc, responses, "flagged") : null;
-  const uncertain =
-    !isExam || !inProgress
-      ? retrySnapshot(doc, responses, "low_confidence")
-      : null;
-  const incorrectIds = new Set(
-    eligible ? itemsOf(eligible).map((i) => i.id) : [],
+  const summary = useMemo(
+    () => summarizePractice(doc, responses, attempt.status),
+    [doc, responses, attempt.status],
   );
-  const examMapItems = isExam
-    ? doc.questions.map((question): ExamMapItem => {
-        const answer = own(responses, question.id);
-        return {
-          id: question.id,
-          status: examQuestionStatus(question, answer, attempt.status),
-          flagged: answer?.flagged === true,
-          lowConfidence: answer?.confidence === "low",
-          mistake: incorrectIds.has(question.id),
-        };
-      })
-    : [];
-  const pending = examMapItems.flatMap(({ status }, index) =>
-    status === "Needs assessment" ? [index] : [],
-  );
+  const {
+    retryCount,
+    flagged,
+    uncertain,
+    incorrectIds,
+    examMapItems,
+    pending,
+    writtenAnswered,
+    omissions,
+    unanswered,
+    flaggedCount,
+    firstMistake,
+  } = summary;
+  const omissionIndexes = useMemo(() => new Set(omissions), [omissions]);
   const nextPending = pending.find((i) => i > position) ?? pending[0];
-  const writtenAnswered =
-    doc.kind === "exam"
-      ? doc.questions.filter(
-          (q) => q.type === "written" && answered(q, own(responses, q.id)),
-        ).length
-      : 0;
-  const omissions = items.flatMap((it, i) =>
-    (
-      "type" in it
-        ? !answered(it, own(responses, it.id))
-        : !own(responses, it.id)?.rating
-    )
-      ? [i]
-      : [],
-  );
-  const unanswered = omissions.length;
-  const flaggedCount = examMapItems.filter(
-    (question) => question.flagged,
-  ).length;
-  const firstMistake = examMapItems.findIndex((question) => question.mistake);
   const confirmedPending =
     attempt.result?.selfAssessed?.pendingCount ?? pending.length;
   function recoveryDownload(checkpoint = state.localCopy()) {
@@ -275,9 +239,6 @@ function Practice({
       ),
       "practice-answer-recovery.json",
     );
-  }
-  function cardState(it: typeof item) {
-    return own(responses, it.id)?.rating ? "Rated" : "Unreviewed";
   }
   const questionMap = isExam ? (
     <ExamQuestionMap
@@ -455,7 +416,8 @@ function Practice({
                   {items.map((it, i) =>
                     incorrectIds.has(it.id) ? (
                       <Button key={it.id} onClick={() => void go(i)}>
-                        Card {i + 1} · {cardState(it)}
+                        Card {i + 1} ·{" "}
+                        {own(responses, it.id)?.rating ? "Rated" : "Unreviewed"}
                       </Button>
                     ) : null,
                   )}
@@ -826,148 +788,46 @@ function Practice({
         </aside>
       ) : null}
       {confirm ? (
-        <Dialog
-          title={
-            doc.kind === "exam" ? "Submit this exam?" : "Finish this session?"
-          }
-          onClose={() => {
-            if (!state.submitting) setConfirm(false);
+        <PracticeSubmitDialog
+          kind={doc.kind}
+          itemIds={itemIds}
+          unanswered={unanswered}
+          flaggedCount={flaggedCount}
+          writtenAnswered={writtenAnswered}
+          omissions={omissions}
+          position={position}
+          error={state.error}
+          busy={busy}
+          submitting={state.submitting}
+          onClose={() => setConfirm(false)}
+          onJump={async (index) => {
+            if (isExam) await go(index);
+            else if (await state.moveTo(index)) setConfirm(false);
           }}
-        >
-          <div className={isExam ? "exam-submit-summary" : undefined}>
-            <p>
-              {items.length - unanswered} {isExam ? "answered" : "rated"},{" "}
-              {unanswered}{" "}
-              {isExam ? `unanswered, ${flaggedCount} flagged` : "unreviewed"}.
-            </p>
-            {isExam ? (
-              <p>
-                {unanswered ? "Unanswered questions earn zero points. " : ""}
-                Submitting locks your answers.
-                {writtenAnswered
-                  ? " You’ll assess your written answers next."
-                  : ""}
-              </p>
-            ) : (
-              <p>
-                {unanswered} unreviewed cards will be included in your summary.
-                Only cards rated Review again appear in a retry.
-              </p>
-            )}
-          </div>
-          {omissions.length ? (
-            <details>
-              <summary>
-                {doc.kind === "exam"
-                  ? "Review unanswered questions"
-                  : "Review unreviewed cards"}
-              </summary>
-              <div
-                className={`question-nav${isExam ? " exam-unanswered-list" : ""}`}
-              >
-                {omissions.map((i) => (
-                  <Button
-                    key={items[i].id}
-                    disabled={state.submitting}
-                    onClick={async () => {
-                      if (isExam) await go(i);
-                      else if (await state.moveTo(i)) setConfirm(false);
-                    }}
-                  >
-                    {doc.kind === "exam" ? "Question" : "Card"} {i + 1}
-                  </Button>
-                ))}
-              </div>
-            </details>
-          ) : null}
-          {doc.kind === "flashcards" && omissions.length ? (
-            <Button
-              disabled={state.submitting}
-              onClick={async () => {
-                const next =
-                  omissions.find((i) => i > position) ?? omissions[0];
-                if (await state.moveTo(next)) setConfirm(false);
-              }}
-            >
-              Go to next unreviewed card
-            </Button>
-          ) : null}
-          <ErrorNotice error={state.error} />
-          {state.error ? (
-            <Button onClick={() => recoveryDownload()}>
-              Download recovery copy
-            </Button>
-          ) : null}
-          <div className={isExam ? "actions dialog-footer" : "actions"}>
-            <Button
-              disabled={state.submitting}
-              onClick={() => setConfirm(false)}
-            >
-              {isExam ? "Return to exam" : "Keep studying"}
-            </Button>
-            <Button
-              variant="primary"
-              busy={busy}
-              onClick={async () => {
-                if (await state.submit()) setConfirm(false);
-              }}
-            >
-              {isExam ? "Submit exam" : "Finish session"}
-            </Button>
-          </div>
-        </Dialog>
+          onDownload={() => recoveryDownload()}
+          onSubmit={async () => {
+            if (await state.submit()) setConfirm(false);
+          }}
+        />
       ) : null}
-      {navOpen && isExam ? (
-        <Dialog title="Question navigation" onClose={() => setNavOpen(false)}>
-          {questionMap}
-          <ErrorNotice error={state.error} />
-        </Dialog>
-      ) : navOpen ? (
-        <Dialog title="Card navigation" onClose={() => setNavOpen(false)}>
-          <Tabs
-            label="Navigation filter"
-            value={navFilter}
-            onChange={setNavFilter}
-            tabs={[
-              { value: "all", label: "All" },
-              {
-                value: "unanswered",
-                label: "Unreviewed",
-              },
-              ...(attempt.status === "completed"
-                ? [{ value: "mistakes", label: "Needs review" }]
-                : []),
-              ...(flagged ? [{ value: "flagged", label: "Flagged" }] : []),
-              ...(uncertain
-                ? [{ value: "uncertain", label: "Low confidence" }]
-                : []),
-            ]}
-          />
-          <div
-            className="question-nav"
-            role="tabpanel"
-            id={`navigation-filter-${navFilter}`}
-            aria-label="Filtered items"
-          >
-            {items.map((it, i) =>
-              navFilter === "all" ||
-              (navFilter === "unanswered" && omissions.includes(i)) ||
-              (navFilter === "mistakes" && incorrectIds.has(it.id)) ||
-              (navFilter === "flagged" && own(responses, it.id)?.flagged) ||
-              (navFilter === "uncertain" &&
-                own(responses, it.id)?.confidence === "low") ? (
-                <Button
-                  disabled={state.submitting}
-                  className={i === position ? "selected" : ""}
-                  key={it.id}
-                  onClick={() => void go(i)}
-                >
-                  {i + 1} · {cardState(it)}
-                </Button>
-              ) : null,
-            )}
-          </div>
-        </Dialog>
+      {navOpen ? (
+        <PracticeNavigationDialog
+          questionMap={questionMap}
+          error={state.error}
+          itemIds={itemIds}
+          status={attempt.status}
+          navFilter={navFilter}
+          setNavFilter={setNavFilter}
+          flagged={!!flagged}
+          uncertain={!!uncertain}
+          omissions={omissionIndexes}
+          incorrectIds={incorrectIds}
+          responses={responses}
+          submitting={state.submitting}
+          position={position}
+          onClose={() => setNavOpen(false)}
+          onJump={go}
+        />
       ) : null}
       {blocker.state === "blocked" ? (
         <Dialog
@@ -1012,202 +872,5 @@ function Practice({
         />
       ) : null}
     </div>
-  );
-}
-function PracticeRecoveryDialog({
-  checkpoint,
-  attempt,
-  error,
-  onRestore,
-  onDiscard,
-  onClose,
-  onDownload,
-}: {
-  checkpoint: PracticeCheckpoint;
-  attempt: Attempt;
-  error?: Error;
-  onRestore: (checkpoint: PracticeCheckpoint, replace: boolean) => void;
-  onDiscard: (checkpoint: PracticeCheckpoint) => void;
-  onClose: () => void;
-  onDownload: (checkpoint: PracticeCheckpoint) => void;
-}) {
-  const plan = planPracticeRecovery(checkpoint, attempt);
-  const conflicts = plan.conflictCount || plan.positionConflict;
-  const hasSafe =
-    plan.safeCount > 0 || (plan.hasPosition && !plan.positionConflict);
-  return (
-    <Dialog title="Restore practice progress?" onClose={onClose}>
-      <p>
-        There are unsaved changes from{" "}
-        {new Date(checkpoint.updatedAt).toLocaleString()}.
-      </p>
-      {plan.staleStatus ? (
-        <Notice tone="warning">
-          This attempt moved to a new stage after the checkpoint was saved.
-          Download the local copy to keep these changes for reference.
-        </Notice>
-      ) : conflicts ? (
-        <Notice tone="warning">
-          {plan.conflictCount
-            ? `Another save changed ${plan.conflictCount} of the same items. `
-            : ""}
-          {plan.positionConflict
-            ? "It also recorded a different study position. "
-            : ""}
-          You can keep the newer saved changes or replace them with your local
-          copy.
-        </Notice>
-      ) : null}
-      <ErrorNotice error={error} />
-      <div className="actions">
-        {!plan.staleStatus && hasSafe ? (
-          <Button
-            variant="primary"
-            onClick={() => onRestore(checkpoint, false)}
-          >
-            {conflicts
-              ? "Restore without replacing newer changes"
-              : "Restore progress"}
-          </Button>
-        ) : null}
-        {!plan.staleStatus && conflicts ? (
-          <Button onClick={() => onRestore(checkpoint, true)}>
-            Restore and replace newer changes
-          </Button>
-        ) : null}
-        <Button onClick={() => onDownload(checkpoint)}>
-          Download recovery copy
-        </Button>
-        <Button variant="quiet" onClick={() => onDiscard(checkpoint)}>
-          Discard recovery copy
-        </Button>
-      </div>
-    </Dialog>
-  );
-}
-function examQuestionStatus(
-  question: Question,
-  response: Response | undefined,
-  stage: Attempt["status"],
-): ExamQuestionStatus {
-  if (!answered(question, response)) return "Unanswered";
-  if (stage === "in_progress") return "Answered";
-  if (question.type === "single_choice")
-    return response?.selectedOptionId === question.answer
-      ? "Correct"
-      : "Incorrect";
-  const score = writtenScore(question, response);
-  if (score === null) return "Needs assessment";
-  if (stage === "reviewing") return "Assessed";
-  if (score === maximum(question)) return "Correct";
-  return score > 0 ? "Partial credit" : "Incorrect";
-}
-
-function AnswerReview({
-  question: q,
-  response: r,
-  reviewing,
-  busy,
-  onChange,
-}: {
-  question: Question;
-  response?: Response;
-  reviewing: boolean;
-  busy: boolean;
-  onChange: (r: Response, immediate?: boolean | "manual") => void;
-}) {
-  const score =
-    q.type === "single_choice"
-      ? Number(r?.selectedOptionId === q.answer)
-      : writtenScore(q, r);
-  return (
-    <section className="answer-review">
-      {q.type === "written" ? (
-        <div className="exam-answer-comparison">
-          <section aria-label="Your submitted answer">
-            <h3>Your answer</h3>
-            {answered(q, r) ? (
-              <StudyContent source={r?.text} label="your submitted answer" />
-            ) : (
-              <p className="muted">Unanswered</p>
-            )}
-          </section>
-          <section aria-label="Reference answer">
-            <h3>Reference answer</h3>
-            <StudyContent source={q.answer} />
-          </section>
-        </div>
-      ) : null}
-      <h2>
-        {score === null
-          ? "Self-assessment needed"
-          : `${score} / ${maximum(q)} points${q.type === "written" && answered(q, r) ? " · self-assessed" : ""}`}
-      </h2>
-      {q.type === "written" ? (
-        answered(q, r) ? (
-          q.rubric ? (
-            <RubricList
-              criteria={q.rubric}
-              mode={reviewing ? "assess" : "review"}
-              disabled={busy}
-              awards={r?.criterionPoints}
-              onAward={(id, points, commit) => {
-                const criterionPoints = Object.assign(
-                  Object.create(null),
-                  r?.criterionPoints,
-                );
-                if (points === undefined) delete criterionPoints[id];
-                else criterionPoints[id] = points;
-                onChange(
-                  { text: r!.text!, criterionPoints },
-                  commit ? true : "manual",
-                );
-              }}
-            />
-          ) : reviewing ? (
-            <div className="actions">
-              <Button
-                disabled={busy}
-                aria-pressed={r?.selfAssessment === "incorrect"}
-                onClick={() =>
-                  onChange({ text: r!.text!, selfAssessment: "incorrect" })
-                }
-              >
-                Incorrect · 0 points
-              </Button>
-              <Button
-                disabled={busy}
-                aria-pressed={r?.selfAssessment === "correct"}
-                onClick={() =>
-                  onChange({ text: r!.text!, selfAssessment: "correct" })
-                }
-              >
-                Correct · 1 point
-              </Button>
-            </div>
-          ) : (
-            <p>
-              {r?.selfAssessment === "correct"
-                ? "Marked correct"
-                : "Marked incorrect"}
-            </p>
-          )
-        ) : null
-      ) : (
-        <p>
-          {!r?.selectedOptionId
-            ? "Unanswered"
-            : r.selectedOptionId === q.answer
-              ? "Correct"
-              : "Incorrect"}
-        </p>
-      )}
-      {q.explanation ? (
-        <>
-          <h3>Explanation</h3>
-          <StudyContent source={q.explanation} label="explanation" />
-        </>
-      ) : null}
-    </section>
   );
 }

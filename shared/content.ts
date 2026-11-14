@@ -4,6 +4,7 @@ import remarkParse from "remark-parse";
 import remarkMath from "remark-math";
 import remarkGfm from "remark-gfm";
 import { visit } from "unist-util-visit";
+import { codePoints, freshId } from "./contentItems";
 import {
   parseJSON,
   pointer,
@@ -12,7 +13,7 @@ import {
   type Issue,
 } from "./json";
 export { ValidationError, MAX_BYTES } from "./json";
-export const codePoints = (s: string) => [...s].length;
+export { codePoints, freshId, itemsOf } from "./contentItems";
 const text = (max: number, nonblank = true) =>
   z
     .string()
@@ -187,9 +188,6 @@ export function validateContent(input: unknown): StudyContent {
 }
 export const parseContent = (source: string) =>
   validateContent(parseJSON(source));
-export const itemsOf = (doc: StudyContent) =>
-  doc.kind === "exam" ? doc.questions : doc.cards;
-export const freshId = () => crypto.randomUUID();
 export function emptyContent(kind: StudyContent["kind"]): StudyContent {
   return kind === "exam"
     ? {
@@ -217,7 +215,7 @@ export function emptyContent(kind: StudyContent["kind"]): StudyContent {
       };
 }
 
-export function serializeContent(content: StudyContent): string {
+export function serializeContent(content: unknown): string {
   const doc = validateContent(content);
   const pretty = JSON.stringify(doc, null, 2) + "\n";
   return new TextEncoder().encode(pretty).length <= MAX_BYTES

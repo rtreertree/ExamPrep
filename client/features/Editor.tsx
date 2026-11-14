@@ -1,3 +1,4 @@
+import { PositionForm } from "../components/PositionForm";
 import { Selector } from "../components/Selector";
 import {
   useDeferredValue,
@@ -27,16 +28,9 @@ import {
   type StudyContent,
   type Question,
   type Card,
-  type AnswerType,
-  type Criterion,
 } from "../../shared/content";
-import {
-  api,
-  ApiError,
-  download,
-  exportContent,
-  type StudySet,
-} from "../lib/api";
+import { api, ApiError, download, type StudySet } from "../lib/api";
+import { exportContent } from "../lib/exportContent";
 import { useAuth } from "../lib/auth";
 import { getDraft, putDraft, removeDraft, type Draft } from "../lib/drafts";
 import { issuesOf, issueLabel } from "../lib/issues";
@@ -54,35 +48,15 @@ import {
   SaveStatus,
   Tabs,
 } from "../components/ui";
-import { ContentPreview } from "./Authoring";
-import { RubricList } from "../components/RubricList";
+import { ContentPreview } from "../components/ContentPreview";
+import { ItemFields } from "./EditorItemFields";
+import { matchesItem, moveItem, withItems, type Removal } from "./editorItems";
 import { NotationEditor } from "../components/NotationEditor";
 import { PracticeSetup } from "../components/PracticeSetup";
 import { SetSharing } from "./SetSharing";
 import "./library-editor.css";
 
 type Loaded = { set?: StudySet; draft?: Draft; missing: boolean };
-type Removal =
-  | { kind: "item"; item: Question | Card; index: number }
-  | {
-      kind: "option";
-      itemId: string;
-      option: { id: string; text: string };
-      index: number;
-      wasAnswer: boolean;
-    }
-  | { kind: "criterion"; itemId: string; criterion: Criterion; index: number };
-
-function matchesItem(item: Question | Card, search: string) {
-  const matches = (text: string) => text.toLowerCase().includes(search);
-  if ("front" in item) return matches(item.front) || matches(item.back);
-  if (matches(item.prompt) || matches(item.explanation ?? "")) return true;
-  return item.type === "single_choice"
-    ? item.options.some(({ text }) => matches(text))
-    : matches(item.answer) ||
-        item.rubric?.some(({ description }) => matches(description));
-}
-
 export function EditorPage() {
   const { id, kind, draftId } = useParams();
   const { user } = useAuth();
@@ -193,17 +167,25 @@ function Editor({
   const touched = useRef(new Set<string>());
   const fullCheck = useRef(false);
   const issueCursor = useRef(0);
+  const lastValidation = useRef<
+    { content: StudyContent; issues: Issue[] } | undefined
+  >(undefined);
   function checkFields() {
-    try {
-      validateContent(current.current);
-      setFieldIssues([]);
-    } catch (e) {
-      setFieldIssues(
-        issuesOf(e as Error).filter(
-          (issue) => fullCheck.current || touched.current.has(issue.path),
-        ),
-      );
+    const document = current.current;
+    if (lastValidation.current?.content !== document) {
+      let issues: Issue[] = [];
+      try {
+        validateContent(document);
+      } catch (e) {
+        issues = issuesOf(e as Error);
+      }
+      lastValidation.current = { content: document, issues };
     }
+    setFieldIssues(
+      lastValidation.current.issues.filter(
+        (issue) => fullCheck.current || touched.current.has(issue.path),
+      ),
+    );
   }
   function focusIssue(issue: Issue) {
     const match = /^\/(?:questions|cards)\/(\d+)/.exec(issue.path);
@@ -241,7 +223,7 @@ function Editor({
   const saving = useRef(false);
   const current = useRef(content);
   current.current = content;
-  const serialized = JSON.stringify(content);
+  const serialized = useMemo(() => JSON.stringify(content), [content]);
   const dirty = serialized !== baseline;
   const allowedLeave = useRef(false);
   useUnsaved(dirty);
@@ -429,11 +411,7 @@ function Editor({
       const restored = [...items];
       const position = Math.min(lastRemoval.index, restored.length);
       restored.splice(position, 0, lastRemoval.item);
-      setContent(
-        content.kind === "exam"
-          ? { ...content, questions: restored as Question[] }
-          : { ...content, cards: restored as Card[] },
-      );
+      setContent(withItems(content, restored));
       setIndex(position);
     } else if (content.kind === "exam") {
       setContent({
@@ -469,18 +447,12 @@ function Editor({
     setAnnounce("Removed content restored.");
   }
   function updateItem(next: Question | Card) {
-    if (content.kind === "exam")
-      setContent({
-        ...content,
-        questions: content.questions.map((q, i) =>
-          i === index ? (next as Question) : q,
-        ),
-      });
-    else
-      setContent({
-        ...content,
-        cards: content.cards.map((c, i) => (i === index ? (next as Card) : c)),
-      });
+    setContent(
+      withItems(
+        content,
+        items.map((item, i) => (i === index ? next : item)),
+      ),
+    );
   }
   function add(type: "single_choice" | "written" | "card") {
     const id = freshId();
@@ -511,11 +483,7 @@ function Editor({
   function replaceItems(next: (Question | Card)[], activeIndex: number) {
     touched.current.clear();
     setFieldIssues([]);
-    setContent(
-      content.kind === "exam"
-        ? { ...content, questions: next as Question[] }
-        : { ...content, cards: next as Card[] },
-    );
+    setContent(withItems(content, next));
     setIndex(activeIndex);
   }
   function move(destination: number) {
@@ -526,10 +494,10 @@ function Editor({
       destination === index
     )
       return;
-    const next = [...items];
-    next.splice(index, 1);
-    next.splice(destination, 0, item);
-    replaceItems(next, destination);
+    replaceItems(
+      moveItem<Question | Card>(items, index, destination),
+      destination,
+    );
     setAnnounce(`Item moved to position ${destination + 1}.`);
   }
   function duplicateItem() {
@@ -541,16 +509,12 @@ function Editor({
   }
   function remove() {
     rememberRemoval({ kind: "item", item: structuredClone(item), index });
-    if (content.kind === "exam")
-      setContent({
-        ...content,
-        questions: content.questions.filter((_, i) => i !== index),
-      });
-    else
-      setContent({
-        ...content,
-        cards: content.cards.filter((_, i) => i !== index),
-      });
+    setContent(
+      withItems(
+        content,
+        items.filter((_, i) => i !== index),
+      ),
+    );
     setIndex(Math.max(0, index - 1));
     setAnnounce("Item removed.");
   }
@@ -605,7 +569,7 @@ function Editor({
             <Button
               onClick={() => {
                 try {
-                  exportContent(validateContent(content));
+                  exportContent(content);
                   setError(undefined);
                 } catch (e) {
                   setError(e as Error);
@@ -1034,35 +998,20 @@ function Editor({
           title="Move item to position"
           onClose={() => setMovePosition(undefined)}
         >
-          <form
-            className="stack"
-            onSubmit={(e) => {
-              e.preventDefault();
+          <PositionForm
+            label="New position"
+            submitLabel="Move item"
+            value={movePosition}
+            max={items.length}
+            step={1}
+            onChange={setMovePosition}
+            onCancel={() => setMovePosition(undefined)}
+            onSubmit={(event) => {
+              event.preventDefault();
               move(Number(movePosition) - 1);
               setMovePosition(undefined);
             }}
-          >
-            <Field
-              label="New position"
-              hint={`Choose a position from 1 to ${items.length}.`}
-            >
-              <input
-                type="number"
-                min={1}
-                max={items.length}
-                step={1}
-                required
-                value={movePosition}
-                onChange={(e) => setMovePosition(e.target.value)}
-              />
-            </Field>
-            <div className="actions">
-              <Button onClick={() => setMovePosition(undefined)}>Cancel</Button>
-              <Button type="submit" variant="primary">
-                Move item
-              </Button>
-            </div>
-          </form>
+          />
         </Dialog>
       ) : null}
       {blocker.state === "blocked" ? (
@@ -1087,227 +1036,6 @@ function Editor({
           </div>
         </Dialog>
       ) : null}
-    </div>
-  );
-}
-function ItemFields({
-  item,
-  disabled,
-  onChange,
-  path,
-  onRemove,
-}: {
-  path: string;
-  item: Question | Card;
-  disabled: boolean;
-  onChange: (item: Question | Card) => void;
-  onRemove: (removal: Removal) => void;
-}) {
-  if (!("type" in item))
-    return (
-      <div className="stack">
-        <h2>Flashcard</h2>
-        <Field path={`${path}/front`} label="Front">
-          <NotationEditor
-            value={item.front}
-            onChange={(value) => onChange({ ...item, front: value })}
-          />
-        </Field>
-        <Field path={`${path}/back`} label="Back">
-          <NotationEditor
-            value={item.back}
-            onChange={(value) => onChange({ ...item, back: value })}
-          />
-        </Field>
-        <details>
-          <summary>Item details</summary>
-          <p className="muted mono">Stable ID: {item.id}</p>
-        </details>
-      </div>
-    );
-  const q = item;
-  const optionalExplanation = (value: string) => {
-    const next = { ...q };
-    if (value === "") delete next.explanation;
-    else next.explanation = value;
-    onChange(next);
-  };
-  return (
-    <div className="stack">
-      <h2>{q.type === "written" ? "Written answer" : "Single choice"}</h2>
-      <Field
-        path={`${path}/prompt`}
-        label="Question"
-        hint="Markdown and LaTeX are supported."
-      >
-        <NotationEditor
-          value={q.prompt}
-          onChange={(value) => onChange({ ...q, prompt: value })}
-        />
-      </Field>
-      {q.type === "single_choice" ? (
-        <>
-          <h3>Answer options</h3>
-          {q.options.map((o, i) => (
-            <div className="option-editor" key={o.id}>
-              <Field
-                path={`${path}/options/${i}/text`}
-                label={`Option ${String.fromCharCode(65 + i)}`}
-              >
-                <NotationEditor
-                  value={o.text}
-                  onChange={(value) =>
-                    onChange({
-                      ...q,
-                      options: q.options.map((option, n) =>
-                        i === n ? { ...option, text: value } : option,
-                      ),
-                    })
-                  }
-                />
-              </Field>
-              <div className="actions">
-                <Button
-                  aria-label={`Move option ${i + 1} up`}
-                  disabled={i === 0}
-                  onClick={() => {
-                    const next = [...q.options];
-                    [next[i - 1], next[i]] = [next[i], next[i - 1]];
-                    onChange({ ...q, options: next });
-                  }}
-                >
-                  <ArrowUp size={16} />
-                </Button>
-                <Button
-                  aria-label={`Move option ${i + 1} down`}
-                  disabled={i === q.options.length - 1}
-                  onClick={() => {
-                    const next = [...q.options];
-                    [next[i + 1], next[i]] = [next[i], next[i + 1]];
-                    onChange({ ...q, options: next });
-                  }}
-                >
-                  <ArrowDown size={16} />
-                </Button>
-                <Button
-                  variant="quiet"
-                  aria-label={`Remove option ${i + 1}`}
-                  disabled={q.options.length <= 2}
-                  onClick={() => {
-                    const options = q.options.filter((_, n) => n !== i);
-                    onRemove({
-                      kind: "option",
-                      itemId: q.id,
-                      option: o,
-                      index: i,
-                      wasAnswer: q.answer === o.id,
-                    });
-                    onChange({
-                      ...q,
-                      options,
-                      answer: q.answer === o.id ? "" : q.answer,
-                    });
-                  }}
-                >
-                  <Trash2 size={16} />
-                </Button>
-              </div>
-            </div>
-          ))}
-          <Button
-            disabled={q.options.length >= 6}
-            onClick={() =>
-              onChange({
-                ...q,
-                options: [...q.options, { id: freshId(), text: "" }],
-              })
-            }
-          >
-            Add option
-          </Button>
-          <Field path={`${path}/answer`} label="Correct answer">
-            <Selector
-              value={q.answer}
-              disabled={disabled}
-              onValueChange={(value) => onChange({ ...q, answer: value })}
-              placeholder="Select a correct answer"
-              options={[
-                { value: "", label: "Select a correct answer", disabled: true },
-                ...q.options.map((option, i) => ({
-                  value: option.id,
-                  label: `Option ${String.fromCharCode(65 + i)}`,
-                })),
-              ]}
-            />
-          </Field>
-        </>
-      ) : (
-        <>
-          <Field
-            label="Answer type"
-            hint="Choose the preferred keyboard for this written answer."
-          >
-            <Selector
-              value={q.answerType ?? "simple"}
-              disabled={disabled}
-              onValueChange={(value) =>
-                onChange({ ...q, answerType: value as AnswerType })
-              }
-              options={[
-                { value: "simple", label: "Simple · text" },
-                { value: "math", label: "Math · equations and symbols" },
-                { value: "chem", label: "Chem · formulas and reactions" },
-              ]}
-            />
-          </Field>
-          <Field path={`${path}/answer`} label="Reference answer">
-            <NotationEditor
-              value={q.answer}
-              answerType={q.answerType}
-              onChange={(value) => onChange({ ...q, answer: value })}
-            />
-          </Field>
-          {q.rubric ? (
-            <RubricList
-              criteria={q.rubric}
-              path={`${path}/rubric`}
-              mode="author"
-              onRemove={(criterion, index) =>
-                onRemove({ kind: "criterion", itemId: q.id, criterion, index })
-              }
-              onChange={(rubric) => {
-                if (rubric.length) onChange({ ...q, rubric });
-                else {
-                  const next = { ...q };
-                  delete next.rubric;
-                  onChange(next);
-                }
-              }}
-            />
-          ) : (
-            <Button
-              onClick={() =>
-                onChange({
-                  ...q,
-                  rubric: [{ id: freshId(), description: "", points: 1 }],
-                })
-              }
-            >
-              Add marking rubric
-            </Button>
-          )}
-        </>
-      )}
-      <Field path={`${path}/explanation`} label="Explanation (optional)">
-        <NotationEditor
-          value={q.explanation ?? ""}
-          onChange={optionalExplanation}
-        />
-      </Field>
-      <details>
-        <summary>Item details</summary>
-        <p className="muted mono">Stable ID: {q.id}</p>
-      </details>
     </div>
   );
 }

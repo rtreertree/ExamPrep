@@ -1,16 +1,8 @@
 import { Selector } from "../components/Selector";
 import { useState, type FormEvent } from "react";
-import {
-  Link,
-  Navigate,
-  useLocation,
-  useNavigate,
-  useSearchParams,
-  type Location,
-} from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { clearDeviceData } from "../lib/deviceCleanup";
 import {
   readingSize,
   saveReadingSize,
@@ -19,182 +11,13 @@ import {
 import { AccountBackup } from "./AccountBackup";
 import {
   Button,
-  Field,
-  ErrorNotice,
-  PageHeader,
-  Notice,
   Dialog,
+  ErrorNotice,
+  Field,
+  Notice,
+  PageHeader,
 } from "../components/ui";
-export function AuthForm({
-  inline,
-  onSuccess,
-  expectedEmail,
-  register = false,
-  onModeChange,
-}: {
-  expectedEmail?: string;
-  inline?: boolean;
-  onSuccess: () => void | Promise<void>;
-  register?: boolean;
-  onModeChange?: () => void;
-}) {
-  const location = useLocation();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<Error>();
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    if (
-      expectedEmail &&
-      email.trim().toLowerCase() !== expectedEmail.toLowerCase()
-    ) {
-      setError(
-        new Error(
-          `Sign in as ${expectedEmail} to save these changes. To change accounts, return to your work and download a recovery copy first.`,
-        ),
-      );
-      return;
-    }
-    setBusy(true);
-    setError(undefined);
-    try {
-      await api(
-        register ? "/auth/sign-up/email" : "/auth/sign-in/email",
-        "POST",
-        { email, password, ...(register ? { name: "Student" } : {}) },
-      );
-      await onSuccess();
-    } catch (e) {
-      setError(e as Error);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <>
-      <h1>
-        {register
-          ? "Create your account"
-          : inline
-            ? "Sign in again"
-            : "Welcome back"}
-      </h1>
-      <p className="muted">
-        {register
-          ? "A private space for your study material."
-          : "Your next study session starts here."}
-      </p>
-      <form onSubmit={submit} className="stack">
-        <Field label="Email">
-          <input
-            type="email"
-            autoComplete="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-        </Field>
-        <Field
-          label="Password"
-          hint={register ? "Use 12–128 characters." : undefined}
-        >
-          <input
-            type="password"
-            autoComplete={register ? "new-password" : "current-password"}
-            minLength={register ? 12 : undefined}
-            maxLength={128}
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-        </Field>
-        <ErrorNotice error={error} />
-        <Button type="submit" variant="primary" busy={busy}>
-          {register ? "Create account" : "Sign in"}
-        </Button>
-      </form>
-      {!inline && !register ? (
-        <p className="auth-switch">
-          <Link to="/forgot-password" state={location.state}>
-            Forgot password?
-          </Link>
-        </p>
-      ) : null}
-      {onModeChange ? (
-        <p className="auth-switch">
-          {register ? "Already have an account?" : "New to Exam Prep?"}{" "}
-          <Button
-            variant="quiet"
-            onClick={() => {
-              onModeChange();
-              setError(undefined);
-            }}
-          >
-            {register ? "Sign in" : "Create an account"}
-          </Button>
-        </p>
-      ) : null}
-    </>
-  );
-}
-export function AuthPage() {
-  const { user, refresh, cleanupUser, setCleanupUser } = useAuth();
-  const location = useLocation();
-  const destination: Location | undefined = location.state?.signInReturn;
-  const [params, setParams] = useSearchParams();
-  const [cleanupError, setCleanupError] = useState<Error>();
-  const register = params.get("mode") === "register";
-  if (user) {
-    return (
-      <Navigate to={destination ?? "/"} state={destination?.state} replace />
-    );
-  }
-  return (
-    <main className="auth-page">
-      <div className="auth-form">
-        <div className="wordmark">Exam Prep</div>
-        {cleanupUser ? (
-          <Notice tone="warning">
-            <p>
-              You are signed out. Some local study data could not be removed
-              from this device. They remain tied to your account. Retry cleanup,
-              or clear this site’s stored data in your browser on a shared
-              device.
-            </p>
-            <Button
-              onClick={async () => {
-                try {
-                  await clearDeviceData(cleanupUser);
-                  setCleanupUser(undefined);
-                } catch {
-                  setCleanupError(
-                    new Error(
-                      "Device cleanup is still unavailable. Your server session has ended.",
-                    ),
-                  );
-                }
-              }}
-            >
-              Retry device cleanup
-            </Button>
-            <ErrorNotice error={cleanupError} />
-          </Notice>
-        ) : null}
-        <AuthForm
-          register={register}
-          onModeChange={() =>
-            setParams(register ? {} : { mode: "register" }, {
-              replace: true,
-              state: location.state,
-            })
-          }
-          onSuccess={refresh}
-        />
-      </div>
-    </main>
-  );
-}
+
 export function AccountPage() {
   const { user, refresh, setCleanupUser } = useAuth();
   const navigate = useNavigate();
@@ -235,6 +58,7 @@ export function AccountPage() {
       await api("/auth/sign-out", "POST", {});
       let cleanupFailed = false;
       try {
+        const { clearDeviceData } = await import("../lib/deviceCleanup");
         await clearDeviceData(userId);
       } catch {
         cleanupFailed = true;

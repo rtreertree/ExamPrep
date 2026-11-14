@@ -1,16 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import {
-  Upload,
-  Plus,
-  ArrowLeft,
-  ArrowRight,
-  Ellipsis,
-  Folder,
-  X,
-} from "lucide-react";
+import { Upload, Plus, ArrowLeft, Folder, X } from "lucide-react";
 import { useResource } from "../lib/hooks";
-import { api, exportContent, type StudySet } from "../lib/api";
+import { api, type StudySet, type StudySetMetadata } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { accountDrafts, type Draft } from "../lib/drafts";
 import type { AISettings } from "../lib/aiSettings";
@@ -37,8 +29,9 @@ import {
   Pagination,
   Tabs,
 } from "../components/ui";
-import { AIHandoffPanel, ImportPanel } from "./Authoring";
-import { SurfaceLight } from "../components/SurfaceLight";
+import { AIHandoffPanel } from "./AIHandoffPanel";
+import { ImportPanel } from "./ImportPanel";
+import { LibrarySetRow, type LibrarySetRowActions } from "./LibrarySetRow";
 import { PracticeSetup } from "../components/PracticeSetup";
 import { OwnershipInvitations, SetSharing } from "./SetSharing";
 import {
@@ -109,7 +102,7 @@ export function LibraryPage() {
   const results = useRef<HTMLElement>(null);
   const viewFocus = useRef(false);
   const [saved, setSaved] = useState<StudySet>();
-  const [settingUp, setSettingUp] = useState<StudySet>();
+  const [settingUp, setSettingUp] = useState<StudySetMetadata>();
   const [sample, setSample] = useState(false);
   const query = new URLSearchParams({
     page: String(page),
@@ -123,7 +116,7 @@ export function LibraryPage() {
   if (params.has("order") && sort !== "manual") query.set("order", order);
   const listQuery = query.toString();
   const resource = useResource<{
-    items: StudySet[];
+    items: StudySetMetadata[];
     hasMore: boolean;
     page: number;
     folders: LibraryFolder[];
@@ -140,10 +133,10 @@ export function LibraryPage() {
   const [panel, setPanel] = useState<
     "import" | "ai" | { aiSettings: AISettings } | null
   >(null);
-  const [deleting, setDeleting] = useState<StudySet>();
-  const [sharing, setSharing] = useState<StudySet>();
+  const [deleting, setDeleting] = useState<StudySetMetadata>();
+  const [sharing, setSharing] = useState<StudySetMetadata>();
   const [folderVersion, setFolderVersion] = useState(0);
-  const [movingSet, setMovingSet] = useState<StudySet>();
+  const [movingSet, setMovingSet] = useState<StudySetMetadata>();
   const [destination, setDestination] = useState("");
   const [positionItem, setPositionItem] = useState<OrderItem>();
   const [error, setError] = useState<Error>();
@@ -347,7 +340,7 @@ export function LibraryPage() {
     results.current?.focus();
     results.current?.scrollIntoView({ block: "start" });
   }
-  async function organize(set: StudySet, changes: SetOrganization) {
+  async function organize(set: StudySetMetadata, changes: SetOrganization) {
     setBusy(true);
     setError(undefined);
     try {
@@ -361,7 +354,7 @@ export function LibraryPage() {
       setBusy(false);
     }
   }
-  async function duplicate(set: StudySet) {
+  async function duplicate(set: StudySetMetadata) {
     setBusy(true);
     setError(undefined);
     try {
@@ -389,6 +382,32 @@ export function LibraryPage() {
       setBusy(false);
     }
   }
+  const rowActions: LibrarySetRowActions = {
+    practice: setSettingUp,
+    share: setSharing,
+    duplicate: (set) => void duplicate(set),
+    move: (set) => {
+      setError(undefined);
+      setDestination(set.folderId ?? "");
+      setMovingSet(set);
+    },
+    organize: (set, changes) => void organize(set, changes),
+    export: async (set) => {
+      try {
+        const [full, { exportContent }] = await Promise.all([
+          api<StudySet>(`/sets/${set.id}`),
+          import("../lib/exportContent"),
+        ]);
+        exportContent(full.content);
+      } catch (e) {
+        setError(e as Error);
+      }
+    },
+    remove: (set) => {
+      setError(undefined);
+      setDeleting(set);
+    },
+  };
   return (
     <>
       <PageHeader
@@ -654,194 +673,46 @@ export function LibraryPage() {
             ) : resource.data?.items.length ? (
               <div className="set-list" aria-busy={resource.loading}>
                 {resource.data.items.map((set, i) => (
-                  <SurfaceLight
-                    className={`set-row${selectedIds.includes(set.id) ? " set-row-selected" : ""}`}
+                  <LibrarySetRow
                     key={set.id}
-                  >
-                    {currentSelection ? (
-                      <label className="checkbox-row selection-set">
-                        <input
-                          type="checkbox"
-                          aria-label={`Select ${set.title}`}
-                          checked={selectedIds.includes(set.id)}
-                          onChange={(event) =>
-                            changeSelection(
-                              event.target.checked
-                                ? [...selectedIds, set.id]
-                                : selectedIds.filter((id) => id !== set.id),
-                            )
-                          }
+                    set={set}
+                    ordinal={
+                      (resource.data?.page ?? page) * LIST_PAGE_SIZE + i + 1
+                    }
+                    selecting={!!currentSelection}
+                    selected={selectedIds.includes(set.id)}
+                    showFolder={folder === null}
+                    onSelect={(checked) =>
+                      changeSelection(
+                        checked
+                          ? [...selectedIds, set.id]
+                          : selectedIds.filter((id) => id !== set.id),
+                      )
+                    }
+                    busy={busy}
+                    returnTo={returnTo}
+                    actions={rowActions}
+                    reorder={
+                      manualOrder ? (
+                        <ReorderActions
+                          itemId={set.id}
+                          title={set.title}
+                          position={page * LIST_PAGE_SIZE + i + 1}
+                          order={manualOrder}
+                          location={{
+                            kind: "set",
+                            folderId: folder || null,
+                            archived,
+                          }}
+                          disabled={busy || resource.loading}
+                          onBusy={setBusy}
+                          onPrompt={setPositionItem}
+                          onError={reorderFailed}
+                          onMoved={(position) => movedSet(set.title, position)}
                         />
-                      </label>
-                    ) : (
-                      <span className="ordinal" aria-hidden="true">
-                        {String(
-                          (resource.data?.page ?? page) * LIST_PAGE_SIZE +
-                            i +
-                            1,
-                        ).padStart(2, "0")}
-                      </span>
-                    )}
-                    <Link
-                      className="set-title"
-                      aria-description="Edit this study set"
-                      to={`/sets/${set.id}/edit`}
-                    >
-                      {set.title}
-                      <span className="set-edit-cue" aria-hidden="true">
-                        Edit
-                      </span>
-                    </Link>
-                    <span className="set-meta">
-                      {set.kind === "exam"
-                        ? `Exam · ${set.count} question${set.count === 1 ? "" : "s"}`
-                        : `Flashcards · ${set.count} card${set.count === 1 ? "" : "s"}`}
-                      {folder === null && set.folderName ? (
-                        <span className="set-detail">{set.folderName}</span>
-                      ) : null}
-                      {set.pinned ? (
-                        <span className="set-detail">Pinned</span>
-                      ) : null}
-                      {set.ownershipRole === "co_owner" ? (
-                        <span className="set-detail">Co-owned</span>
-                      ) : null}
-                      {set.continuation?.isOlderVersion ? (
-                        <span className="set-detail">
-                          Attempt uses an earlier set version
-                        </span>
-                      ) : null}
-                    </span>
-                    {currentSelection ? null : (
-                      <div className="row-actions">
-                        {set.continuation ? (
-                          <Link
-                            className="button primary"
-                            to={`/practice/${set.continuation.id}`}
-                            state={{ returnTo }}
-                          >
-                            {set.continuation.status === "reviewing"
-                              ? `Finish assessment — ${set.continuation.result?.selfAssessed?.pendingCount ?? "some"} remaining`
-                              : `Resume — ${set.continuation.kind === "exam" ? "question" : "card"} ${set.continuation.position + 1} of ${set.continuation.total}`}
-                          </Link>
-                        ) : (
-                          <Button
-                            disabled={busy}
-                            onClick={() => setSettingUp(set)}
-                          >
-                            Practice <ArrowRight size={17} />
-                          </Button>
-                        )}
-                        <Menu
-                          label={
-                            <>
-                              <Ellipsis size={20} />
-                              <span className="sr-only">
-                                Actions for {set.title}
-                              </span>
-                            </>
-                          }
-                        >
-                          {set.continuation ? (
-                            <button
-                              disabled={busy}
-                              onClick={() => setSettingUp(set)}
-                            >
-                              Start new attempt
-                            </button>
-                          ) : null}
-                          {set.kind === "flashcards" && !set.archived ? (
-                            <Link to={`/review/${set.id}`}>Spaced review</Link>
-                          ) : null}
-                          <Link to={`/history?setId=${set.id}`}>
-                            All attempts for this set
-                          </Link>
-                          <Link to={`/sets/${set.id}/edit`}>Edit set</Link>
-                          {set.ownershipRole === "primary" ? (
-                            <button onClick={() => setSharing(set)}>
-                              Share and manage access
-                            </button>
-                          ) : null}
-                          <button
-                            disabled={busy}
-                            onClick={() => void duplicate(set)}
-                          >
-                            Duplicate set
-                          </button>
-                          <button
-                            disabled={busy}
-                            onClick={() => {
-                              setError(undefined);
-                              setDestination(set.folderId ?? "");
-                              setMovingSet(set);
-                            }}
-                          >
-                            Move to folder
-                          </button>
-                          {manualOrder ? (
-                            <ReorderActions
-                              itemId={set.id}
-                              title={set.title}
-                              position={page * LIST_PAGE_SIZE + i + 1}
-                              order={manualOrder}
-                              location={{
-                                kind: "set",
-                                folderId: folder || null,
-                                archived,
-                              }}
-                              disabled={busy || resource.loading}
-                              onBusy={setBusy}
-                              onPrompt={setPositionItem}
-                              onError={reorderFailed}
-                              onMoved={(position) =>
-                                movedSet(set.title, position)
-                              }
-                            />
-                          ) : null}
-                          <button
-                            disabled={busy}
-                            onClick={() =>
-                              void organize(set, { pinned: !set.pinned })
-                            }
-                          >
-                            {set.pinned ? "Unpin set" : "Pin set"}
-                          </button>
-                          <button
-                            disabled={busy}
-                            onClick={() =>
-                              void organize(set, { archived: !set.archived })
-                            }
-                          >
-                            {set.archived ? "Unarchive set" : "Archive set"}
-                          </button>
-                          <button
-                            onClick={async () => {
-                              try {
-                                const full = await api<StudySet>(
-                                  `/sets/${set.id}`,
-                                );
-                                exportContent(full.content);
-                              } catch (e) {
-                                setError(e as Error);
-                              }
-                            }}
-                          >
-                            Export
-                          </button>
-                          {set.ownershipRole === "primary" ? (
-                            <button
-                              className="negative"
-                              onClick={() => {
-                                setError(undefined);
-                                setDeleting(set);
-                              }}
-                            >
-                              Delete
-                            </button>
-                          ) : null}
-                        </Menu>
-                      </div>
-                    )}
-                  </SurfaceLight>
+                      ) : undefined
+                    }
+                  />
                 ))}
               </div>
             ) : !resource.error &&
