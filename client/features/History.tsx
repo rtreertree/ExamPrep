@@ -1,12 +1,13 @@
-import { useId, useRef } from "react";
+import { useId, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, X } from "lucide-react";
 import {
   LIST_PAGE_SIZE,
   type AttemptGroup,
   type ListResult,
 } from "../../shared/listing";
 import { Selector } from "../components/Selector";
+import { ListOrdering } from "../components/ListOrdering";
 import {
   Button,
   EmptyState,
@@ -38,10 +39,15 @@ const types = [
   { value: "flashcards", label: "Flashcard practice" },
   { value: "spaced", label: "Spaced review" },
 ];
+const arrangements = [
+  { value: "date", label: "Attempt date" },
+  { value: "title", label: "Study-set title" },
+] as const;
 const dateTime = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
   timeStyle: "short",
 });
+const day = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 const groupReset = { page: null, group: null, groupPage: null };
 const deletedGroup = "~deleted";
 
@@ -59,6 +65,8 @@ export function HistoryPage() {
       "view",
       "group",
       "groupPage",
+      "sort",
+      "order",
     ],
     ["group", "groupPage"],
   );
@@ -81,6 +89,15 @@ export function HistoryPage() {
   const bounds = historyDateBounds(date, from, through);
   const appliedSearch = (params.get("search") ?? "").slice(0, 200);
   const setId = params.get("setId");
+  const sort = params.get("sort") === "title" ? "title" : "date";
+  const order = params.has("order")
+    ? params.get("order") === "asc"
+      ? "asc"
+      : "desc"
+    : sort === "title"
+      ? "asc"
+      : "desc";
+  const [filtersOpen, setFiltersOpen] = useState(date === "custom");
   const returnTo = params.size ? `/history?${params}` : "/history";
   const query = new URLSearchParams({
     page: String(page),
@@ -89,6 +106,8 @@ export function HistoryPage() {
   });
   if (setId) query.set("setId", setId);
   if (type !== "all") query.set("type", type);
+  if (sort !== "date") query.set("sort", sort);
+  if (params.has("order")) query.set("order", order);
   if (bounds.startedFrom) query.set("startedFrom", bounds.startedFrom);
   if (bounds.startedBefore) query.set("startedBefore", bounds.startedBefore);
   const attempts = useResource<ListResult<Attempt>>(
@@ -117,12 +136,27 @@ export function HistoryPage() {
   function setStatus(value: string) {
     changeFilters({ status: value === "all" ? null : value });
   }
+  function setDate(value: string) {
+    changeFilters({
+      date: value === "any" ? null : value,
+      ...(value === "any" ? { from: null, through: null } : {}),
+    });
+  }
+  const typeLabel = types.find(({ value }) => value === type)?.label;
+  const dateLabel =
+    date === "custom" && !bounds.error && (from || through)
+      ? [
+          from && bounds.startedFrom
+            ? day.format(new Date(bounds.startedFrom))
+            : "",
+          through ? day.format(new Date(`${through}T00:00:00`)) : "",
+        ]
+          .filter(Boolean)
+          .join(" – ")
+      : historyDateOptions.find(({ value }) => value === date)?.label;
   return (
     <>
-      <PageHeader
-        title="History"
-        description="Resume attempts and review your results."
-      />
+      <PageHeader title="History" />
       <ProgressInsights setId={setId} returnTo={returnTo} />
       <ListViewSwitcher
         label="History view"
@@ -133,68 +167,121 @@ export function HistoryPage() {
           if (next !== grouped) changeFilters({ view: next ? "sets" : null });
         }}
       />
-      {setId ? (
-        <div className="history-set-scope">
-          <Button onClick={() => changeFilters({ setId: null })}>
-            Show attempts from all sets
-          </Button>
+      <div className="collection-tools">
+        <Field label="Search history">
+          <input
+            type="search"
+            maxLength={200}
+            value={search}
+            placeholder="Find an attempt by set title"
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </Field>
+        <ListOrdering
+          sort={sort}
+          order={order}
+          options={arrangements}
+          alphabetical={sort === "title"}
+          onSort={(value) =>
+            changeFilters({
+              sort: value === "date" ? null : value,
+              order: null,
+            })
+          }
+          onOrder={(value) => changeFilters({ order: value })}
+        />
+      </div>
+      <details
+        className="collection-filters"
+        open={filtersOpen}
+        onToggle={(event) => setFiltersOpen(event.currentTarget.open)}
+      >
+        <summary>Filters</summary>
+        <div className="list-filter-fields">
+          <Field label="Attempt type">
+            <Selector
+              value={type}
+              onValueChange={(value) =>
+                changeFilters({ type: value === "all" ? null : value })
+              }
+              options={types}
+            />
+          </Field>
+          <Field label="Attempt date">
+            <Selector
+              value={date}
+              onValueChange={setDate}
+              options={historyDateOptions}
+            />
+          </Field>
+          {date === "custom" ? (
+            <>
+              <Field label="Start date">
+                <input
+                  type="date"
+                  value={from}
+                  aria-invalid={!!bounds.error}
+                  aria-describedby={bounds.error ? dateErrorId : undefined}
+                  onChange={(event) =>
+                    changeFilters({ from: event.target.value || null })
+                  }
+                />
+              </Field>
+              <Field label="End date">
+                <input
+                  type="date"
+                  value={through}
+                  aria-invalid={!!bounds.error}
+                  aria-describedby={bounds.error ? dateErrorId : undefined}
+                  onChange={(event) =>
+                    changeFilters({ through: event.target.value || null })
+                  }
+                />
+              </Field>
+            </>
+          ) : null}
+        </div>
+      </details>
+      {type !== "all" || date !== "any" || setId ? (
+        <div
+          className="applied-filters"
+          aria-label="Applied filters"
+          role="group"
+        >
+          {type !== "all" ? (
+            <Button
+              variant="quiet"
+              aria-label={`Remove type filter: ${typeLabel}`}
+              onClick={() => changeFilters({ type: null })}
+            >
+              {typeLabel}
+              <X size={16} aria-hidden="true" />
+            </Button>
+          ) : null}
+          {date !== "any" ? (
+            <Button
+              variant="quiet"
+              aria-label={`Remove date filter: ${dateLabel}`}
+              onClick={() => setDate("any")}
+            >
+              {dateLabel}
+              <X size={16} aria-hidden="true" />
+            </Button>
+          ) : null}
+          {setId ? (
+            <Button
+              variant="quiet"
+              aria-label="Show attempts from all sets"
+              onClick={() => changeFilters({ setId: null })}
+            >
+              {groups.data?.items[0]?.title ??
+                attempts.data?.items[0]?.title ??
+                "Selected study set"}
+              <X size={16} aria-hidden="true" />
+            </Button>
+          ) : null}
         </div>
       ) : null}
-      <Field label="Search history">
-        <input
-          type="search"
-          maxLength={200}
-          value={search}
-          placeholder="Find an attempt by set title"
-          onChange={(e) => setSearch(e.target.value)}
-        />
-      </Field>
-      <div className="list-filter-fields">
-        <Field label="Attempt type">
-          <Selector
-            value={type}
-            onValueChange={(value) =>
-              changeFilters({ type: value === "all" ? null : value })
-            }
-            options={types}
-          />
-        </Field>
-        <Field label="Attempt date">
-          <Selector
-            value={date}
-            onValueChange={(value) =>
-              changeFilters({ date: value === "any" ? null : value })
-            }
-            options={historyDateOptions}
-          />
-        </Field>
-        {date === "custom" ? (
-          <>
-            <Field label="Start date">
-              <input
-                type="date"
-                value={from}
-                aria-invalid={!!bounds.error}
-                aria-describedby={bounds.error ? dateErrorId : undefined}
-                onChange={(event) =>
-                  changeFilters({ from: event.target.value || null })
-                }
-              />
-            </Field>
-            <Field label="End date">
-              <input
-                type="date"
-                value={through}
-                aria-invalid={!!bounds.error}
-                aria-describedby={bounds.error ? dateErrorId : undefined}
-                onChange={(event) =>
-                  changeFilters({ through: event.target.value || null })
-                }
-              />
-            </Field>
-          </>
-        ) : null}
-      </div>
       {bounds.error ? (
         <p id={dateErrorId} className="negative" role="alert">
           {bounds.error}
@@ -349,13 +436,25 @@ function HistoryGroup({
           className="organization-row"
           type="button"
           id={`${id}-toggle`}
+          aria-label={`${title} ${group.count} ${group.count === 1 ? "attempt" : "attempts"}`}
+          aria-describedby={`${id}-date`}
           aria-expanded={expanded}
           aria-controls={id}
           onClick={onToggle}
         >
           <strong>{title}</strong>
-          <span className="muted">
-            {group.count} {group.count === 1 ? "attempt" : "attempts"}
+          <span className="history-group-meta">
+            <span className="muted">
+              {group.count} {group.count === 1 ? "attempt" : "attempts"}
+            </span>
+            <time
+              className="muted"
+              id={`${id}-date`}
+              dateTime={group.latestStartedAt}
+              title="Latest matching attempt"
+            >
+              {day.format(new Date(group.latestStartedAt))}
+            </time>
           </span>
           <ChevronDown size={18} aria-hidden="true" />
         </button>
@@ -395,6 +494,10 @@ function GroupAttempts({
 }) {
   const results = useRef<HTMLDivElement>(null);
   const query = new URLSearchParams(filters);
+  if (query.get("sort") === "title") {
+    query.delete("sort");
+    query.delete("order");
+  }
   query.set("page", String(page));
   if (setId) query.set("setId", setId);
   else {

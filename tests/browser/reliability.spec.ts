@@ -93,6 +93,8 @@ async function fixture(page: Page, doc = written, position = 0) {
     ownershipRole: "primary",
     updatedAt: now,
     course: "",
+    folderId: null,
+    folderName: null,
     pinned: false,
     archived: false,
     lastStudiedAt: null,
@@ -112,6 +114,7 @@ async function fixture(page: Page, doc = written, position = 0) {
     sourceAttemptId: null,
   };
   let copy: StudySet | undefined;
+  const folders: { id: string; name: string }[] = [];
   const state = {
     signedIn: true,
     userId: "student-a",
@@ -154,6 +157,30 @@ async function fixture(page: Page, doc = written, position = 0) {
       value = { enabled: true };
     } else if (path === "/api/ownership-invitations") {
       value = [];
+    } else if (path === "/api/folders" && req.method() === "POST") {
+      const folder = {
+        id: `folder-${folders.length + 1}`,
+        name: req.postDataJSON().name,
+      };
+      folders.push(folder);
+      status = 201;
+      value = folder;
+    } else if (path === "/api/folders") {
+      const search = url.searchParams.get("search")?.toLowerCase() ?? "";
+      const inScope =
+        set.archived === (url.searchParams.get("archived") === "true");
+      value = {
+        items: folders
+          .filter(({ name }) => name.toLowerCase().includes(search))
+          .map((folder) => ({
+            ...folder,
+            count: inScope && set.folderId === folder.id ? 1 : 0,
+          })),
+        unfiledCount: "unfiled".includes(search)
+          ? Number(inScope && !set.folderId)
+          : null,
+        hasMore: false,
+      };
     } else if (path === "/api/sets") {
       if (req.method() === "POST") {
         const content = validateContent(req.postDataJSON());
@@ -199,10 +226,12 @@ async function fixture(page: Page, doc = written, position = 0) {
                 item.kind === url.searchParams.get("kind")) &&
               (!url.searchParams.has("course") ||
                 item.course === url.searchParams.get("course")) &&
+              (!url.searchParams.has("folderId") ||
+                (item.folderId ?? "") === url.searchParams.get("folderId")) &&
               item.archived === (url.searchParams.get("archived") === "true"),
           ),
           hasMore: false,
-          courses: set.course ? [set.course] : [],
+          folders,
           page: Number(url.searchParams.get("page")),
         };
       }
@@ -225,7 +254,11 @@ async function fixture(page: Page, doc = written, position = 0) {
         value = set;
       }
     } else if (path === "/api/sets/set/organization") {
-      set = { ...set, ...req.postDataJSON() };
+      const changes = req.postDataJSON();
+      set = { ...set, ...changes };
+      if ("folderId" in changes)
+        set.folderName =
+          folders.find(({ id }) => id === changes.folderId)?.name ?? null;
       value = { updated: true };
     } else if (path === "/api/sets/set/duplicate") {
       const title = `Copy of ${set.title}`;
@@ -990,7 +1023,7 @@ test("mobile AI helper offers manual copying and file upload", async ({
   ).toBeVisible();
 });
 
-test("library resumes the saved snapshot and remembers course filters across practice", async ({
+test("library resumes the saved snapshot and remembers the folder across practice", async ({
   page,
 }) => {
   const mocked = await fixture(page, written, 2);
@@ -1011,25 +1044,37 @@ test("library resumes the saved snapshot and remembers course filters across pra
   const actions = page
     .locator("summary")
     .filter({ hasText: "Actions for Reliable study" });
+  await page.getByRole("button", { name: "Folders", exact: true }).click();
+  await page.getByRole("button", { name: "New folder" }).click();
+  await page.getByLabel("Folder name").fill("Organic chemistry");
+  await page.getByRole("button", { name: "Create folder" }).click();
+  await expect(
+    page.getByRole("button", { name: "Organic chemistry 0 sets" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "All sets" }).click();
   await actions.click();
-  await page.getByRole("button", { name: "Set course", exact: true }).click();
-  await page.getByLabel("Course name").fill("Organic chemistry");
-  await page.getByRole("button", { name: "Save course" }).click();
+  await page
+    .getByRole("button", { name: "Move to folder", exact: true })
+    .click();
+  await chooseOption(page.getByLabel("Destination"), "Organic chemistry");
+  await page.getByRole("button", { name: "Move set" }).click();
   await expect(page.locator(".set-meta")).toContainText("Organic chemistry");
   await actions.click();
   await page.getByRole("button", { name: "Pin set" }).click();
   await expect(page.locator(".set-meta")).toContainText("Pinned");
-  await page.getByText("Library filters", { exact: true }).click();
-  await chooseOption(
-    page.getByLabel("Course", { exact: true }),
-    "Organic chemistry",
-  );
-  await chooseOption(page.getByLabel("Sort library"), "Last studied");
+  await page.getByRole("button", { name: "Folders", exact: true }).click();
+  await page.getByLabel("Search folders").fill("chemistry");
+  await expect(page).toHaveURL(/folderSearch=chemistry/);
+  await page.getByRole("button", { name: "Organic chemistry 1 set" }).click();
+  await page.getByRole("button", { name: "Back to folders" }).click();
+  await expect(page.getByLabel("Search folders")).toHaveValue("chemistry");
+  await page.getByRole("button", { name: "Organic chemistry 1 set" }).click();
+  await chooseOption(page.getByLabel("Arrangement"), "Last studied");
   await page.getByLabel("Search library").pressSequentially("Reliable");
   await expect(page).toHaveURL(
     (url) =>
       url.searchParams.get("search") === "Reliable" &&
-      url.searchParams.get("course") === "Organic chemistry" &&
+      url.searchParams.get("folder") === "folder-1" &&
       url.searchParams.get("sort") === "studied",
   );
   await expect
@@ -1048,10 +1093,10 @@ test("library resumes the saved snapshot and remembers course filters across pra
     page.getByRole("heading", { name: "Question 3 of 3" }),
   ).toBeVisible();
   await page.getByRole("link", { name: "Library", exact: true }).click();
-  await expect(page.getByLabel("Course", { exact: true })).toHaveText(
-    "Organic chemistry",
-  );
-  await expect(page.getByLabel("Sort library")).toHaveText("Last studied");
+  await expect(
+    page.getByRole("heading", { name: "Organic chemistry" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Arrangement")).toHaveText("Last studied");
   await expect(page.getByLabel("Search library")).toHaveValue("Reliable");
   await page.screenshot({
     path: "/tmp/examprep-v1-library-organization-desktop.png",
@@ -1075,32 +1120,44 @@ test("library resumes the saved snapshot and remembers course filters across pra
   ).toBeVisible();
 });
 
-test.describe("course suggestions on touch screens", () => {
+test.describe("folder selection on touch screens", () => {
   test.use({ hasTouch: true, reducedMotion: "reduce" });
 
-  test("selects an existing course and accepts a blank name", async ({
+  test("moves a set to a named folder and back to Unfiled", async ({
     page,
   }) => {
     const api = await fixture(page, written);
     await page.goto("/");
+    await page.getByRole("button", { name: "Folders", exact: true }).tap();
+    await page.getByRole("button", { name: "New folder" }).tap();
+    await page.getByLabel("Folder name").fill("Organic chemistry");
+    await page.getByRole("button", { name: "Create folder" }).tap();
+    await expect(
+      page.getByRole("button", { name: "Organic chemistry 0 sets" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "All sets" }).tap();
     const actions = page
       .locator("summary")
       .filter({ hasText: "Actions for Reliable study" });
     await actions.tap();
-    await page.getByRole("button", { name: "Set course", exact: true }).tap();
-    const dialog = page.getByRole("dialog", { name: "Set course" });
-    const course = dialog.getByRole("combobox", { name: "Course name" });
-    await course.fill("Organic chemistry");
-    await dialog.getByRole("button", { name: "Save course" }).tap();
-    await expect.poll(() => api.set().course).toBe("Organic chemistry");
+    await page
+      .getByRole("button", { name: "Move to folder", exact: true })
+      .tap();
+    const dialog = page.getByRole("dialog", { name: "Move to folder" });
+    const destination = dialog.getByRole("combobox", { name: "Destination" });
+    await chooseOption(destination, "Organic chemistry");
+    await dialog.getByRole("button", { name: "Move set" }).tap();
+    await expect.poll(() => api.set().folderId).toBe("folder-1");
     await expect(dialog).toBeHidden();
     await expect(page.locator(".set-meta")).toContainText("Organic chemistry");
 
     for (const width of [390, 320]) {
       await page.setViewportSize({ width, height: 740 });
       await actions.tap();
-      await page.getByRole("button", { name: "Set course", exact: true }).tap();
-      await course.fill("chem");
+      await page
+        .getByRole("button", { name: "Move to folder", exact: true })
+        .tap();
+      await destination.tap();
       const list = dialog.getByRole("listbox");
       await expect(list).toBeVisible();
       await page.setViewportSize({ width, height: 460 });
@@ -1113,20 +1170,22 @@ test.describe("course suggestions on touch screens", () => {
       expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(460);
       if (width === 320)
         await page.screenshot({
-          path: "/tmp/examprep-selector-course-320.png",
+          path: "/tmp/examprep-folder-picker-320.png",
         });
       await list.getByRole("option", { name: "Organic chemistry" }).tap();
-      await expect(course).toHaveValue("Organic chemistry");
-      await expect(course).toBeFocused();
+      await expect(destination).toHaveText("Organic chemistry");
+      await expect(destination).toBeFocused();
       await expect(list).toBeHidden();
       await dialog.getByRole("button", { name: "Cancel" }).tap();
     }
 
     await actions.tap();
-    await page.getByRole("button", { name: "Set course", exact: true }).tap();
-    await course.fill("");
-    await dialog.getByRole("button", { name: "Save course" }).tap();
-    await expect.poll(() => api.set().course).toBe("");
+    await page
+      .getByRole("button", { name: "Move to folder", exact: true })
+      .tap();
+    await chooseOption(destination, "Unfiled");
+    await dialog.getByRole("button", { name: "Move set" }).tap();
+    await expect.poll(() => api.set().folderId).toBe(null);
     await expect(page.locator(".set-meta")).not.toContainText(
       "Organic chemistry",
     );
@@ -1736,36 +1795,47 @@ test("search empty states recover existing content and mobile History exposes Co
   ).toBeVisible();
 });
 
-test("browse courses and organize one Library page at a time", async ({
+test("browse folders and organize one Library page at a time", async ({
   page,
 }) => {
   const existing = await fixture(page);
   const sets = [
-    { ...existing.set(), id: "other-page", title: "Cells", course: "Biology" },
-    { ...existing.set(), id: "genetics", title: "Genetics", course: "Biology" },
+    {
+      ...existing.set(),
+      id: "other-page",
+      title: "Cells",
+      folderId: "biology",
+    },
+    {
+      ...existing.set(),
+      id: "genetics",
+      title: "Genetics",
+      folderId: "biology",
+    },
     {
       ...existing.set(),
       id: "evolution",
       title: "Evolution",
-      course: "Biology",
+      folderId: "biology",
     },
     { ...existing.set(), id: "unsorted", title: "Field notes" },
   ];
   let failure = true;
   await page.route(
-    /\/api\/sets(?:\?|\/courses|\/organization)/,
+    /\/api\/(?:folders\?|sets(?:\?|\/organization))/,
     async (route) => {
       const url = new URL(route.request().url());
       const archived = url.searchParams.get("archived") === "true";
       const scope = sets.filter((set) => set.archived === archived);
-      if (url.pathname === "/api/sets/courses") {
-        const courses = [...new Set(scope.map(({ course }) => course))];
+      const folders = [{ id: "biology", name: "Biology" }];
+      if (url.pathname === "/api/folders") {
         return route.fulfill({
           json: {
-            items: courses.map((course) => ({
-              course,
-              count: scope.filter((set) => set.course === course).length,
+            items: folders.map((folder) => ({
+              ...folder,
+              count: scope.filter((set) => set.folderId === folder.id).length,
             })),
+            unfiledCount: scope.filter((set) => !set.folderId).length,
             hasMore: false,
           },
         });
@@ -1786,13 +1856,13 @@ test("browse courses and organize one Library page at a time", async ({
           Object.assign(set, changes);
         return route.fulfill({ json: { updated: ids.length } });
       }
-      const course = url.searchParams.get("course");
+      const folder = url.searchParams.get("folderId");
       const search = url.searchParams.get("search") ?? "";
       const kind = url.searchParams.get("kind");
       const page = Number(url.searchParams.get("page"));
       const items = scope.filter(
         (set) =>
-          (course === null || set.course === course) &&
+          (folder === null || (set.folderId ?? "") === folder) &&
           (!kind || set.kind === kind) &&
           set.title.toLowerCase().includes(search.toLowerCase()),
       );
@@ -1800,20 +1870,22 @@ test("browse courses and organize one Library page at a time", async ({
         json: {
           items: page ? items.slice(1) : items.slice(0, 1),
           hasMore: !page && items.length > 1,
-          courses: ["Biology"],
+          folders,
           page,
         },
       });
     },
   );
   await page.goto("/?search=missing&kind=flashcards");
-  await page.getByRole("button", { name: "By course" }).press("Enter");
+  await page
+    .getByRole("button", { name: "Folders", exact: true })
+    .press("Enter");
   await expect(
-    page.getByRole("button", { name: "No course 1 set" }),
+    page.getByRole("button", { name: "Unfiled 1 set" }),
   ).toBeVisible();
   await expect(page).toHaveTitle("Exam Prep");
   await page.screenshot({
-    path: "/tmp/examprep-course-overview.png",
+    path: "/tmp/examprep-folders-desktop.png",
     animations: "disabled",
   });
   await page.getByRole("button", { name: "Biology 3 sets" }).press("Enter");
@@ -1881,7 +1953,7 @@ test("browse courses and organize one Library page at a time", async ({
   ).toBeVisible();
   await expect(page).not.toHaveURL(/page=/);
 
-  await page.getByRole("button", { name: "By course" }).click();
+  await page.getByRole("button", { name: "Folders", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Biology 1 set" }),
   ).toBeVisible();
@@ -1892,6 +1964,63 @@ test("browse courses and organize one Library page at a time", async ({
   await expect(
     page.getByRole("button", { name: "Biology 2 sets" }),
   ).toBeVisible();
+});
+
+test("moves a set across a page boundary in manual arrangement", async ({
+  page,
+}) => {
+  const base = await fixture(page);
+  const items = Array.from({ length: 32 }, (_, index) => ({
+    ...base.set(),
+    id: `entry-${index + 1}`,
+    title: `Set ${index + 1}`,
+    folderId: "biology",
+  }));
+  const version = "a".repeat(32);
+  await page.route(/\/api\/sets\?/, (route) => {
+    const query = new URL(route.request().url()).searchParams;
+    const offset = Number(query.get("page")) * 30;
+    return route.fulfill({
+      json: {
+        items: items.slice(offset, offset + 30),
+        folders: [{ id: "biology", name: "Biology" }],
+        hasMore: items.length > offset + 30,
+        page: offset / 30,
+        manual: { count: items.length, version },
+      },
+    });
+  });
+  await page.route("**/api/library/order", (route) => {
+    expect(route.request().postDataJSON()).toEqual({
+      kind: "set",
+      id: "entry-1",
+      folderId: "biology",
+      archived: false,
+      version,
+      position: 31,
+    });
+    items.splice(30, 0, items.shift()!);
+    return route.fulfill({ json: { position: 31 } });
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/?view=folders&folder=biology");
+  await chooseOption(page.getByLabel("Arrangement"), "Manual");
+  const actions = page
+    .locator("summary")
+    .filter({ hasText: /^Actions for Set 1$/ });
+  await actions.press("Enter");
+  await page.getByRole("button", { name: "Move to position" }).press("Enter");
+  const dialog = page.getByRole("dialog", { name: "Move to position" });
+  await dialog.getByLabel("Position").fill("31");
+  await dialog
+    .getByRole("button", { name: "Move", exact: true })
+    .press("Enter");
+  await expect(page).toHaveURL(/page=1/);
+  await expect(page.getByText("Moved “Set 1” to position 31.")).toBeVisible();
+  await expect(page.locator(".set-row").first()).toContainText("Set 1");
+  await page.reload();
+  await expect(page.getByLabel("Arrangement")).toHaveText("Manual");
+  await expect(page.locator(".set-row").first()).toContainText("Set 1");
 });
 
 test.describe("History organization", () => {
@@ -1962,10 +2091,18 @@ test.describe("History organization", () => {
       startedFrom: "2026-11-01T04:00:00.000Z",
       startedBefore: "2026-11-03T05:00:00.000Z",
     });
+    await chooseOption(page.getByLabel("Arrangement"), "Study-set title");
+    await chooseOption(page.getByLabel("Order"), "Z to A");
+    await expect.poll(() => groupQueries.at(-1)?.get("order")).toBe("desc");
+    expect(groupQueries.at(-1)?.get("sort")).toBe("title");
     await page.getByLabel("Start date").fill("2026-11-03");
     await expect(page.getByRole("alert")).toHaveText(
       "Start date must be on or before end date.",
     );
+    await page.getByText("Filters", { exact: true }).click();
+    await expect(page.getByLabel("Start date")).toBeHidden();
+    await expect(page.getByRole("alert")).toBeVisible();
+    await page.getByText("Filters", { exact: true }).click();
     await page.getByLabel("Start date").fill("2026-11-01");
     await group.press("Enter");
     await expect(group).toHaveAttribute("aria-expanded", "true");
@@ -1985,6 +2122,7 @@ test.describe("History organization", () => {
       startedFrom: "2026-11-01T04:00:00.000Z",
       startedBefore: "2026-11-03T05:00:00.000Z",
     });
+    expect(attemptQueries.at(-1)?.has("sort")).toBe(false);
     await page
       .getByRole("link", { name: "Resume practice", exact: false })
       .click();
@@ -2038,7 +2176,9 @@ test("sign-in resumes the requested page and preserves its filters", async ({
     page.getByRole("heading", { name: "Create your account" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Welcome back" }),
+  ).toBeVisible();
   await page.getByLabel("Email", { exact: true }).fill("student@example.test");
   const password = page.getByLabel("Password", { exact: true });
   await password.fill("sample-password");
@@ -2051,7 +2191,9 @@ test("sign-in resumes the requested page and preserves its filters", async ({
     "aria-selected",
     "true",
   );
-  await expect(page.getByRole("link", { name: "Resume practice" })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Resume practice" }),
+  ).toBeVisible();
 });
 
 test("keyboard navigation opens menus and restores focus after dismissal", async ({
@@ -2156,7 +2298,10 @@ test("changing library pages returns focus to the new results", async ({
   await expect(
     page.getByRole("tabpanel", { name: "All study sets" }),
   ).toBeFocused();
-  const firstSet = page.getByRole("link", { name: "Study set 31", exact: true });
+  const firstSet = page.getByRole("link", {
+    name: "Study set 31",
+    exact: true,
+  });
   await expect(firstSet).toBeInViewport();
   await expect(page.getByText("Page 2", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Previous page" }).press("Enter");
@@ -2171,7 +2316,9 @@ test("a temporary editor load failure can be retried in place", async ({
   const api = await fixture(page);
   api.editorLoadFailures = 2;
   await page.goto("/sets/set/edit");
-  await expect(page.getByRole("alert")).toContainText("temporarily unavailable");
+  await expect(page.getByRole("alert")).toContainText(
+    "temporarily unavailable",
+  );
   api.editorLoadFailures = 0;
   await page.getByRole("button", { name: "Retry" }).click();
   await expect(

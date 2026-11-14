@@ -20,7 +20,7 @@ const studySteps = [
   {
     title: "Build your sets",
     description:
-      "Create or import your own exams and flashcards, then organize them by course.",
+      "Create or import your own exams and flashcards, then organize them in folders.",
     Icon: Copy,
   },
   {

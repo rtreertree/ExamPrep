@@ -17,11 +17,16 @@ import { ValidationError } from "./json";
 const stamp = z.iso.datetime();
 const archive = { schemaVersion: z.literal(1), backupId: z.uuid() };
 const revision = z.number().int().min(1).max(2_147_483_647);
+const folderEntry = z.strictObject({
+  id: contentId,
+  name: z.string().trim().min(1).max(100),
+});
 const setEntry = z.strictObject({
   id: contentId,
   content: z.unknown(),
   revision,
   course: z.string().trim().max(100),
+  folderId: contentId.nullable().optional(),
   pinned: z.boolean(),
   archived: z.boolean(),
   reviewLimit: z.number().int().min(1).max(500),
@@ -58,6 +63,7 @@ const backupSchema = z.strictObject({
   library: z.strictObject({
     ...archive,
     kind: z.literal("exam-prep-library"),
+    folders: z.array(folderEntry).optional(),
     sets: z.array(setEntry),
   }),
   history: z
@@ -114,18 +120,32 @@ export function validateBackup(input: unknown) {
       })),
     );
   const { library, history } = parsed.data;
+  const foldersById = byId(library.folders ?? [], "/library/folders");
+  const folderNames = new Set<string>();
+  for (const [index, { name }] of (library.folders ?? []).entries()) {
+    if (folderNames.has(name))
+      invalid(`/library/folders/${index}/name`, "Duplicate folder name.");
+    folderNames.add(name);
+  }
   if (history && history.backupId !== library.backupId)
     invalid(
       "/history/backupId",
       "Choose the history file from this library backup.",
     );
 
-  const sets = library.sets.map((row, i) => ({
-    ...row,
-    content: validateAt(`/library/sets/${i}/content`, () =>
-      validateContent(row.content),
-    ),
-  }));
+  const sets = library.sets.map((row, i) => {
+    if (row.folderId && !foldersById.has(row.folderId))
+      invalid(
+        `/library/sets/${i}/folderId`,
+        "This set refers to a missing folder.",
+      );
+    return {
+      ...row,
+      content: validateAt(`/library/sets/${i}/content`, () =>
+        validateContent(row.content),
+      ),
+    };
+  });
   const setsById = byId(sets, "/library/sets");
   const fullVersions = new Map<string, string>();
   const activeReviews = new Set<string>();
@@ -261,11 +281,21 @@ export function validateBackup(input: unknown) {
       );
     reviewKeys.add(key);
   }
-  return { backupId: library.backupId, sets, attempts: ordered, reviews };
+  return {
+    backupId: library.backupId,
+    folders: library.folders ?? [],
+    sets,
+    attempts: ordered,
+    reviews,
+  };
 }
 
 export function backupSummary(backup: ReturnType<typeof validateBackup>) {
+  const folderNames = new Set(backup.folders.map(({ name }) => name));
+  for (const set of backup.sets)
+    if (set.folderId === undefined && set.course) folderNames.add(set.course);
   return {
+    ...(folderNames.size ? { folderCount: folderNames.size } : {}),
     setCount: backup.sets.length,
     attemptCount: backup.attempts.length,
     reviewCount: backup.reviews.length,

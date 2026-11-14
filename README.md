@@ -102,11 +102,12 @@ Written questions have an optional `answerType` of `simple`, `math`, or `chem`. 
 
 The application remains **1.0.0** and study-set files still use **schemaVersion 1**. Apply `202611090001_study_workflows` through the existing migration workflow before using the new routes.
 
-- Organize the library by course, pin active sets, archive finished sets, and sort by last studied. Resume uses the saved attempt snapshot and shows when the set has been edited. The editor supports item search, duplication, and moving items by position.
+- Organize the library with folders, pin active sets, and archive finished sets. Sort sets by title or recent activity, or choose Manual to arrange folders and their contents. Resume uses the saved attempt snapshot and shows when the set has been edited. The editor supports item search, duplication, and moving items by position.
+- Apply migration `202611150001_library_folders` before starting this version. It converts existing course assignments into private folders for each owner.
 - Choose a session size, order, and optional pacing timer before starting. Quick practice and Exam simulation provide reusable settings. The timer starts when the attempt is created, keeps running while away, and leaves submission under the student's control.
 - Flags, confidence, and private notes belong to attempts. Completed sessions can start focused practice from flagged or low-confidence items. History compares full exam attempts on the same revision and separates automatic scores from self-assessments.
 - Use Due review for per-deck spaced repetition. Only completed due sessions update the schedule. Edits to either side reset the changed card's schedule. Daily limits reset at midnight UTC, displayed in local time.
-- Use Account → Library backup to download all study sets and optionally a separate history file with attempts, private notes, and scheduled cards. Restore previews the pair, imports copies, and skips entries already restored from that backup. Individual study-set exports still contain only study content.
+- Use Account → Library backup to download study sets, folders, and manual order, and optionally a separate history file with attempts, private notes, and scheduled cards. Restore previews the pair, imports copies, and skips entries already restored from that backup. Individual study-set exports still contain only study content.
 
 ### Sharing and co-ownership
 

@@ -29,6 +29,7 @@ model User {
   coOwnedSets   StudySetCoOwner[]
   invitations   StudySetInvitation[]
   copyImports   StudySetCopyImport[]
+  libraryFolders LibraryFolder[]
 
   @@map("user")
 }
@@ -90,6 +91,19 @@ model RateLimit {
   @@map("rateLimit")
 }
 
+model LibraryFolder {
+  id         String @id @default(uuid())
+  userId     String
+  user       User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  manualRank BigInt @default(dbgenerated("nextval('library_manual_rank_seq'::regclass)"))
+  sets       StudySet[]
+  coOwnedSets StudySetCoOwner[]
+
+  @@unique([userId, id])
+  @@unique([userId, name])
+}
+
 model StudySet {
   id            String       @id @default(uuid())
   userId        String
@@ -99,6 +113,9 @@ model StudySet {
   content       Json
   revision      Int          @default(1)
   course        String       @default("")
+  folderId      String?
+  folder        LibraryFolder? @relation(fields: [userId, folderId], references: [userId, id], onDelete: NoAction)
+  manualRank    BigInt @default(dbgenerated("nextval('library_manual_rank_seq'::regclass)"))
   pinned        Boolean      @default(false)
   archived      Boolean      @default(false)
   lastStudiedAt DateTime?
@@ -114,6 +131,7 @@ model StudySet {
 
   @@index([userId, updatedAt])
   @@index([userId, archived, pinned, lastStudiedAt])
+  @@index([userId, folderId, archived, manualRank])
 }
 
 model StudySetCoOwner {
@@ -122,6 +140,9 @@ model StudySetCoOwner {
   userId        String
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   course        String   @default("")
+  folderId      String?
+  folder        LibraryFolder? @relation(fields: [userId, folderId], references: [userId, id], onDelete: NoAction)
+  manualRank    BigInt @default(dbgenerated("nextval('library_manual_rank_seq'::regclass)"))
   pinned        Boolean  @default(false)
   archived      Boolean  @default(false)
   lastStudiedAt DateTime?
@@ -130,6 +151,7 @@ model StudySetCoOwner {
 
   @@id([studySetId, userId])
   @@index([userId, archived, pinned, lastStudiedAt])
+  @@index([userId, folderId, archived, manualRank])
 }
 
 model CoOwnerCardReview {

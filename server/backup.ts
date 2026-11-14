@@ -10,12 +10,16 @@ import type { Context } from "./app";
 import type { Database } from "./db";
 import {
   joinCoOwner,
+  joinOwnerFolder,
   ownedSetIds,
   ownerPreferences,
+  ownerRank,
   ownershipRole,
 } from "./setAccess";
 import { progressContent, SNAPSHOT_VERSION } from "./snapshots";
 import { decodeStorage, encodeStorage } from "./storage";
+import { lockLibrary } from "./libraryOrder";
+import type { LibraryFolder } from "../shared/listing";
 
 async function exportBackup(
   db: Database,
@@ -27,12 +31,14 @@ async function exportBackup(
   const [rows] = await db.$queryRaw<
     {
       tooLarge: boolean;
+      folders: LibraryFolder[] | null;
       sets:
         | {
             id: string;
             content: StudyContent;
             revision: number;
             course: string;
+            folderId: string | null;
             pinned: boolean;
             archived: boolean;
             reviewLimit: number;
@@ -65,11 +71,13 @@ async function exportBackup(
   >(sql`
     WITH accessible_sets AS (
       SELECT s.id, s.content, s.revision, s."createdAt", s."updatedAt",
-        ${ownerPreferences}, ${ownershipRole}
-      FROM "StudySet" s ${joinCoOwner(userId)} WHERE s.id IN ${ownedSetIds(userId)}
+        ${ownerPreferences}, ${ownershipRole}, ${ownerRank} AS "manualRank"
+      FROM "StudySet" s ${joinCoOwner(userId)} ${joinOwnerFolder} WHERE s.id IN ${ownedSetIds(userId)}
+    ), folders AS (
+      SELECT id, name, "manualRank" FROM "LibraryFolder" WHERE "userId" = ${userId}
     ), sets AS (
-      SELECT id, content, revision, course, pinned, archived, "reviewLimit",
-        "lastStudiedAt", "createdAt", "updatedAt" FROM accessible_sets
+      SELECT id, content, revision, course, "folderId", pinned, archived, "reviewLimit",
+        "lastStudiedAt", "createdAt", "updatedAt", "manualRank" FROM accessible_sets
     ), attempts AS (
       SELECT id, "studySetId", "studySetRevision", "sourceAttemptId", snapshot,
         settings, "reviewMode", "fullSet", responses, result, status, position,
@@ -85,13 +93,15 @@ async function exportBackup(
         AND s."ownershipRole" = 'co_owner'
     ), size AS (
       SELECT (
+        COALESCE((SELECT sum(pg_column_size(f)) FROM folders f), 0) +
         COALESCE((SELECT sum(pg_column_size(s)) FROM sets s), 0) +
         COALESCE((SELECT sum(pg_column_size(a)) FROM attempts a), 0) +
         COALESCE((SELECT sum(pg_column_size(r)) FROM reviews r), 0)
       ) > ${BACKUP_BYTES} AS "tooLarge"
     )
     SELECT "tooLarge",
-      CASE WHEN NOT "tooLarge" THEN (SELECT jsonb_agg(s ORDER BY id) FROM sets s) END AS sets,
+      CASE WHEN NOT "tooLarge" THEN (SELECT jsonb_agg(to_jsonb(f) - 'manualRank' ORDER BY "manualRank", id) FROM folders f) END AS folders,
+      CASE WHEN NOT "tooLarge" THEN (SELECT jsonb_agg(to_jsonb(s) - 'manualRank' ORDER BY "manualRank", id) FROM sets s) END AS sets,
       CASE WHEN NOT "tooLarge" THEN (SELECT jsonb_agg(a ORDER BY id) FROM attempts a) END AS attempts,
       CASE WHEN NOT "tooLarge" THEN (SELECT jsonb_agg(r ORDER BY "studySetId", "cardId") FROM reviews r) END AS reviews
     FROM size`);
@@ -131,7 +141,12 @@ async function exportBackup(
     attemptStartedAt: utc(row.attemptStartedAt),
   }));
   const backup = {
-    library: { ...archive, kind: "exam-prep-library", sets },
+    library: {
+      ...archive,
+      kind: "exam-prep-library",
+      folders: decodeStorage(rows.folders ?? []),
+      sets,
+    },
     ...(includeHistory
       ? {
           history: { ...archive, kind: "exam-prep-history", attempts, reviews },
@@ -168,7 +183,7 @@ async function restoreBackup(
       byte.toString(16).padStart(2, "0"),
     ).join("");
   };
-  const [setIds, attemptIds] = await Promise.all([
+  const [setIds, attemptIds, folderIds] = await Promise.all([
     Promise.all(
       backup.sets.map(async ({ id }) => [id, await remap("set", id)] as const),
     ),
@@ -177,17 +192,14 @@ async function restoreBackup(
         async ({ id }) => [id, await remap("attempt", id)] as const,
       ),
     ),
-  ]).then(([sets, attempts]) => [new Map(sets), new Map(attempts)] as const);
-
-  const sets = JSON.stringify(
-    encodeStorage(
-      backup.sets.map((set) => ({
-        ...set,
-        id: setIds.get(set.id),
-        title: set.content.title,
-        kind: set.content.kind,
-      })),
+    Promise.all(
+      backup.folders.map(
+        async ({ id }) => [id, await remap("folder", id)] as const,
+      ),
     ),
+  ]).then(
+    ([sets, attempts, folders]) =>
+      [new Map(sets), new Map(attempts), new Map(folders)] as const,
   );
   const attempts = JSON.stringify(
     encodeStorage(
@@ -212,15 +224,87 @@ async function restoreBackup(
   );
 
   return db.$transaction(async (tx) => {
+    await lockLibrary(tx, userId);
+    const folders = JSON.stringify(
+      encodeStorage(
+        backup.folders.map(({ id, name }, position) => ({
+          id: folderIds.get(id),
+          name,
+          position,
+        })),
+      ),
+    );
+    const restoredFolders = await tx.$queryRaw<
+      { source: string; id: string; created: boolean }[]
+    >`
+      WITH input AS MATERIALIZED (
+        SELECT * FROM jsonb_to_recordset(${folders}::jsonb) AS f(id text, name text, position int)
+      ), inserted AS (
+        INSERT INTO "LibraryFolder" (id, "userId", name)
+        SELECT id, ${userId}, name FROM input ORDER BY position
+        ON CONFLICT DO NOTHING RETURNING id
+      )
+      SELECT input.id AS source, COALESCE(inserted.id, by_id.id, by_name.id) AS id,
+        inserted.id IS NOT NULL AS created
+      FROM input LEFT JOIN inserted ON inserted.id = input.id
+      LEFT JOIN "LibraryFolder" by_id ON by_id."userId" = ${userId} AND by_id.id = input.id
+      LEFT JOIN "LibraryFolder" by_name ON by_name."userId" = ${userId} AND by_name.name = input.name
+    `;
+    const resolvedFolders = new Map(
+      restoredFolders.map(({ source, id }) => [source, id]),
+    );
+    const legacyNames = [
+      ...new Set(
+        backup.sets
+          .filter((set) => set.folderId === undefined && set.course)
+          .map((set) => set.course),
+      ),
+    ];
+    const legacyRows = legacyNames.length
+      ? await tx.$queryRaw<{ id: string; name: string; created: boolean }[]>`
+          WITH input AS MATERIALIZED (
+            SELECT name, position
+            FROM jsonb_array_elements_text(${JSON.stringify(encodeStorage(legacyNames))}::jsonb)
+              WITH ORDINALITY AS legacy(name, position)
+          ), inserted AS (
+            INSERT INTO "LibraryFolder" (id, "userId", name)
+            SELECT gen_random_uuid()::text, ${userId}, name FROM input ORDER BY position
+            ON CONFLICT ("userId", name) DO NOTHING RETURNING id, name
+          )
+          SELECT id, name, true AS created FROM inserted
+          UNION ALL
+          SELECT f.id, f.name, false AS created
+          FROM "LibraryFolder" f JOIN input ON input.name = f.name WHERE f."userId" = ${userId}
+        `
+      : [];
+    const legacyFolders = new Map(
+      legacyRows.map(({ id, name }) => [decodeStorage(name), id]),
+    );
+    const sets = JSON.stringify(
+      encodeStorage(
+        backup.sets.map((set, restoreOrder) => ({
+          ...set,
+          id: setIds.get(set.id),
+          folderId: set.folderId
+            ? resolvedFolders.get(folderIds.get(set.folderId)!)
+            : set.folderId === null
+              ? null
+              : (legacyFolders.get(set.course) ?? null),
+          title: set.content.title,
+          kind: set.content.kind,
+          restoreOrder,
+        })),
+      ),
+    );
     const restoredSets = await tx.$queryRaw<{ id: string }[]>`
-      INSERT INTO "StudySet" (id, "userId", title, kind, content, revision, course, pinned,
+      INSERT INTO "StudySet" (id, "userId", title, kind, content, revision, course, "folderId", pinned,
         archived, "reviewLimit", "lastStudiedAt", "createdAt", "updatedAt")
-      SELECT id, ${userId}, title, kind, content, revision, course, pinned, archived,
+      SELECT id, ${userId}, title, kind, content, revision, course, "folderId", pinned, archived,
         "reviewLimit", "lastStudiedAt", "createdAt", "updatedAt"
       FROM jsonb_to_recordset(${sets}::jsonb) AS s(
-        id text, title text, kind text, content jsonb, revision int, course text, pinned bool,
-        archived bool, "reviewLimit" int, "lastStudiedAt" timestamp, "createdAt" timestamp, "updatedAt" timestamp)
-      ORDER BY id
+        id text, title text, kind text, content jsonb, revision int, course text, "folderId" text, pinned bool,
+        archived bool, "reviewLimit" int, "lastStudiedAt" timestamp, "createdAt" timestamp, "updatedAt" timestamp, "restoreOrder" int)
+      ORDER BY "restoreOrder"
       ON CONFLICT (id) DO NOTHING RETURNING id`;
     const restoredAttempts = await tx.$queryRaw<{ id: string }[]>`
       INSERT INTO "Attempt" (id, "userId", "studySetId", "studySetRevision", "sourceAttemptId",
@@ -244,6 +328,13 @@ async function restoreBackup(
       ORDER BY "studySetId", "cardId"
       ON CONFLICT ("studySetId", "cardId") DO NOTHING RETURNING "cardId"`;
     return {
+      ...(backup.folders.length || legacyNames.length
+        ? {
+            folderCount:
+              restoredFolders.filter(({ created }) => created).length +
+              legacyRows.filter(({ created }) => created).length,
+          }
+        : {}),
       setCount: restoredSets.length,
       attemptCount: restoredAttempts.length,
       reviewCount: restoredReviews.length,

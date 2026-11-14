@@ -15,6 +15,8 @@ export type StudySet = {
   ownershipRole: OwnershipRole;
   updatedAt: string;
   course: string;
+  folderId?: string | null;
+  folderName?: string | null;
   pinned: boolean;
   archived: boolean;
   lastStudiedAt: string | null;

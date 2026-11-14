@@ -12,6 +12,7 @@ import type { Context } from "./app";
 import type { Database } from "./db";
 import { read, schema } from "./request";
 import { lockPrimarySet, lockSet, unavailableSet } from "./setAccess";
+import { lockLibrary } from "./libraryOrder";
 import { decodeStorage, encodeStorage } from "./storage";
 
 type QueryDb = Pick<Database, "$queryRaw">;
@@ -113,6 +114,7 @@ async function importCopy(
   requestId: string,
 ) {
   return db.$transaction(async (tx) => {
+    await lockLibrary(tx, userId);
     // The receipt reserves this account's action before any copy can be created.
     const [claim] = await tx.$queryRaw<{ requestId: string }[]>`
       INSERT INTO "StudySetCopyImport" ("userId", "requestId", "linkNonce")
@@ -290,6 +292,7 @@ export function registerSharing(app: Hono<Context>, secret: string) {
     const id = c.req.param("id");
     return c.json(
       await c.get("db").$transaction(async (tx) => {
+        if (accept) await lockLibrary(tx, userId);
         const [invitation] = await tx.$queryRaw<{ studySetId: string }[]>`
         SELECT "studySetId" FROM "StudySetInvitation" WHERE id = ${id} AND "userId" = ${userId}
       `;

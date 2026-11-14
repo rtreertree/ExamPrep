@@ -5,9 +5,13 @@ import type { OwnershipRole } from "../shared/sharing";
 import type { SetOrganization } from "../shared/listing";
 import type { Database } from "./db";
 import { encodeStorage } from "./storage";
+import { folderForLegacyName, lockLibrary, readFolder } from "./libraryOrder";
 
 type QueryDb = Pick<Database, "$queryRaw">;
-export type OwnedSet = StudySet & { ownershipRole: OwnershipRole };
+export type OwnedSet = Omit<StudySet, "manualRank"> & {
+  ownershipRole: OwnershipRole;
+  folderName: string | null;
+};
 
 export const unavailableSet = () =>
   new HTTPException(404, { message: "This study set is unavailable." });
@@ -26,19 +30,26 @@ export const ownedSetIds = (userId: string) => sql`(
 export const ownershipRole = sql`
   CASE WHEN co."userId" IS NULL THEN 'primary' ELSE 'co_owner' END AS "ownershipRole"
 `;
+export const ownerFolderId = sql`CASE WHEN co."userId" IS NULL THEN s."folderId" ELSE co."folderId" END`;
+export const ownerRank = sql`COALESCE(co."manualRank", s."manualRank")`;
 export const ownerPreferences = sql`
-  COALESCE(co.course, s.course) AS course,
+  f.name AS "folderName",
+  COALESCE(f.name, '') AS course,
+  ${ownerFolderId} AS "folderId",
   COALESCE(co.pinned, s.pinned) AS pinned,
   COALESCE(co.archived, s.archived) AS archived,
   CASE WHEN co."userId" IS NULL THEN s."lastStudiedAt" ELSE co."lastStudiedAt" END AS "lastStudiedAt",
   COALESCE(co."reviewLimit", s."reviewLimit") AS "reviewLimit"
+`;
+export const joinOwnerFolder = sql`
+  LEFT JOIN "LibraryFolder" f ON f.id = (${ownerFolderId})
 `;
 
 export async function readOwnedSet(db: QueryDb, id: string, userId: string) {
   const [set] = await db.$queryRaw<OwnedSet[]>(sql`
     SELECT s.id, s."userId", s.title, s.kind, s.content, s.revision, s."createdAt",
       s."updatedAt", ${ownershipRole}, ${ownerPreferences}
-    FROM "StudySet" s ${joinCoOwner(userId)}
+    FROM "StudySet" s ${joinCoOwner(userId)} ${joinOwnerFolder}
     WHERE s.id = ${id} AND ${ownerAccess(userId)}
   `);
   if (!set) throw unavailableSet();
@@ -67,7 +78,11 @@ export async function lockOwnedSet(db: QueryDb, id: string, userId: string) {
   if (!locked) throw unavailableSet();
 }
 
-export async function readLockedOwnedSet(db: QueryDb, id: string, userId: string) {
+export async function readLockedOwnedSet(
+  db: QueryDb,
+  id: string,
+  userId: string,
+) {
   await lockOwnedSet(db, id, userId);
   // A separate statement sees a membership change committed while acquiring the lock.
   return readOwnedSet(db, id, userId);
@@ -80,16 +95,11 @@ export async function organizeSets(
   changes: SetOrganization,
   changedOnly: boolean,
 ) {
-  const course = encodeStorage(changes.course) ?? null;
   const pinned = changes.pinned ?? null;
   const archived = changes.archived ?? null;
-  const fields = sql`course = COALESCE(${course}::text, course),
-    pinned = COALESCE(${pinned}::boolean, pinned),
-    archived = COALESCE(${archived}::boolean, archived)`;
-  const filter = sql`AND (NOT ${changedOnly} OR
-    course <> ${course}::text OR pinned <> ${pinned}::boolean OR archived <> ${archived}::boolean)`;
   const target = sql`(SELECT jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb))`;
   return db.$transaction(async (tx) => {
+    await lockLibrary(tx, userId);
     const locked = await tx.$queryRaw<{ id: string }[]>(sql`
       SELECT s.id FROM "StudySet" s ${joinCoOwner(userId)}
       WHERE s.id IN ${target} AND ${ownerAccess(userId)}
@@ -101,6 +111,29 @@ export async function organizeSets(
       WHERE s.id IN ${target} AND ${ownerAccess(userId)}
     `);
     if (owned.length !== ids.length) throw unavailableSet();
+    const movesFolder =
+      changes.folderId !== undefined || changes.course !== undefined;
+    const folder = changes.folderId
+      ? await readFolder(tx, userId, changes.folderId)
+      : undefined;
+    const course =
+      changes.course === undefined ? null : encodeStorage(changes.course);
+    const folderId =
+      changes.folderId === undefined && course !== null
+        ? await folderForLegacyName(tx, userId, course)
+        : (changes.folderId ?? null);
+    const locationChanges = sql`(
+      (${movesFolder} AND "folderId" IS DISTINCT FROM ${folderId}::text)
+      OR archived <> COALESCE(${archived}::boolean, archived)
+    )`;
+    const fields = sql`
+      course = CASE WHEN ${movesFolder} THEN ${folder?.name ?? course ?? ""} ELSE course END,
+      "folderId" = CASE WHEN ${movesFolder} THEN ${folderId}::text ELSE "folderId" END,
+      "manualRank" = CASE WHEN ${locationChanges} THEN nextval('library_manual_rank_seq'::regclass) ELSE "manualRank" END,
+      pinned = COALESCE(${pinned}::boolean, pinned),
+      archived = COALESCE(${archived}::boolean, archived)
+    `;
+    const filter = sql`AND (NOT ${changedOnly} OR ${locationChanges} OR pinned <> ${pinned}::boolean)`;
     const primary = await tx.$queryRaw<{ id: string }[]>(sql`
       UPDATE "StudySet" SET ${fields}
       WHERE id IN ${target} AND "userId" = ${userId} ${filter} RETURNING id

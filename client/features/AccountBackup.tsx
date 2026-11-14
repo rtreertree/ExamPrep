@@ -111,9 +111,9 @@ export function AccountBackup() {
     <section className="stack">
       <h2>Library backup</h2>
       <p className="muted">
-        Download your entire library, including archived sets and course labels.
-        The optional history file includes answers, scores, private notes, and
-        review schedules.
+        Download your entire library, including archived sets, folders, and
+        manual order. The optional history file includes answers, scores,
+        private notes, and review schedules.
       </p>
       <label className="checkbox-row">
         <input
@@ -200,7 +200,8 @@ export function AccountBackup() {
               onClick={restore}
               disabled={
                 Boolean(busy) ||
-                preview.summary.setCount +
+                (preview.summary.folderCount ?? 0) +
+                  preview.summary.setCount +
                   preview.summary.attemptCount +
                   preview.summary.reviewCount ===
                   0
@@ -220,9 +221,13 @@ export function AccountBackup() {
 }
 
 function countsText({
+  folderCount,
   setCount,
   attemptCount,
   reviewCount,
 }: Omit<BackupSummary, "titles">) {
-  return `${setCount} study ${setCount === 1 ? "set" : "sets"}, ${attemptCount} ${attemptCount === 1 ? "attempt" : "attempts"}, and ${reviewCount} scheduled ${reviewCount === 1 ? "card" : "cards"}`;
+  const folders = folderCount
+    ? `${folderCount} ${folderCount === 1 ? "folder" : "folders"}, `
+    : "";
+  return `${folders}${setCount} study ${setCount === 1 ? "set" : "sets"}, ${attemptCount} ${attemptCount === 1 ? "attempt" : "attempts"}, and ${reviewCount} scheduled ${reviewCount === 1 ? "card" : "cards"}`;
 }

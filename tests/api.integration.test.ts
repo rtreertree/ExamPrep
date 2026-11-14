@@ -42,7 +42,7 @@ function client() {
     }
     const cookies = response.headers.getSetCookie();
     if (cookies.length) cookie = cookies.map((c) => c.split(";")[0]).join("; ");
-    const value = (await response.json()) as any;
+    const value = response.status === 204 ? null : ((await response.json()) as any);
     return { status: response.status, value, headers: response.headers };
   };
 }
@@ -796,6 +796,12 @@ describe.skipIf(!enabled)(
         expect(
           (await a(`/attempts?${filter}&unlinked=true`)).value.items,
         ).toMatchObject([{ title: deleted.title }]);
+        expect(
+          (await a(groupPath + "&sort=title&order=desc")).value.items[0].title,
+        ).toBe(`${title} 9`);
+        expect((await a(attemptPath + "&order=asc")).value.items[0].id).toBe(
+          groups[0].id,
+        );
         filter.set("type", "spaced");
         expect((await a(`/attempts?${filter}`)).value.items).toMatchObject([
           { id: excluded[3].id },
@@ -808,6 +814,184 @@ describe.skipIf(!enabled)(
         await db!.attempt.deleteMany({
           where: { id: { in: records.map(({ id }) => id) } },
         });
+        await db!.studySet.deleteMany({
+          where: { id: { in: sets.map(({ id }) => id) } },
+        });
+      }
+    }, 60000);
+    it("reorders folders and sets across pages and restores their order from backup", async () => {
+      const folderName = `Reorder ${randomUUID()}`;
+      const created = await a("/folders", "POST", { name: folderName });
+      expect(created.status).toBe(201);
+      const folder = created.value;
+      const empty = (
+        await a("/folders", "POST", { name: folderName + " empty" })
+      ).value;
+      const foreign = (await b("/folders", "POST", { name: folderName })).value;
+      expect((await b(`/folders/${folder.id}`)).status).toBe(404);
+      expect(
+        (await a(`/folders/${empty.id}`, "PATCH", { name: folderName })).status,
+      ).toBe(409);
+      const sets = Array.from({ length: 32 }, (_, index) => {
+        const content = {
+          ...deck,
+          title: `Ordered set ${String(index + 1).padStart(2, "0")}`,
+        };
+        return {
+          id: randomUUID(),
+          userId,
+          folderId: folder.id,
+          content,
+          title: content.title,
+          kind: deck.kind,
+        };
+      });
+      await db!.studySet.createMany({ data: sets });
+      try {
+        const found = (
+          await a(
+            `/folders?search=${encodeURIComponent(folderName.toLowerCase())}`,
+          )
+        ).value;
+        expect(found.items).toEqual([
+          { ...folder, count: 32 },
+          { ...empty, count: 0 },
+        ]);
+        const firstPage = (await a(`/sets?folderId=${folder.id}&sort=manual`))
+          .value;
+        const secondPage = (
+          await a(`/sets?folderId=${folder.id}&sort=manual&page=1`)
+        ).value;
+        expect(firstPage.manual).toEqual(secondPage.manual);
+        expect(firstPage.manual.count).toBe(32);
+        const moving = firstPage.items[0].id;
+        const move = {
+          kind: "set",
+          id: moving,
+          folderId: folder.id,
+          archived: false,
+          position: 31,
+          version: firstPage.manual.version,
+        };
+        expect((await a("/library/order", "PATCH", move)).value).toEqual({
+          position: 31,
+        });
+        expect((await a("/library/order", "PATCH", move)).status).toBe(409);
+        expect(
+          (await a(`/sets?folderId=${folder.id}&sort=manual&page=1`)).value
+            .items[0].id,
+        ).toBe(moving);
+        expect(
+          (await a(`/sets?folderId=${folder.id}&sort=title&order=desc`)).value
+            .items[0].title,
+        ).toBe("Ordered set 32");
+        expect(
+          (
+            await a(`/sets/${moving}/organization`, "PATCH", {
+              folderId: foreign.id,
+            })
+          ).status,
+        ).toBe(404);
+        expect(
+          (
+            await a("/sets/organization", "PATCH", {
+              ids: [moving],
+              folderId: empty.id,
+            })
+          ).value,
+        ).toEqual({ updated: 1 });
+        expect((await a(`/sets?folderId=${empty.id}`)).value.items[0].id).toBe(
+          moving,
+        );
+        expect(
+          (
+            await a("/sets/organization", "PATCH", {
+              ids: [moving],
+              folderId: folder.id,
+            })
+          ).value,
+        ).toEqual({ updated: 1 });
+        expect(
+          (await a(`/sets?folderId=${folder.id}&sort=manual&page=1`)).value
+            .items[1].id,
+        ).toBe(moving);
+
+        const folderOrder = (await a("/folders?sort=manual")).value;
+        expect(
+          (
+            await a("/library/order", "PATCH", {
+              kind: "folder",
+              id: empty.id,
+              position: 1,
+              version: folderOrder.manual.version,
+            })
+          ).status,
+        ).toBe(200);
+        const backup = (await a("/backup")).value;
+        const savedFolders = backup.library.folders.filter(
+          ({ id }: { id: string }) => id === folder.id || id === empty.id,
+        );
+        const savedSets = backup.library.sets.filter(
+          ({ folderId }: { folderId: string }) => folderId === folder.id,
+        );
+        expect(savedFolders.map(({ id }: { id: string }) => id)).toEqual([
+          empty.id,
+          folder.id,
+        ]);
+        expect(savedSets.at(-1).id).toBe(moving);
+        const restore = {
+          library: {
+            ...backup.library,
+            folders: savedFolders,
+            sets: savedSets,
+          },
+        };
+        expect((await b("/backup/restore", "POST", restore)).value).toMatchObject({
+          setCount: 32, folderCount: 1,
+        });
+        expect(
+          (await b("/backup/restore", "POST", restore)).value.setCount,
+        ).toBe(0);
+        const restored = (
+          await b(`/folders?search=${encodeURIComponent(folderName)}`)
+        ).value.items;
+        expect(restored).toEqual([
+          { ...foreign, count: 32 },
+          expect.objectContaining({ name: empty.name, count: 0 }),
+        ]);
+        expect(
+          (await b(`/sets?folderId=${foreign.id}&sort=manual&page=1`)).value
+            .items[1].title,
+        ).toBe(savedSets.at(-1).content.title);
+        const legacyCourse = `Legacy ${randomUUID()}`;
+        const { folderId: _folder, ...oldSet } = savedSets[0];
+        const legacy = {
+          schemaVersion: 1,
+          kind: "exam-prep-library",
+          backupId: randomUUID(),
+          sets: [{ ...oldSet, course: legacyCourse }],
+        };
+        expect(
+          (await b("/backup/restore", "POST", { library: legacy })).value
+            .setCount,
+        ).toBe(1);
+        expect(
+          (await b(`/folders?search=${encodeURIComponent(legacyCourse)}`)).value
+            .items,
+        ).toMatchObject([{ name: legacyCourse, count: 1 }]);
+
+        expect(
+          (await a(`/sets/${moving}/organization`, "PATCH", { archived: true }))
+            .status,
+        ).toBe(200);
+        expect((await a(`/folders/${folder.id}`, "DELETE", {})).status).toBe(
+          204,
+        );
+        expect((await a(`/sets/${moving}`)).value).toMatchObject({
+          folderId: null,
+          archived: true,
+        });
+      } finally {
         await db!.studySet.deleteMany({
           where: { id: { in: sets.map(({ id }) => id) } },
         });

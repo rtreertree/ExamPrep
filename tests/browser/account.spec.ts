@@ -98,6 +98,50 @@ test("previews a backup before restoring and saves study text size", async ({
   expect(errors).toEqual([]);
 });
 
+test("restores a backup that contains only an empty folder", async ({
+  page,
+}) => {
+  const library = {
+    schemaVersion: 1,
+    kind: "exam-prep-library",
+    backupId: "ccbb6ee7-6e0f-4316-b83d-8a065f26d78f",
+    folders: [{ id: "empty", name: "Empty folder" }],
+    sets: [],
+  };
+  const counts = {
+    setCount: 0,
+    folderCount: 1,
+    attemptCount: 0,
+    reviewCount: 0,
+  };
+  await page.route("**/api/auth/get-session", (route) =>
+    route.fulfill({
+      json: { user: { id: "folder-test", email: "student@example.test" } },
+    }),
+  );
+  await page.route("**/api/account/recovery", (route) =>
+    route.fulfill({ json: { enabled: false } }),
+  );
+  await page.route("**/api/backup/preview", (route) =>
+    route.fulfill({ json: { ...counts, titles: [] } }),
+  );
+  await page.route("**/api/backup/restore", (route) => {
+    expect(route.request().postDataJSON()).toEqual({ library });
+    return route.fulfill({ status: 201, json: counts });
+  });
+  await page.goto("/account");
+  await page.getByLabel("Library backup file").setInputFiles({
+    name: "empty-folder.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(library)),
+  });
+  await page.getByRole("button", { name: "Preview restore" }).click();
+  await page.getByRole("button", { name: "Restore backup" }).click();
+  await expect(
+    page.getByText("Restored 1 folder, 0 study sets", { exact: false }),
+  ).toBeVisible();
+});
+
 test("requests a password reset and consumes a link", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const submitted: unknown[] = [];

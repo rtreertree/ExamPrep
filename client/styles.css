@@ -903,8 +903,43 @@ input[type="file"] {
 .list-filter-fields > .field:only-child {
   max-width: 18rem;
 }
-.list-announcement > p,
-.history-set-scope {
+.list-ordering {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: 12px;
+  width: min(100%, 24rem);
+}
+.collection-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px 24px;
+  margin-block: 12px 20px;
+}
+.collection-tools > .field {
+  flex: 1 1 15rem;
+}
+.collection-tools .list-view-switcher {
+  margin: 0;
+}
+.applied-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-block: 12px;
+}
+.collection-filters {
+  margin-block: 12px;
+}
+.collection-filters > summary {
+  width: fit-content;
+  min-height: 44px;
+  padding-block: 10px;
+  cursor: pointer;
+}
+.list-announcement > p {
   margin-block-end: 16px;
 }
 .organization-list {
@@ -942,6 +977,12 @@ input[type="file"] {
 }
 .history-group .organization-row {
   grid-template-columns: minmax(0, 1fr) auto auto;
+}
+.history-group-meta {
+  display: grid;
+  gap: 2px;
+  font-size: 14px;
+  text-align: end;
 }
 .history-group .organization-row[aria-expanded="true"] > svg {
   transform: rotate(180deg);

@@ -4,12 +4,15 @@ import { z } from "zod";
 import type { Attempt } from "../generated/prisma/client";
 import {
   attemptTypes,
+  historySorts,
   LIST_PAGE_SIZE,
+  sortOrders,
   type AttemptGroup,
 } from "../shared/listing";
 import type { Database } from "./db";
 import { decodeStorage, encodeStorage } from "./storage";
 import { joinCoOwner, ownerAccess } from "./setAccess";
+import { sortField } from "./libraryOrder";
 
 type HistoryQuery = Record<string, string | undefined>;
 type AttemptSummary = Omit<Attempt, "snapshot" | "responses"> & {
@@ -82,6 +85,20 @@ export async function readHistory(
   grouped: boolean,
 ) {
   const conditions = historyConditions(userId, query);
+  const sort = sortField(query.sort, historySorts);
+  const order = sortField(
+    query.order ?? (sort === "title" ? "asc" : "desc"),
+    sortOrders,
+  );
+  const direction = order === "asc" ? sql`ASC` : sql`DESC`;
+  const groupOrder =
+    sort === "title"
+      ? sql`lower(s.title) ${direction} NULLS LAST, s.title ${direction} NULLS LAST, grouped."latestStartedAt" DESC, grouped."setId" ASC NULLS LAST`
+      : sql`grouped."latestStartedAt" ${direction}, grouped."setId" ASC NULLS LAST`;
+  const attemptOrder =
+    sort === "title"
+      ? sql`lower(a.snapshot->>'title') ${direction}, a.snapshot->>'title' ${direction}, a."startedAt" DESC, a.id ASC`
+      : sql`a."startedAt" ${direction}, a.id ASC`;
   const window = sql`LIMIT ${LIST_PAGE_SIZE + 1} OFFSET ${page * LIST_PAGE_SIZE}`;
   const rows = grouped
     ? await db.$queryRaw<AttemptGroup[]>(sql`
@@ -91,21 +108,21 @@ export async function readHistory(
             MAX(a."startedAt") AS "latestStartedAt"
           FROM "Attempt" a WHERE ${conditions}
           GROUP BY a."studySetId"
-          ORDER BY "latestStartedAt" DESC, "setId" ASC NULLS LAST
-          ${window}
+          ${sort === "date" ? sql`ORDER BY "latestStartedAt" ${direction}, "setId" ASC NULLS LAST ${window}` : sql``}
         ) grouped
         LEFT JOIN LATERAL (
           SELECT s.title FROM "StudySet" s ${joinCoOwner(userId)}
           WHERE s.id = grouped."setId" AND ${ownerAccess(userId)}
         ) s ON true
-        ORDER BY grouped."latestStartedAt" DESC, grouped."setId" ASC NULLS LAST
+        ORDER BY ${groupOrder}
+        ${sort === "title" ? window : sql``}
       `)
     : await db.$queryRaw<AttemptSummary[]>(sql`
         SELECT a.id, a."userId", a."studySetId", a."sourceAttemptId", a.status,
           a.position, a.result, a."reviewMode", a.revision, a."startedAt", a."updatedAt",
           a."completedAt", a.snapshot->>'title' AS title, a.snapshot->>'kind' AS kind
         FROM "Attempt" a WHERE ${conditions}
-        ORDER BY a."startedAt" DESC, a.id ASC
+        ORDER BY ${attemptOrder}
         ${window}
       `);
   return decodeStorage({

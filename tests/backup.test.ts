@@ -79,6 +79,7 @@ describe("v1 backup validation", () => {
   it("keeps organization, immutable snapshots and private responses and recalculates scores", () => {
     const backup = validateBackup(fixture());
     expect(backupSummary(backup)).toEqual({
+      folderCount: 1,
       setCount: 1,
       attemptCount: 1,
       reviewCount: 0,
@@ -110,6 +111,25 @@ describe("v1 backup validation", () => {
     expect(() => validateBackup({ library, history })).toThrow(
       /cannot reference itself/,
     );
+  });
+
+  it("keeps empty folders and rejects unknown folder assignments", () => {
+    const { library } = fixture();
+    const folders = [
+      { id: "empty", name: "Empty folder" },
+      { id: "math", name: "Math" },
+    ];
+    const sets = library.sets.map((set) => ({ ...set, folderId: "math" }));
+    const updated = { ...library, folders, sets };
+    const backup = validateBackup({ library: updated });
+    expect(backup).toMatchObject({
+      folders,
+      sets,
+    });
+    expect(backupSummary(backup).folderCount).toBe(2);
+    expect(() =>
+      validateBackup({ library: { ...updated, folders: folders.slice(0, 1) } }),
+    ).toThrow(/missing folder/);
   });
 
   it("rejects a response that would never be accepted during practice", () => {

@@ -30,7 +30,11 @@ export function clearListQueries(userId: string) {
     sessionStorage.removeItem(storagePrefix(userId) + pathname);
 }
 
-export function useListQuery(keys: string[], resetOnSearch: string[] = []) {
+export function useListQuery(
+  keys: string[],
+  resetOnSearch: string[] = [],
+  searchKeyForParams: (params: URLSearchParams) => string = () => "search",
+) {
   const { user } = useAuth();
   const location = useLocation();
   const [, setParams] = useSearchParams();
@@ -39,14 +43,16 @@ export function useListQuery(keys: string[], resetOnSearch: string[] = []) {
   const searchResetKeys = resetOnSearch.join(",");
   const query = location.search || savedQuery(storageKey);
   const params = new URLSearchParams(query);
+  const searchKey = searchKeyForParams(params);
   const pending = useRef<{ query: string; locationKey: string } | null>(null);
-  const appliedSearch = params.get("search") ?? "";
+  const appliedSearch = params.get(searchKey) ?? "";
   const [input, setInput] = useState({
+    key: searchKey,
     applied: appliedSearch,
     value: appliedSearch,
   });
-  if (input.applied !== appliedSearch) {
-    setInput({ applied: appliedSearch, value: appliedSearch });
+  if (input.key !== searchKey || input.applied !== appliedSearch) {
+    setInput({ key: searchKey, applied: appliedSearch, value: appliedSearch });
   }
   useEffect(() => {
     const committed = location.search.slice(1);
@@ -77,12 +83,15 @@ export function useListQuery(keys: string[], resetOnSearch: string[] = []) {
     },
     [query, storageKey, keyList, location.key, setParams],
   );
-  const search = input.applied === appliedSearch ? input.value : appliedSearch;
+  const search =
+    input.key === searchKey && input.applied === appliedSearch
+      ? input.value
+      : appliedSearch;
   useEffect(() => {
     if (search === appliedSearch) return;
     const timeout = setTimeout(() => {
       const changes: Record<string, string | null> = {
-        search: search || null,
+        [searchKey]: search || null,
         page: null,
       };
       if (searchResetKeys)
@@ -90,16 +99,16 @@ export function useListQuery(keys: string[], resetOnSearch: string[] = []) {
       update(changes);
     }, 250);
     return () => clearTimeout(timeout);
-  }, [search, appliedSearch, searchResetKeys, update]);
+  }, [search, appliedSearch, searchKey, searchResetKeys, update]);
   function setSearch(value: string) {
-    setInput({ applied: appliedSearch, value });
+    setInput({ key: searchKey, applied: appliedSearch, value });
   }
   function updateSearch(
     value: string,
     changes: Record<string, string | null> = {},
   ) {
     setSearch(value);
-    update({ search: value || null, ...changes });
+    update({ [searchKey]: value || null, ...changes });
   }
   return { params, update, search, setSearch, updateSearch };
 }
