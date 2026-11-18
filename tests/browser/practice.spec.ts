@@ -447,6 +447,272 @@ test("leads a perfect result back to the Library", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("saves a custom review set from a historical exam and can retry a lost acknowledgement", async ({
+  page,
+}) => {
+  const api = await fixture(page);
+  const attempt = api.records.get("original")!;
+  attempt.studySetId = null;
+  attempt.responses = {
+    one: { text: "Private answer", selfAssessment: "correct", flagged: true },
+    two: {
+      text: "Another answer",
+      selfAssessment: "incorrect",
+      note: "Private note",
+    },
+  };
+  Object.assign(attempt, grade(content, attempt.responses));
+  const requests: string[] = [];
+  let saved: StudyContent | undefined;
+  await page.route("**/api/sets/copy", (route) =>
+    route.fulfill({ json: { id: "copy", revision: 1, content: saved } }),
+  );
+  await page.route("**/api/sets?requestId=*", (route) => {
+    requests.push(route.request().url());
+    saved = route.request().postDataJSON();
+    return requests.length === 1
+      ? route.fulfill({
+          status: 503,
+          json: { error: "Could not confirm save" },
+        })
+      : route.fulfill({ json: { id: "copy", title: saved!.title } });
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/practice/original");
+  await page.getByRole("button", { name: "Create review set" }).click();
+  const dialog = page.getByRole("dialog");
+  const group = dialog.getByLabel("Selection preset");
+  await expect(group).toHaveText("Missed questions (2)");
+  await chooseOption(group, "Clear selection");
+  const save = dialog.getByRole("button", { name: "Save to library" });
+  await expect(save).toBeDisabled();
+  await chooseOption(group, "Flagged (1)");
+  await dialog.getByRole("checkbox", { name: /Question 2/ }).check();
+  await expect(group).toHaveText("Custom selection");
+  await dialog.getByLabel("Set title").fill("Midterm review");
+  await page.screenshot({
+    path: "/tmp/examprep-review-set-mobile.png",
+    animations: "disabled",
+  });
+  await save.click();
+  await expect(dialog.getByRole("alert")).toContainText(
+    "Could not confirm save",
+  );
+  const second = dialog.getByRole("checkbox", { name: /Question 2/ });
+  await second.uncheck();
+  await second.check();
+  await save.click();
+  await expect(dialog.getByRole("status")).toContainText(
+    "Midterm review is in your library",
+  );
+  expect(requests[1]).toBe(requests[0]);
+  expect(saved).toEqual({
+    ...content,
+    title: "Midterm review",
+    questions: content.questions.slice(0, 2),
+  });
+  await dialog.getByRole("link", { name: "Open set" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Midterm review", level: 1 }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "Preview" }).click();
+  await page.getByRole("link", { name: "Print worksheet" }).click();
+  await expect(
+    page
+      .getByRole("list", { name: "Worksheet prompts" })
+      .locator(":scope > li"),
+  ).toHaveCount(2);
+  await page.getByRole("link", { name: "Editor", exact: true }).click();
+  await expect(page).toHaveURL(/\/sets\/copy\/edit$/);
+});
+
+test("distinguishes review-again and unreviewed cards when creating a review set", async ({
+  page,
+}) => {
+  const api = await fixture(page, deck);
+  const attempt = api.records.get("original")!;
+  attempt.responses = {
+    "0": { revealed: true, rating: "known" },
+    "1": { revealed: true, rating: "review_again" },
+  };
+  Object.assign(attempt, grade(deck, attempt.responses));
+  await page.goto("/practice/original");
+  await page.getByRole("button", { name: "Create review set" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel("Selection preset")).toHaveText(
+    "Review again (1)",
+  );
+  await chooseOption(
+    dialog.getByLabel("Selection preset"),
+    "Unreviewed cards (10)",
+  );
+  await expect(dialog.getByRole("checkbox", { checked: true })).toHaveCount(10);
+  await expect(dialog.getByRole("checkbox").nth(0)).not.toBeChecked();
+  await expect(dialog.getByRole("checkbox").nth(1)).not.toBeChecked();
+  const search = dialog.getByRole("searchbox", { name: "Search cards" });
+  await search.fill("cArd 12");
+  const posts: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST") posts.push(request.url());
+  });
+  await search.press("Enter");
+  await expect(dialog.getByRole("checkbox")).toHaveCount(1);
+  expect(posts).toEqual([]);
+  await expect(dialog.getByRole("checkbox")).toBeChecked();
+  await search.fill("#2");
+  await dialog.getByRole("checkbox").check();
+  await dialog.getByRole("button", { name: "Selected only" }).click();
+  await dialog.getByRole("checkbox").press("Space");
+  await expect(
+    dialog.getByRole("button", { name: "Selected only" }),
+  ).toBeFocused();
+  await expect(dialog.getByText("No matches for this search.")).toBeVisible();
+  await dialog.getByRole("button", { name: "Show all items" }).click();
+  await expect(dialog.getByRole("checkbox", { checked: true })).toHaveCount(10);
+  await dialog.getByRole("button", { name: "Selected only" }).click();
+  await search.fill("#12");
+  await expect(dialog.getByRole("status")).toHaveText(
+    "10 of 12 selected · 1 shown",
+  );
+  const subset = {
+    ...deck,
+    cards: deck.cards.slice(2),
+    title: "Review · Practice cards",
+  };
+  await page.route("**/api/sets?requestId=*", (route) => {
+    expect(route.request().postDataJSON()).toEqual(subset);
+    return route.fulfill({ json: { id: "saved-deck", title: subset.title } });
+  });
+  await page.route("**/api/sets/saved-deck", (route) =>
+    route.fulfill({ json: { id: "saved-deck", content: subset } }),
+  );
+  await dialog.getByRole("button", { name: "Save to library" }).click();
+  await dialog.getByRole("link", { name: "Print worksheet" }).click();
+  await expect(
+    page
+      .getByRole("list", { name: "Worksheet prompts" })
+      .locator(":scope > li"),
+  ).toHaveCount(10);
+  await page.getByRole("link", { name: "Results", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Session complete" }),
+  ).toBeVisible();
+});
+
+const worksheetExam: StudyContent = {
+  ...content,
+  title: "Algebra practice",
+  questions: [
+    {
+      id: "choice",
+      type: "single_choice",
+      prompt: "Which expression equals $x + x$?",
+      options: [
+        { id: "sq", text: "$x^2$" },
+        { id: "twice", text: "$2x$" },
+      ],
+      answer: "twice",
+      explanation: "Adding one copy of $x$ to another gives two copies of $x$.",
+    },
+    {
+      id: "written",
+      type: "written",
+      prompt: "Solve $3x + 1 = 10$. Show your work.",
+      answer: "Subtract one to get $3x = 9$. Divide by three to get $x = 3$.",
+      rubric: [{ id: "work", description: "Shows both operations", points: 2 }],
+    },
+  ],
+};
+
+for (const doc of [worksheetExam, deck]) {
+  test(`prints the ${doc.kind} worksheet with an optional separate answer key`, async ({
+    page,
+  }) => {
+    await fixture(page, doc);
+    await page.route("**/api/sets/set", (route) =>
+      route.fulfill({ json: { id: "set", content: doc } }),
+    );
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("console", (message) => {
+      if (message.type() === "error") errors.push(message.text());
+    });
+    await page.goto("/?search=practice");
+    await page
+      .getByText(`Actions for ${doc.title}`, { exact: true })
+      .locator("..")
+      .click();
+    await page.getByRole("link", { name: "Print worksheet" }).click();
+    await expect(page).toHaveURL(/\/sets\/set\/worksheet$/);
+    await expect(page).toHaveTitle(`${doc.title} — Worksheet`);
+    const prompts = page.getByRole("list", { name: "Worksheet prompts" });
+    await expect(prompts.locator(":scope > li")).toHaveCount(
+      itemsOf(doc).length,
+    );
+    const key = page.getByRole("region", { name: "Answer key" });
+    await expect(key).toHaveCount(0);
+    const solution = doc.kind === "exam" ? "Shows both operations" : "Answer";
+    await expect(page.getByText(solution, { exact: true })).toHaveCount(0);
+    const printContent = page.getByLabel("Print content");
+    const space = page.getByLabel("Writing space");
+    const writingLines = prompts
+      .locator(".worksheet-writing-space")
+      .first()
+      .locator("span");
+    await expect(writingLines).toHaveCount(2);
+    await chooseOption(space, "6 lines");
+    await expect(writingLines).toHaveCount(6);
+    await chooseOption(space, "No lines");
+    await expect(writingLines).toHaveCount(0);
+    await chooseOption(space, "4 lines");
+    await chooseOption(printContent, "Answer key only");
+    await expect(prompts).toHaveCount(0);
+    await expect(space).toHaveCount(0);
+    await expect(page).toHaveTitle(`${doc.title} — Answer key`);
+    await page.pdf({ path: `/tmp/examprep-key-${doc.kind}.pdf`, format: "A4" });
+    await chooseOption(printContent, "Worksheet and answer key");
+    await expect(writingLines).toHaveCount(4);
+    await expect(
+      key.getByText(solution, { exact: true }).first(),
+    ).toBeVisible();
+    if (doc.kind === "exam") {
+      await expect(key.getByText("B.", { exact: true })).toBeVisible();
+      await expect(key.getByText("2 pts", { exact: true })).toBeVisible();
+      for (const width of [1440, 390, 320]) {
+        await page.setViewportSize({ width, height: 900 });
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth),
+        ).toBeLessThanOrEqual(width);
+        await page.screenshot({
+          path: `/tmp/examprep-worksheet-${width}.png`,
+          animations: "disabled",
+        });
+      }
+    }
+    await page.evaluate(() => {
+      window.print = () => {
+        document.documentElement.dataset.printed = "yes";
+      };
+    });
+    await page.getByRole("button", { name: "Print or save PDF" }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-printed", "yes");
+    await page.emulateMedia({ media: "print" });
+    await expect(printContent).toBeHidden();
+    await expect(key).toHaveCSS("break-before", "page");
+    await page.pdf({
+      path: `/tmp/examprep-worksheet-${doc.kind}.pdf`,
+      format: "A4",
+      margin: { top: "14mm", bottom: "14mm", left: "14mm", right: "14mm" },
+    });
+    await page.emulateMedia({ media: "screen" });
+    await chooseOption(printContent, "Worksheet only");
+    await expect(key).toHaveCount(0);
+    await page.getByRole("link", { name: "Library", exact: true }).click();
+    await expect(page).toHaveURL(/search=practice$/);
+    expect(errors).toEqual([]);
+  });
+}
+
 test("tracks answered progress and flags across the desktop map and mobile picker", async ({
   page,
 }) => {

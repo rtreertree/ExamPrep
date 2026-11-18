@@ -36,6 +36,7 @@ import { FlashcardStage } from "../components/FlashcardStage";
 import { PracticeTimer } from "../components/PracticeTimer";
 import { ExamQuestionMap } from "../components/ExamQuestionMap";
 import { AnswerReview } from "./AnswerReview";
+import { ReviewSetDialog } from "./ReviewSetDialog";
 import {
   PracticeNavigationDialog,
   PracticeRecoveryDialog,
@@ -102,6 +103,7 @@ function Practice({
   const navigate = useNavigate();
   const [confirm, setConfirm] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  const [createReviewSet, setCreateReviewSet] = useState(false);
   const [retryError, setRetryError] = useState<Error>();
   const [recoveryFileError, setRecoveryFileError] = useState<Error>();
   const [retrying, setRetrying] = useState<RetryMode>();
@@ -477,6 +479,14 @@ function Practice({
                     Review first mistake
                   </Button>
                 ) : null}
+                <Button
+                  disabled={busy || !!retrying}
+                  onClick={async () => {
+                    if (await state.flush()) setCreateReviewSet(true);
+                  }}
+                >
+                  Create review set
+                </Button>
                 {reviewQueue || !retryOptions.length ? (
                   <Link
                     className={`button ${retryOptions.length ? "secondary" : "primary"}`}
@@ -829,6 +839,13 @@ function Practice({
           onSubmit={async () => {
             if (await state.submit()) setConfirm(false);
           }}
+        />
+      ) : null}
+      {createReviewSet && attempt.status === "completed" ? (
+        <ReviewSetDialog
+          content={doc}
+          responses={responses}
+          onClose={() => setCreateReviewSet(false)}
         />
       ) : null}
       {navOpen ? (

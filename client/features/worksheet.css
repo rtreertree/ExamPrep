@@ -1,0 +1,174 @@
+.worksheet-page {
+  width: min(100%, 64rem);
+  margin-inline: auto;
+  padding: clamp(1rem, 4vw, 3rem);
+}
+
+.worksheet-nav .back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.worksheet-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.worksheet-settings {
+  display: grid;
+  grid-template-columns: minmax(0, 20rem) minmax(0, 10rem);
+  gap: 1rem;
+  align-items: stretch;
+  margin-bottom: 1.5rem;
+}
+.worksheet-settings .selector {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+.worksheet-settings .selector-trigger {
+  flex: 1;
+}
+
+.worksheet-paper {
+  --text: #202423;
+  --secondary: #424c49;
+  --info: #24534b;
+  --negative: #91322d;
+  --divider: #b4bcb8;
+  --surface-raised: #f0f2ef;
+  --accent: #265b50;
+  color-scheme: light;
+  color: var(--text);
+  background: white;
+  border-radius: var(--radius);
+  padding: clamp(1.25rem, 6vw, 4rem);
+  overflow-wrap: anywhere;
+}
+
+.worksheet-heading {
+  padding-bottom: 1rem;
+  border-bottom: 2px solid currentColor;
+}
+
+.worksheet-heading > p {
+  color: var(--secondary);
+}
+.worksheet-heading h2 {
+  margin-top: 0.3rem;
+  font-size: 1.75rem;
+}
+.worksheet-items {
+  padding-left: 2rem;
+  margin: 0;
+}
+.worksheet-items > li {
+  padding: 1.1rem 0 1.1rem 0.5rem;
+}
+.worksheet-items > li + li {
+  border-top: 1px solid var(--divider);
+}
+.worksheet-items > li::marker {
+  font-weight: 700;
+}
+.worksheet-choices {
+  margin-top: 0.6rem;
+  padding-left: 1.75rem;
+}
+.worksheet-choices > li {
+  padding: 0.12rem 0 0.12rem 0.25rem;
+}
+.worksheet-paper .study-content > :first-child {
+  margin-top: 0;
+}
+.worksheet-paper .study-content > :last-child {
+  margin-bottom: 0;
+}
+.worksheet-writing-space {
+  margin-top: 0.5rem;
+}
+.worksheet-writing-space > span {
+  display: block;
+  height: 1.875rem;
+  border-bottom: 1px solid var(--divider);
+}
+.worksheet-paper + .worksheet-paper {
+  margin-top: 1.5rem;
+}
+.worksheet-solution {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+.worksheet-solution > strong {
+  white-space: nowrap;
+}
+.worksheet-key li > .study-content + .study-content,
+.worksheet-solution + .study-content {
+  margin-top: 0.5rem;
+}
+
+@media screen and (max-width: 520px) {
+  .worksheet-toolbar {
+    gap: 0.65rem;
+    margin: 1rem 0;
+  }
+  .worksheet-toolbar .button {
+    padding-inline: 0.65rem;
+  }
+  .worksheet-settings {
+    grid-template-columns: minmax(0, 1fr) minmax(7.25rem, auto);
+    gap: 0.6rem;
+  }
+  .worksheet-settings > :only-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media print {
+  :root:has(.worksheet-paper),
+  body:has(.worksheet-paper) {
+    background: white;
+    color-scheme: light;
+  }
+  .worksheet-page,
+  .worksheet-paper {
+    width: auto;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    font-size: 11pt;
+  }
+  .worksheet-nav,
+  .worksheet-toolbar,
+  .worksheet-settings {
+    display: none;
+  }
+  .worksheet-heading {
+    break-after: avoid;
+  }
+  .worksheet-items > li {
+    break-inside: avoid;
+  }
+  .worksheet-paper + .worksheet-paper {
+    break-before: page;
+    margin-top: 0;
+  }
+  .worksheet-paper .study-content pre code {
+    white-space: pre-wrap;
+  }
+  .worksheet-paper .study-table-scroll,
+  .worksheet-paper .katex-display,
+  .worksheet-paper .study-content :not(.katex-display) > .katex {
+    overflow: visible;
+  }
+  .worksheet-paper table {
+    max-width: 100%;
+  }
+}

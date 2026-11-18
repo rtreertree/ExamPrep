@@ -142,6 +142,9 @@ function LibrarySetActions({
         ) : null}
         <Link to={`/history?setId=${set.id}`}>All attempts for this set</Link>
         <Link to={`/sets/${set.id}/edit`}>Edit set</Link>
+        <Link to={`/sets/${set.id}/worksheet`} state={{ returnTo }}>
+          Print worksheet
+        </Link>
         {set.ownershipRole === "primary" ? (
           <button onClick={() => actions.share(set)}>
             Share and manage access

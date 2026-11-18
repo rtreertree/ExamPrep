@@ -70,6 +70,22 @@ describe.skipIf(!enabled)(
       await db!.user.deleteMany({ where: { email: { in: emails } } });
       await db!.$disconnect();
     });
+    it("creates one review set per save request and scopes retries to the account", async () => {
+      const path = `/sets?requestId=${randomUUID()}`;
+      const [first, retry] = await Promise.all([
+        a(path, "POST", exam),
+        a(path, "POST", exam),
+      ]);
+      expect([first.status, retry.status].sort()).toEqual([200, 201]);
+      expect(first.value.id).toBe(retry.value.id);
+      const anotherUser = await b(path, "POST", exam);
+      expect(anotherUser.status).toBe(201);
+      expect(anotherUser.value.id).not.toBe(first.value.id);
+      await Promise.all([
+        a(`/sets/${first.value.id}`, "DELETE", { revision: 1 }),
+        b(`/sets/${anotherUser.value.id}`, "DELETE", { revision: 1 }),
+      ]);
+    });
     it("organizes study sets without changing snapshot revisions and duplicates their content independently", async () => {
       const original = {
         ...exam,

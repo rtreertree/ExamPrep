@@ -976,6 +976,15 @@ function Editor({
             >
               <h2>Preview</h2>
               <ContentPreview content={content} selectedIndex={index} />
+              {setId && !dirty && !recovery && !conflict ? (
+                <Link
+                  className="button secondary"
+                  to={`/sets/${setId}/worksheet`}
+                  state={{ returnTo: `/sets/${setId}/edit` }}
+                >
+                  Print worksheet
+                </Link>
+              ) : null}
             </section>
           </div>
           <div className="item-add-mobile">{addActions}</div>

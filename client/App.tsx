@@ -44,6 +44,7 @@ const DueReviewPage = lazy(() =>
   import("./features/DueReview").then((m) => ({ default: m.DueReviewPage })),
 );
 const SharedSetPage = lazy(() => import("./features/SharedSet"));
+const WorksheetPage = lazy(() => import("./features/Worksheet"));
 import { Button, ErrorNotice, LoadingRows } from "./components/ui";
 function Root() {
   const { pathname } = useLocation();
@@ -208,6 +209,7 @@ const router = createBrowserRouter([
             ],
           },
           { path: "/practice/:id", element: <PracticePage /> },
+          { path: "/sets/:id/worksheet", element: <WorksheetPage /> },
         ],
       },
       { path: "*", element: <Navigate to="/" replace /> },

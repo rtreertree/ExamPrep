@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import { createHash } from "node:crypto";
 import { sqltag as sql } from "@prisma/client/runtime/wasm-compiler-edge";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
@@ -206,18 +207,34 @@ export function registerSetRoutes(app: Hono<Context>) {
   app.post("/api/sets", async (c) => {
     const content = validateContent(await read(c.req.raw, MAX_BYTES));
     const userId = c.get("userId");
-    const set = await c.get("db").$transaction(async (tx) => {
+    const requestId = c.req.query("requestId");
+    let id: string | undefined;
+    if (requestId !== undefined) {
+      const key = JSON.stringify([
+        "create-set",
+        userId,
+        schema(z.uuid(), requestId),
+      ]);
+      id = createHash("sha256").update(key).digest("hex");
+    }
+    const { set, created } = await c.get("db").$transaction(async (tx) => {
       await lockLibrary(tx, userId);
-      return tx.studySet.create({
+      if (id) {
+        const existing = await tx.studySet.findFirst({ where: { id, userId } });
+        if (existing) return { set: existing, created: false };
+      }
+      const set = await tx.studySet.create({
         data: {
+          id,
           userId,
           title: encodeStorage(content.title),
           kind: content.kind,
           content: json(content),
         },
       });
+      return { set, created: true };
     });
-    return c.json(publicSet(set), 201);
+    return c.json(publicSet(set), created ? 201 : 200);
   });
   app.get("/api/sets/:id", async (c) => {
     const set = await readOwnedSet(
