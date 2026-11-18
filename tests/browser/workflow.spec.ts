@@ -465,7 +465,7 @@ test("server conflicts preserve editor work; save failures retain practice input
     expect(response.ok()).toBeTruthy();
     try {
       await context.addCookies(await separate.cookies());
-      await page.goto("/");
+      await page.goto("/library");
       await expect(
         page.getByText("Incomplete new draft", { exact: true }),
       ).toHaveCount(0);

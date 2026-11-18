@@ -171,7 +171,7 @@ test("starts a configured snapshot and resumes with the same order and timer", a
   page,
 }) => {
   const api = await fixture(page);
-  await page.goto("/");
+  await page.goto("/library");
   const practice = page.getByRole("button", { name: "Practice", exact: true });
   await practice.click();
   const dialog = page.getByRole("dialog", { name: "Set up exam" });
@@ -271,7 +271,7 @@ test("resumes the account-wide suggestion, handles failures, and keeps the actio
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto("/?page=1");
+  await page.goto("/library?page=1");
   const suggestion = page.getByRole("region", { name: "Next study action" });
   const resume = suggestion.getByRole("link", { name: "Resume", exact: true });
   for (const [width, height] of [
@@ -395,7 +395,7 @@ for (const [doc, preset, settings] of [
         requests.push(request.url());
     });
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/");
+    await page.goto("/library");
     await page
       .getByRole("button", {
         name: useSuggestion ? "Set up practice" : "Practice",
@@ -637,7 +637,7 @@ for (const doc of [worksheetExam, deck]) {
     page.on("console", (message) => {
       if (message.type() === "error") errors.push(message.text());
     });
-    await page.goto("/?search=practice");
+    await page.goto("/library?search=practice");
     await page
       .getByText(`Actions for ${doc.title}`, { exact: true })
       .locator("..")

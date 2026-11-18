@@ -12,6 +12,7 @@ import { Selector } from "../components/Selector";
 import { Button, ErrorNotice, Field, LoadingRows } from "../components/ui";
 import type { StudySet } from "../lib/api";
 import { useResource } from "../lib/hooks";
+import { libraryReturnPath } from "../lib/libraryRoute";
 import "./worksheet.css";
 
 const printOptions = [
@@ -33,10 +34,7 @@ export default function WorksheetPage() {
   const fromResults =
     typeof state?.returnTo === "string" &&
     /^\/practice\/[A-Za-z0-9_-]+$/.test(state.returnTo);
-  const library =
-    typeof state?.returnTo === "string" && state.returnTo.startsWith("/?")
-      ? state.returnTo
-      : "/";
+  const library = libraryReturnPath(state?.returnTo);
   return (
     <main className="worksheet-page">
       <nav className="worksheet-nav" aria-label="Worksheet navigation">

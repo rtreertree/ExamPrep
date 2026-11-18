@@ -107,7 +107,7 @@ function SharedSet({ token, userId }: { token: string; userId: string }) {
             >
               Add to my library
             </Button>
-            <Link to="/" className="button secondary">
+            <Link to="/library" className="button secondary">
               Back to library
             </Link>
           </div>
@@ -119,7 +119,7 @@ function SharedSet({ token, userId }: { token: string; userId: string }) {
               Retry adding to my library
             </Button>
           ) : null}
-          <Link to="/">Back to library</Link>
+          <Link to="/library">Back to library</Link>
         </div>
       ) : (
         <LoadingRows label="Loading shared study set" />

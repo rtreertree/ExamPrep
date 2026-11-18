@@ -600,7 +600,7 @@ test("library resumes without duplication and import has a bounded preview and e
   const api = await fixture(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto("/");
+  await page.goto("/library");
   await page.getByRole("link", { name: "Resume — question 1 of 3" }).click();
   await expect(page.getByLabel("Your answer", { exact: true })).toBeVisible();
   expect(api.starts).toBe(0);
@@ -656,7 +656,7 @@ test("AI settings survive closing, remain account scoped, and search filters rea
   page,
 }) => {
   const api = await fixture(page);
-  await page.goto("/");
+  await page.goto("/library");
   await page.getByText("Create", { exact: true }).click();
   await page
     .getByRole("button", { name: "Create with your AI", exact: true })
@@ -741,7 +741,7 @@ test("AI helper copies a custom exam and imports its result for editing", async 
   await page.setViewportSize({ width: 1440, height: 1200 });
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   const api = await fixture(page);
-  await page.goto("/");
+  await page.goto("/library");
   await page.getByText("Create", { exact: true }).click();
   await page
     .getByRole("button", { name: "Create with your AI", exact: true })
@@ -939,7 +939,7 @@ test("mobile AI helper offers manual copying and file upload", async ({
   });
   await fixture(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/");
+  await page.goto("/library");
   await page.getByText("Create", { exact: true }).click();
   await page
     .getByRole("button", { name: "Create with your AI", exact: true })
@@ -1131,7 +1131,7 @@ test.describe("folder selection on touch screens", () => {
     page,
   }) => {
     const api = await fixture(page, written);
-    await page.goto("/");
+    await page.goto("/library");
     await page.getByRole("button", { name: "Folders", exact: true }).tap();
     await page.getByRole("button", { name: "New folder" }).tap();
     await page.getByLabel("Folder name").fill("Organic chemistry");
@@ -1330,7 +1330,7 @@ test("import errors identify the field and preserve source for repair without sa
 }) => {
   const api = await fixture(page);
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  await page.goto("/");
+  await page.goto("/library");
   await page.getByRole("button", { name: "Import", exact: true }).click();
   const invalid = structuredClone(mixed);
   if (invalid.kind !== "exam" || invalid.questions[0].type !== "single_choice")
@@ -1394,7 +1394,7 @@ test("AI helper warns before losing notes when device storage is blocked", async
     };
   });
   await fixture(page);
-  await page.goto("/");
+  await page.goto("/library");
   await page.getByText("Create", { exact: true }).click();
   await page
     .getByRole("button", { name: "Create with your AI", exact: true })
@@ -1427,7 +1427,7 @@ test("empty library exposes all three starting paths without a menu", async ({
         })
       : route.fallback(),
   );
-  await page.goto("/");
+  await page.goto("/library");
   await expect(
     page.getByRole("button", { name: "Import a study set", exact: true }),
   ).toBeVisible();
@@ -1744,7 +1744,7 @@ test("search empty states recover existing content and mobile History exposes Co
   page,
 }) => {
   await fixture(page);
-  await page.goto("/");
+  await page.goto("/library");
   await expect(
     page.getByRole("link", { name: "Reliable study", exact: true }),
   ).toBeVisible();
@@ -1880,7 +1880,7 @@ test("browse folders and organize one Library page at a time", async ({
       });
     },
   );
-  await page.goto("/?search=missing&kind=flashcards");
+  await page.goto("/library?search=missing&kind=flashcards");
   await page
     .getByRole("button", { name: "Folders", exact: true })
     .press("Enter");
@@ -2011,7 +2011,7 @@ test("moves a set across a page boundary in manual arrangement", async ({
     return route.fulfill({ json: { position: 31 } });
   });
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/?view=folders&folder=biology");
+  await page.goto("/library?view=folders&folder=biology");
   await page.getByRole("button", { name: "View options" }).click();
   await chooseOption(page.getByLabel("Arrangement"), "Manual");
   const actions = page
@@ -2206,12 +2206,26 @@ test("sign-in resumes the requested page and preserves its filters", async ({
   ).toBeVisible();
 });
 
+test("the library requires sign-in and preserves the requested search", async ({
+  page,
+}) => {
+  const api = await fixture(page);
+  api.signedIn = false;
+  await page.goto("/library?search=Reliable");
+  await expect(page).toHaveURL("/sign-in");
+  await page.getByLabel("Email", { exact: true }).fill("student@example.test");
+  await page.getByLabel("Password", { exact: true }).fill("sample-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page).toHaveURL("/library?search=Reliable");
+  await expect(page.getByLabel("Search library")).toHaveValue("Reliable");
+});
+
 test("keyboard navigation opens menus and restores focus after dismissal", async ({
   page,
 }) => {
   await fixture(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/");
+  await page.goto("/library");
   const navigation = page.getByRole("button", { name: "Open navigation" });
   await navigation.press("Enter");
   const history = page
@@ -2262,7 +2276,7 @@ test("Create options activate when Safari focuses the workspace on pointer down"
     });
   });
 
-  await page.goto("/");
+  await page.goto("/library");
   const create = page.locator("summary").filter({ hasText: "Create" });
   for (const { label, route, heading } of [
     { label: "Exam", route: /\/new\/exam\//, heading: "Questions" },
@@ -2303,7 +2317,7 @@ test("changing library pages returns focus to the new results", async ({
       json: { items, hasMore: !pageIndex, page: pageIndex, courses: [] },
     });
   });
-  await page.goto("/");
+  await page.goto("/library");
   await page.getByRole("button", { name: "Next page" }).press("Enter");
   await expect(
     page.getByRole("tabpanel", { name: "All study sets" }),
@@ -2341,7 +2355,7 @@ test("closing Import asks before discarding pasted work and Keep editing preserv
   page,
 }) => {
   await fixture(page);
-  await page.goto("/");
+  await page.goto("/library");
   await page.getByRole("button", { name: "Import", exact: true }).click();
   await page.getByRole("tab", { name: "Paste JSON", exact: true }).click();
   const source = '{"unfinished":';
@@ -2572,7 +2586,7 @@ test("sets a deck's daily review limit and starts its due queue", async ({
       json: method === "POST" ? { id: "attempt" } : queue,
     });
   });
-  await page.goto("/");
+  await page.goto("/library");
   await page.getByRole("link", { name: "Spaced review", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Due queue" })).toBeVisible();
   await expect(page.getByText("Due now", { exact: true })).toBeVisible();

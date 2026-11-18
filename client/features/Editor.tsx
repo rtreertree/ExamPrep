@@ -95,7 +95,7 @@ export function EditorPage() {
           error={error}
           retry={() => setVersion((value) => value + 1)}
         />
-        <Link to="/">Return to library</Link>
+        <Link to="/library">Return to library</Link>
       </>
     );
   }
@@ -104,7 +104,7 @@ export function EditorPage() {
     return (
       <Notice tone="warning">
         This study set was deleted or is unavailable.{" "}
-        <Link to="/">Return to library</Link>
+        <Link to="/library">Return to library</Link>
       </Notice>
     );
   return (
@@ -277,7 +277,7 @@ function Editor({
       setRecovery(undefined);
       if (initial.missing) {
         allowedLeave.current = true;
-        navigate("/");
+        navigate("/library");
       }
     } catch {
       setStorageError(
@@ -550,7 +550,7 @@ function Editor({
   );
   return (
     <div className="editor-page">
-      <Link className="back-link" to="/">
+      <Link className="back-link" to="/library">
         ← Library
       </Link>
       <PageHeader
@@ -673,7 +673,9 @@ function Editor({
                 try {
                   await removeDraft(user!.id, draftKey);
                   allowedLeave.current = true;
-                  window.location.assign(setId ? `/sets/${setId}/edit` : "/");
+                  window.location.assign(
+                    setId ? `/sets/${setId}/edit` : "/library",
+                  );
                 } catch {
                   setStorageError(
                     new Error(

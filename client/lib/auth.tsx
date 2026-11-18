@@ -24,10 +24,10 @@ const AuthContext = createContext<{
 export const useAuth = () => useContext(AuthContext);
 export function AuthProvider({
   children,
-  sessionErrorFallback,
+  waitForSession = true,
 }: {
   children: ReactNode;
-  sessionErrorFallback?: ReactNode;
+  waitForSession?: boolean;
 }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -51,27 +51,25 @@ export function AuthProvider({
     window.addEventListener("session-expired", expire);
     return () => window.removeEventListener("session-expired", expire);
   }, []);
-  if (loading)
+  if (waitForSession && loading)
     return (
       <main className="auth-page">
         <LoadingRows />
       </main>
     );
-  if (error)
+  if (waitForSession && error)
     return (
-      sessionErrorFallback ?? (
-        <main className="auth-page">
-          <h1>Exam Prep</h1>
-          <ErrorNotice error={error} retry={refresh} />
-        </main>
-      )
+      <main className="auth-page">
+        <h1>Exam Prep</h1>
+        <ErrorNotice error={error} retry={refresh} />
+      </main>
     );
   return (
     <AuthContext.Provider
       value={{ user, refresh, cleanupUser, setCleanupUser }}
     >
       {children}
-      {expired ? (
+      {expired && waitForSession ? (
         <Dialog
           title="Your session has expired"
           onClose={() => setExpired(false)}
@@ -85,7 +83,8 @@ export function AuthProvider({
             expectedEmail={user?.email}
             onSuccess={async () => {
               const session = await api<{ user: User }>("/auth/get-session");
-              if (session.user.id !== user?.id) window.location.assign("/");
+              if (session.user.id !== user?.id)
+                window.location.assign("/library");
               else {
                 setExpired(false);
                 await refresh();

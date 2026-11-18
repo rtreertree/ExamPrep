@@ -1,6 +1,57 @@
 import { chooseOption } from "./selector";
 import { expect, test } from "@playwright/test";
 
+test("the landing page renders during session lookup and opens the signed-in library", async ({
+  page,
+}) => {
+  let completeSession: () => void = () => {};
+  const sessionPending = new Promise<void>((resolve) => {
+    completeSession = resolve;
+  });
+  await page.addInitScript(() => {
+    sessionStorage.setItem("examprep:list-v1:student:/", "search=biology");
+  });
+  await page.route("**/api/auth/get-session", async (route) => {
+    await sessionPending;
+    await route.fulfill({
+      json: { user: { id: "student", email: "student@example.test" } },
+    });
+  });
+  await page.route("**/api/sets?**", (route) =>
+    route.fulfill({
+      json: { items: [], folders: [], page: 0, hasMore: false },
+    }),
+  );
+  await page.route("**/api/study/next", (route) =>
+    route.fulfill({ json: null }),
+  );
+  await page.route("**/api/ownership-invitations", (route) =>
+    route.fulfill({ json: [] }),
+  );
+
+  const landing = page.getByRole("heading", { name: "Study on your terms." });
+  try {
+    await page.goto("/");
+    await expect(page).toHaveTitle("Exam Prep");
+    await expect(landing).toBeVisible();
+  } finally {
+    completeSession();
+  }
+
+  const openLibrary = page
+    .getByRole("region", { name: "Study on your terms." })
+    .getByRole("link", { name: "Open library" });
+  await expect(openLibrary).toBeVisible();
+  await expect(page).toHaveURL("/");
+  await expect(landing).toBeVisible();
+  await openLibrary.click();
+  await expect(page).toHaveURL("/library");
+  await expect(
+    page.getByRole("heading", { name: "Your library" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Search library")).toHaveValue("biology");
+});
+
 test("visitors can copy a self-contained flashcard prompt before signing in", async ({
   context,
   page,

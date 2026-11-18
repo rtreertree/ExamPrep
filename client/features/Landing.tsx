@@ -14,6 +14,7 @@ import {
   AIPromptGenerator,
 } from "../components/AIPromptGenerator";
 import { defaultAISettings } from "../lib/aiSettings";
+import { useAuth } from "../lib/auth";
 import "./landing.css";
 
 const studySteps = [
@@ -48,10 +49,14 @@ function LandingBrand() {
   );
 }
 
-function GetStartedLink() {
+function GetStartedLink({ signedIn }: { signedIn: boolean }) {
   return (
-    <Link className="landing-primary" to="/sign-in?mode=register">
-      Get started <ArrowUpRight aria-hidden="true" />
+    <Link
+      className="landing-primary"
+      to={signedIn ? "/library" : "/sign-in?mode=register"}
+    >
+      {signedIn ? "Open library" : "Get started"}{" "}
+      <ArrowUpRight aria-hidden="true" />
     </Link>
   );
 }
@@ -143,7 +148,7 @@ function SampleFlashcard() {
   );
 }
 
-function StudyMaterials() {
+function StudyMaterials({ signedIn }: { signedIn: boolean }) {
   const [settings, setSettings] = useState(defaultAISettings);
 
   return (
@@ -181,8 +186,9 @@ function StudyMaterials() {
               <li>
                 <h4>Import the result</h4>
                 <p>
-                  Sign in and open <strong>Library → Import</strong>. Paste the
-                  JSON or upload the file, then review the set before saving.
+                  {signedIn ? "Open" : "Sign in and open"}{" "}
+                  <strong>Library → Import</strong>. Paste the JSON or upload
+                  the file, then review the set before saving.
                 </p>
               </li>
             </ol>
@@ -210,13 +216,17 @@ function StudyMaterials() {
           <div>
             <h3 id="landing-editor-title">Write it yourself in the editor</h3>
             <p>
-              After signing in, choose <strong>Library → Create → Exam</strong>{" "}
-              or <strong>Flashcards</strong>. Add exam questions and answers or
+              {signedIn ? "Choose" : "After signing in, choose"}{" "}
+              <strong>Library → Create → Exam</strong> or{" "}
+              <strong>Flashcards</strong>. Add exam questions and answers or
               flashcard fronts and backs, then save the set to your library.
             </p>
           </div>
-          <Link className="button secondary" to="/sign-in">
-            Sign in to use the editor{" "}
+          <Link
+            className="button secondary"
+            to={signedIn ? "/library" : "/sign-in"}
+          >
+            {signedIn ? "Open library" : "Sign in to use the editor"}{" "}
             <ArrowUpRight size={18} aria-hidden="true" />
           </Link>
         </section>
@@ -226,6 +236,10 @@ function StudyMaterials() {
 }
 
 export default function LandingPage() {
+  const { user } = useAuth();
+  const signedIn = Boolean(user);
+  const accountPath = signedIn ? "/library" : "/sign-in";
+  const accountLabel = signedIn ? "Library" : "Sign in";
   useEffect(() => {
     // The landing page mounts after the browser's initial fragment lookup.
     document.getElementById(window.location.hash.slice(1))?.scrollIntoView();
@@ -246,8 +260,8 @@ export default function LandingPage() {
             <a className="landing-materials-link" href="#get-materials">
               Get materials
             </a>
-            <Link className="landing-sign-in" to="/sign-in">
-              Sign in
+            <Link className="landing-sign-in" to={accountPath}>
+              {accountLabel}
             </Link>
           </nav>
         </header>
@@ -265,7 +279,7 @@ export default function LandingPage() {
                 pace, then come back to what needs work.
               </p>
               <div className="landing-actions">
-                <GetStartedLink />
+                <GetStartedLink signedIn={signedIn} />
                 <a className="landing-demo-link" href="#sample-flashcard">
                   Try a flashcard <ArrowDown aria-hidden="true" />
                 </a>
@@ -309,21 +323,21 @@ export default function LandingPage() {
             </div>
           </section>
 
-          <StudyMaterials />
+          <StudyMaterials signedIn={signedIn} />
 
           <section
             className="landing-container landing-cta"
             aria-labelledby="landing-cta-title"
           >
             <h2 id="landing-cta-title">Ready to study?</h2>
-            <GetStartedLink />
+            <GetStartedLink signedIn={signedIn} />
           </section>
         </main>
       </div>
       <footer className="landing-footer">
         <div className="landing-container">
           <LandingBrand />
-          <Link to="/sign-in">Sign in</Link>
+          <Link to={accountPath}>{accountLabel}</Link>
         </div>
       </footer>
     </div>

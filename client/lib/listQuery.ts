@@ -4,6 +4,10 @@ import { MAX_LIST_PAGE } from "../../shared/listing";
 import { useAuth } from "./auth";
 
 const storagePrefix = (userId: string) => `examprep:list-v1:${userId}:`;
+const listStoragePaths = {
+  library: "/", // Keep the key used when the library was at the root.
+  history: "/history",
+};
 
 function savedQuery(key: string) {
   try {
@@ -26,11 +30,12 @@ function saveQuery(key: string, query: string, keys: string) {
 }
 
 export function clearListQueries(userId: string) {
-  for (const pathname of ["/", "/history"])
+  for (const pathname of Object.values(listStoragePaths))
     sessionStorage.removeItem(storagePrefix(userId) + pathname);
 }
 
 export function useListQuery(
+  list: keyof typeof listStoragePaths,
   keys: string[],
   resetOnSearch: string[] = [],
   searchKeyForParams: (params: URLSearchParams) => string = () => "search",
@@ -38,7 +43,7 @@ export function useListQuery(
   const { user } = useAuth();
   const location = useLocation();
   const [, setParams] = useSearchParams();
-  const storageKey = storagePrefix(user!.id) + location.pathname;
+  const storageKey = storagePrefix(user!.id) + listStoragePaths[list];
   const keyList = keys.join(",");
   const searchResetKeys = resetOnSearch.join(",");
   const query = location.search || savedQuery(storageKey);

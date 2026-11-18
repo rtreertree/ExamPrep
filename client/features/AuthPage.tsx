@@ -18,7 +18,11 @@ export function AuthPage() {
   const register = params.get("mode") === "register";
   if (user) {
     return (
-      <Navigate to={destination ?? "/"} state={destination?.state} replace />
+      <Navigate
+        to={destination ?? "/library"}
+        state={destination?.state}
+        replace
+      />
     );
   }
   return (

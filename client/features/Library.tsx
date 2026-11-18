@@ -68,6 +68,7 @@ const emptyFolders: LibraryFolder[] = [];
 
 export function LibraryPage() {
   const { params, update, search, setSearch, updateSearch } = useListQuery(
+    "library",
     [
       "search",
       "page",
@@ -110,7 +111,7 @@ export function LibraryPage() {
   const appliedSearch = (params.get("search") ?? "").slice(0, 200);
   const searchFilter =
     search || (inDirectory ? params.get("folderSearch") : appliedSearch);
-  const returnTo = params.size ? `/?${params}` : "/";
+  const returnTo = params.size ? `/library?${params}` : "/library";
   const results = useRef<HTMLElement>(null);
   const viewFocus = useRef(false);
   const [saved, setSaved] = useState<StudySet>();

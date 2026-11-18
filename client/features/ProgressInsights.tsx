@@ -115,7 +115,7 @@ function InsightDetails({
                   Start another full session to build a comparable score
                   history.
                 </p>
-                <Link className="button secondary" to="/">
+                <Link className="button secondary" to="/library">
                   Choose a study set
                 </Link>
               </>

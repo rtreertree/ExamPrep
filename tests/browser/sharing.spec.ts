@@ -54,7 +54,7 @@ test("manages a copy link and pending co-owners from the library and editor", as
     return route.fulfill({ status: 404, json: { error: "Unexpected path" } });
   });
   await page.setViewportSize({ width: 390, height: 740 });
-  await page.goto("/");
+  await page.goto("/library");
   await page
     .locator("summary")
     .filter({ hasText: "Actions for Shared vocabulary" })
@@ -180,7 +180,7 @@ test("accepts a pending invitation and shows the co-owned set without owner-only
     if (path === "/api/sets/original") return route.fulfill({ json: coOwned });
     return route.fulfill({ status: 404, json: { error: "Unexpected path" } });
   });
-  await page.goto("/");
+  await page.goto("/library");
   const invitations = page.getByRole("region", {
     name: "Ownership invitations",
   });

@@ -20,6 +20,7 @@ import { api, download, type Attempt } from "../lib/api";
 import { useResource, useUnsaved } from "../lib/hooks";
 import { useAttempt } from "../lib/useAttempt";
 import { useAuth } from "../lib/auth";
+import { libraryReturnPath } from "../lib/libraryRoute";
 import { readPracticeRecoveryFile } from "../lib/practiceRecovery";
 import {
   Button,
@@ -49,9 +50,9 @@ export function PracticePage() {
   const previous = useLocation().state?.returnTo;
   const returnTo =
     typeof previous === "string" &&
-    /^(\/($|\?)|\/history($|\?)|\/review\/[^/?#]+($|\?))/.test(previous)
+    /^(\/history($|\?)|\/review\/[^/?#]+($|\?))/.test(previous)
       ? previous
-      : "/";
+      : libraryReturnPath(previous);
   const returnLabel = returnTo.startsWith("/history")
     ? "History"
     : returnTo.startsWith("/review/")
@@ -492,7 +493,7 @@ function Practice({
                     className={`button ${retryOptions.length ? "secondary" : "primary"}`}
                     to={
                       reviewQueue ??
-                      (returnLabel === "Library" ? returnTo : "/")
+                      (returnLabel === "Library" ? returnTo : "/library")
                     }
                   >
                     {reviewQueue

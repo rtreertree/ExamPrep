@@ -53,6 +53,7 @@ const deletedGroup = "~deleted";
 
 export function HistoryPage() {
   const { params, update, search, setSearch, updateSearch } = useListQuery(
+    "history",
     [
       "search",
       "page",
@@ -386,7 +387,7 @@ export function HistoryPage() {
           <EmptyState
             title="A little practice goes a long way."
             actions={
-              <Link className="button secondary" to="/">
+              <Link className="button secondary" to="/library">
                 Open library
               </Link>
             }

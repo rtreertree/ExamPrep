@@ -56,9 +56,7 @@ function Root() {
         </main>
       }
     >
-      <AuthProvider
-        sessionErrorFallback={pathname === "/" ? <LandingPage /> : undefined}
-      >
+      <AuthProvider waitForSession={pathname !== "/"}>
         <Outlet />
       </AuthProvider>
       <ScrollRestoration />
@@ -73,7 +71,6 @@ function Protected({ children }: { children?: ReactNode }) {
     applyReadingSize(userId ? readingSize(userId) : "standard");
     return () => applyReadingSize("standard");
   }, [userId]);
-  if (!user && location.pathname === "/") return <LandingPage />;
   return user ? (
     (children ?? <Outlet />)
   ) : (
@@ -100,7 +97,7 @@ function AppShell() {
   const links = (
     <>
       <NavLink
-        to="/"
+        to="/library"
         end
         onClick={() => setOpen(false)}
         className={
@@ -186,10 +183,11 @@ const router = createBrowserRouter([
             )
           }
         />
-        <a href="/">Return to library</a>
+        <a href="/library">Return to library</a>
       </main>
     ),
     children: [
+      { index: true, element: <LandingPage /> },
       { path: "/sign-in", element: <AuthPage /> },
       { path: "/forgot-password", element: <PasswordRecoveryPage /> },
       { path: "/reset-password", element: <PasswordRecoveryPage reset /> },
@@ -199,7 +197,7 @@ const router = createBrowserRouter([
           {
             element: <AppShell />,
             children: [
-              { index: true, element: <LibraryPage /> },
+              { path: "/library", element: <LibraryPage /> },
               { path: "/history", element: <HistoryPage /> },
               { path: "/review/:id", element: <DueReviewPage /> },
               { path: "/account", element: <AccountPage /> },

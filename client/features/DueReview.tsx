@@ -48,7 +48,7 @@ export function DueReviewPage() {
         title="Spaced review"
         description={data?.title ?? "Review cards as they become due."}
         actions={
-          <Link className="button secondary" to="/">
+          <Link className="button secondary" to="/library">
             ← Library
           </Link>
         }
