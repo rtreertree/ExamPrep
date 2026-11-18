@@ -8,7 +8,6 @@ import {
   type SetOrganization,
   type SortOrder,
 } from "../../shared/listing";
-import { ListOrdering } from "../components/ListOrdering";
 import { PositionForm } from "../components/PositionForm";
 import { Selector } from "../components/Selector";
 import {
@@ -59,10 +58,7 @@ export function LibraryFolders({
   appliedSearch,
   sort,
   order,
-  onSearch,
   onClearSearch,
-  onSort,
-  onOrder,
   onPageChange,
   onChoose,
 }: {
@@ -72,10 +68,7 @@ export function LibraryFolders({
   appliedSearch: string;
   sort: FolderArrangement;
   order: SortOrder;
-  onSearch: (value: string) => void;
   onClearSearch: () => void;
-  onSort: (value: FolderArrangement) => void;
-  onOrder: (value: SortOrder) => void;
   onPageChange: (page: number) => void;
   onChoose: (folderId: string) => void;
 }) {
@@ -113,24 +106,7 @@ export function LibraryFolders({
     `${count} ${count === 1 ? "set" : "sets"}`;
   return (
     <>
-      <div className="collection-tools">
-        <Field label="Search folders">
-          <input
-            type="search"
-            value={search}
-            maxLength={200}
-            placeholder="Find a folder by name"
-            onChange={(event) => onSearch(event.target.value)}
-          />
-        </Field>
-        <ListOrdering
-          sort={sort}
-          order={order}
-          options={folderArrangements}
-          alphabetical
-          onSort={onSort}
-          onOrder={onOrder}
-        />
+      <div className="library-folder-actions">
         <Button onClick={() => setEditor({ mode: "create" })}>
           New folder
         </Button>

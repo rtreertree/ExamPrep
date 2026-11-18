@@ -33,6 +33,7 @@ import {
   ownedSetIds,
   ownerPreferences,
   ownerFolderId,
+  ownerLastStudiedAt,
   ownerRank,
   ownershipRole,
   readOwnedSet,
@@ -85,10 +86,9 @@ export function registerSetRoutes(app: Hono<Context>) {
       sortOrders,
     );
     const direction = order === "asc" ? sql`ASC` : sql`DESC`;
-    const studied = sql`CASE WHEN co."userId" IS NULL THEN s."lastStudiedAt" ELSE co."lastStudiedAt" END`;
     const sortSql = {
       updated: sql`s."updatedAt" ${direction}`,
-      studied: sql`${studied} ${direction} NULLS LAST, s."updatedAt" DESC`,
+      studied: sql`${ownerLastStudiedAt} ${direction} NULLS LAST, s."updatedAt" DESC`,
       title: sql`lower(s.title) ${direction}, s.title ${direction}`,
       manual: sql`${ownerRank}`,
     }[sort];

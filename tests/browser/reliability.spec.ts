@@ -157,6 +157,8 @@ async function fixture(page: Page, doc = written, position = 0) {
       value = { enabled: true };
     } else if (path === "/api/ownership-invitations") {
       value = [];
+    } else if (path === "/api/study/next") {
+      value = null;
     } else if (path === "/api/folders" && req.method() === "POST") {
       const folder = {
         id: `folder-${folders.length + 1}`,
@@ -1069,6 +1071,7 @@ test("library resumes the saved snapshot and remembers the folder across practic
   await page.getByRole("button", { name: "Back to folders" }).click();
   await expect(page.getByLabel("Search folders")).toHaveValue("chemistry");
   await page.getByRole("button", { name: "Organic chemistry 1 set" }).click();
+  await page.getByRole("button", { name: "View options" }).click();
   await chooseOption(page.getByLabel("Arrangement"), "Last studied");
   await page.getByLabel("Search library").pressSequentially("Reliable");
   await expect(page).toHaveURL(
@@ -1096,6 +1099,7 @@ test("library resumes the saved snapshot and remembers the folder across practic
   await expect(
     page.getByRole("heading", { name: "Organic chemistry" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "View options" }).click();
   await expect(page.getByLabel("Arrangement")).toHaveText("Last studied");
   await expect(page.getByLabel("Search library")).toHaveValue("Reliable");
   await page.screenshot({
@@ -1898,10 +1902,12 @@ test("browse folders and organize one Library page at a time", async ({
     page.getByRole("link", { name: "Cells", exact: true }),
   ).toBeVisible();
 
+  await page.getByRole("button", { name: "View options" }).click();
   await page.getByRole("button", { name: "Select sets", exact: true }).click();
   await page.getByRole("checkbox", { name: "Select this page" }).check();
   await page.getByRole("button", { name: "Next page" }).click();
   await expect(page.getByRole("checkbox")).toHaveCount(0);
+  await page.getByRole("button", { name: "View options" }).click();
   await page.getByRole("button", { name: "Select sets", exact: true }).click();
   await page.getByRole("checkbox", { name: "Select Genetics" }).press("Space");
   await expect(
@@ -1925,6 +1931,7 @@ test("browse folders and organize one Library page at a time", async ({
   await expect(page.getByRole("checkbox")).toHaveCount(0);
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "View options" }).click();
   await page.getByRole("button", { name: "Select sets", exact: true }).click();
   await page.getByRole("checkbox", { name: "Select this page" }).check();
   await expect(
@@ -1957,6 +1964,7 @@ test("browse folders and organize one Library page at a time", async ({
   await expect(
     page.getByRole("button", { name: "Biology 1 set" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "View options" }).click();
   await chooseOption(
     page.getByRole("combobox", { name: "Show sets" }),
     "Archived",
@@ -2004,6 +2012,7 @@ test("moves a set across a page boundary in manual arrangement", async ({
   });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/?view=folders&folder=biology");
+  await page.getByRole("button", { name: "View options" }).click();
   await chooseOption(page.getByLabel("Arrangement"), "Manual");
   const actions = page
     .locator("summary")
@@ -2019,6 +2028,7 @@ test("moves a set across a page boundary in manual arrangement", async ({
   await expect(page.getByText("Moved “Set 1” to position 31.")).toBeVisible();
   await expect(page.locator(".set-row").first()).toContainText("Set 1");
   await page.reload();
+  await page.getByRole("button", { name: "View options" }).click();
   await expect(page.getByLabel("Arrangement")).toHaveText("Manual");
   await expect(page.locator(".set-row").first()).toContainText("Set 1");
 });
@@ -2401,6 +2411,9 @@ for (const mode of ["unreviewed", "mistakes"] as const) {
         path: "/tmp/examprep-ux-fixed-unreviewed-results.png",
         animations: "disabled",
       });
+    await expect(page.locator(".results-intro .button.primary")).toHaveText(
+      mode === "unreviewed" ? "Study unreviewed cards (2)" : "Review again (1)",
+    );
     await page
       .getByRole("button", {
         name:
@@ -2526,7 +2539,7 @@ test("sets a deck's daily review limit and starts its due queue", async ({
       { id: "two", front: "vivir", back: "to live" },
     ],
   };
-  await fixture(page, cards);
+  const api = await fixture(page, cards);
   const queue = {
     title: cards.title,
     limit: 20,
@@ -2551,15 +2564,15 @@ test("sets a deck's daily review limit and starts its due queue", async ({
     if (method === "PATCH") {
       queue.limit = route.request().postDataJSON().limit;
     }
+    if (method === "POST") {
+      api.attempt().snapshot = { ...cards, cards: cards.cards.slice(0, 1) };
+      api.attempt().responses = { one: { revealed: true, rating: "known" } };
+    }
     return route.fulfill({
       json: method === "POST" ? { id: "attempt" } : queue,
     });
   });
   await page.goto("/");
-  await page
-    .locator("summary")
-    .filter({ hasText: "Actions for Spanish verbs" })
-    .click();
   await page.getByRole("link", { name: "Spaced review", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Due queue" })).toBeVisible();
   await expect(page.getByText("Due now", { exact: true })).toBeVisible();
@@ -2579,4 +2592,13 @@ test("sets a deck's daily review limit and starts its due queue", async ({
     .getByRole("button", { name: "Review 1 card", exact: true })
     .click();
   await expect(page).toHaveURL(/\/practice\/attempt$/);
+  await page.getByRole("button", { name: "Finish session", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Finish session", exact: true })
+    .click();
+  const primary = page.locator(".results-intro .button.primary");
+  await expect(primary).toHaveText("Return to review queue");
+  await primary.click();
+  await expect(page.getByRole("heading", { name: "Due queue" })).toBeVisible();
 });

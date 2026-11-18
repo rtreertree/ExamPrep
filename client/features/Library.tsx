@@ -1,14 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Upload, Plus, ArrowLeft, Folder, X } from "lucide-react";
+import { Upload, Plus, ArrowLeft, ChevronDown, Folder, X } from "lucide-react";
 import { useResource } from "../lib/hooks";
 import { api, type StudySet, type StudySetMetadata } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { accountDrafts, type Draft } from "../lib/drafts";
 import type { AISettings } from "../lib/aiSettings";
+import type { StudySuggestion } from "../../shared/studySuggestion";
 import { listPage, useListQuery } from "../lib/listQuery";
 import {
   LIST_PAGE_SIZE,
+  folderSorts,
   setSorts,
   type LibraryFolder,
   type ManualOrder,
@@ -32,7 +34,8 @@ import {
 import { AIHandoffPanel } from "./AIHandoffPanel";
 import { ImportPanel } from "./ImportPanel";
 import { LibrarySetRow, type LibrarySetRowActions } from "./LibrarySetRow";
-import { PracticeSetup } from "../components/PracticeSetup";
+import { PracticeSetup, type PracticeSet } from "../components/PracticeSetup";
+import { NextStudyAction } from "./NextStudyAction";
 import { OwnershipInvitations, SetSharing } from "./SetSharing";
 import {
   ArchiveScope,
@@ -52,6 +55,10 @@ const setArrangements = [
 ] as const;
 const folderSetArrangements = [
   ...setArrangements,
+  { value: "manual", label: "Manual" },
+] as const;
+const folderArrangements = [
+  { value: "name", label: "Name" },
   { value: "manual", label: "Manual" },
 ] as const;
 const directoryView = (params: URLSearchParams) =>
@@ -85,6 +92,9 @@ export function LibraryPage() {
   const legacyCourse = params.get("course")?.slice(0, 100) ?? null;
   const folder = params.get("folder");
   const archived = params.get("archived") === "true";
+  const folderSort =
+    folderSorts.find((value) => value === params.get("folderSort")) ?? "name";
+  const folderOrder = params.get("folderOrder") === "desc" ? "desc" : "asc";
   const sort =
     setSorts.find(
       (value) =>
@@ -98,12 +108,15 @@ export function LibraryPage() {
       ? "asc"
       : "desc";
   const appliedSearch = (params.get("search") ?? "").slice(0, 200);
+  const searchFilter =
+    search || (inDirectory ? params.get("folderSearch") : appliedSearch);
   const returnTo = params.size ? `/?${params}` : "/";
   const results = useRef<HTMLElement>(null);
   const viewFocus = useRef(false);
   const [saved, setSaved] = useState<StudySet>();
-  const [settingUp, setSettingUp] = useState<StudySetMetadata>();
+  const [settingUp, setSettingUp] = useState<PracticeSet>();
   const [sample, setSample] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const query = new URLSearchParams({
     page: String(page),
     search: appliedSearch,
@@ -122,6 +135,23 @@ export function LibraryPage() {
     folders: LibraryFolder[];
     manual?: ManualOrder;
   }>(inDirectory ? null : `/sets?${listQuery}`);
+  const showSuggestion =
+    !inDirectory &&
+    folder === null &&
+    legacyCourse === null &&
+    !archived &&
+    !searchFilter &&
+    filter === "all" &&
+    !saved;
+  const suggestion = useResource<StudySuggestion | null>(
+    showSuggestion ? "/study/next" : null,
+  );
+  const nextStudyAction =
+    showSuggestion &&
+    !suggestion.error &&
+    (suggestion.data?.type === "practice" || suggestion.data?.type === "resume")
+      ? suggestion.data
+      : null;
   const folders = resource.lastData?.folders ?? emptyFolders;
   const currentFolder = folders.find(({ id }) => id === folder);
   const folderName =
@@ -168,6 +198,7 @@ export function LibraryPage() {
     selection?.key === selectionKey ? selection : undefined;
   if (selection && !currentSelection) setSelection(undefined);
   const selectPage = useRef<HTMLInputElement>(null);
+  const focusSelection = useRef(false);
   const selectFocus = useRef(false);
   const visibleIds = resource.data?.items.map(({ id }) => id) ?? [];
   const selectedIds =
@@ -177,6 +208,10 @@ export function LibraryPage() {
   const partialSelection = selectedIds.length > 0 && !allSelected;
   useLayoutEffect(() => {
     if (selectPage.current) selectPage.current.indeterminate = partialSelection;
+    if (currentSelection && focusSelection.current) {
+      focusSelection.current = false;
+      selectPage.current?.focus();
+    }
   }, [currentSelection, partialSelection]);
   useLayoutEffect(() => {
     if (!inDirectory && viewFocus.current) {
@@ -267,6 +302,10 @@ export function LibraryPage() {
   function changeScope(next: boolean) {
     update({ archived: next ? "true" : null, page: null });
   }
+  function refreshLibrary() {
+    resource.refresh();
+    suggestion.refresh();
+  }
   function chooseFolder(next: string) {
     viewFocus.current = true;
     update({
@@ -328,7 +367,7 @@ export function LibraryPage() {
       selectFocus.current = true;
       setSelection(undefined);
       setBulkRecovery({ scope: listScope, page });
-      resource.refresh();
+      refreshLibrary();
     } catch (e) {
       setBulkError(e as Error);
     } finally {
@@ -347,7 +386,7 @@ export function LibraryPage() {
       await api(`/sets/${set.id}/organization`, "PATCH", changes);
       setMovingSet(undefined);
       setBulkRecovery({ scope: listScope, page });
-      resource.refresh();
+      refreshLibrary();
     } catch (e) {
       setError(e as Error);
     } finally {
@@ -375,7 +414,7 @@ export function LibraryPage() {
         revision: deleting.revision,
       });
       setDeleting(undefined);
-      resource.refresh();
+      refreshLibrary();
     } catch (e) {
       setError(e as Error);
     } finally {
@@ -409,13 +448,16 @@ export function LibraryPage() {
     },
   };
   return (
-    <>
+    <div className="library-page">
       <PageHeader
         title="Your library"
         display
         actions={
           <>
-            <Button variant="primary" onClick={() => setPanel("import")}>
+            <Button
+              variant={nextStudyAction ? "secondary" : "primary"}
+              onClick={() => setPanel("import")}
+            >
               <Upload size={18} />
               Import
             </Button>
@@ -438,9 +480,17 @@ export function LibraryPage() {
           </>
         }
       />
+      {nextStudyAction ? (
+        <NextStudyAction
+          suggestion={nextStudyAction}
+          returnTo={returnTo}
+          busy={busy}
+          onPractice={setSettingUp}
+        />
+      ) : null}
       <OwnershipInvitations
         onAccept={() => {
-          resource.refresh();
+          refreshLibrary();
           if (inDirectory) setFolderVersion((version) => version + 1);
         }}
       />
@@ -464,7 +514,33 @@ export function LibraryPage() {
           </div>
         </Notice>
       ) : null}
-      <div className="library-navigation">
+      {folder !== null || legacyCourse !== null ? (
+        <div className="folder-heading">
+          <Button variant="quiet" onClick={openDirectory}>
+            <ArrowLeft size={16} aria-hidden="true" />
+            Back to folders
+          </Button>
+          <h2>
+            <Folder size={22} aria-hidden="true" />
+            {folderName || "Folder"}
+          </h2>
+        </div>
+      ) : null}
+      <div className="library-tools">
+        <Field label={inDirectory ? "Search folders" : "Search library"}>
+          <input
+            key={inDirectory ? "folders" : "sets"}
+            type="search"
+            value={search}
+            maxLength={200}
+            placeholder={
+              inDirectory
+                ? "Find a folder by name"
+                : "Find a study set by title"
+            }
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </Field>
         <ListViewSwitcher
           label="Library view"
           listLabel="All sets"
@@ -475,63 +551,41 @@ export function LibraryPage() {
             if (!grouped && (inDirectory || folder !== null)) openAllSets();
           }}
         />
-        <ArchiveScope archived={archived} onChange={changeScope} />
-      </div>
-      <div className="list-announcement" role="status">
-        {bulkNotice && !inDirectory ? <p>{bulkNotice}</p> : null}
-      </div>
-      {inDirectory ? (
-        <LibraryFolders
-          key={folderVersion}
-          archived={archived}
-          page={page}
-          search={search}
-          appliedSearch={(params.get("folderSearch") ?? "")
-            .slice(0, 200)
-            .trim()}
-          sort={params.get("folderSort") === "manual" ? "manual" : "name"}
-          order={params.get("folderOrder") === "desc" ? "desc" : "asc"}
-          onSearch={setSearch}
-          onClearSearch={() => updateSearch("", { page: null })}
-          onSort={(value) =>
-            update({
-              folderSort: value === "name" ? null : value,
-              folderOrder: null,
-              page: null,
-            })
-          }
-          onOrder={(value) =>
-            update({ folderOrder: value === "asc" ? null : value, page: null })
-          }
-          onPageChange={(next) =>
-            update({ page: next > 0 ? String(next) : null })
-          }
-          onChoose={chooseFolder}
-        />
-      ) : (
-        <>
-          {folder !== null || legacyCourse !== null ? (
-            <div className="folder-heading">
-              <Button variant="quiet" onClick={openDirectory}>
-                <ArrowLeft size={16} aria-hidden="true" />
-                Back to folders
-              </Button>
-              <h2>
-                <Folder size={22} aria-hidden="true" />
-                {folderName || "Folder"}
-              </h2>
-            </div>
-          ) : null}
-          <div className="collection-tools">
-            <Field label="Search library">
-              <input
-                type="search"
-                value={search}
-                maxLength={200}
-                placeholder="Find a study set by title"
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </Field>
+        <Button
+          className="library-view-options"
+          aria-expanded={optionsOpen}
+          aria-controls="library-option-fields"
+          onClick={() => setOptionsOpen(!optionsOpen)}
+        >
+          View options <ChevronDown size={16} aria-hidden="true" />
+        </Button>
+        <div
+          className="library-option-fields"
+          id="library-option-fields"
+          hidden={!optionsOpen}
+        >
+          <ArchiveScope archived={archived} onChange={changeScope} />
+          {inDirectory ? (
+            <ListOrdering
+              sort={folderSort}
+              order={folderOrder}
+              options={folderArrangements}
+              alphabetical
+              onSort={(value) =>
+                update({
+                  folderSort: value === "name" ? null : value,
+                  folderOrder: null,
+                  page: null,
+                })
+              }
+              onOrder={(value) =>
+                update({
+                  folderOrder: value === "asc" ? null : value,
+                  page: null,
+                })
+              }
+            />
+          ) : (
             <ListOrdering
               sort={sort}
               order={order}
@@ -548,7 +602,82 @@ export function LibraryPage() {
               }
               onOrder={(value) => update({ order: value, page: null })}
             />
-          </div>
+          )}
+          {!inDirectory && visibleIds.length > 0 && !currentSelection ? (
+            <Button
+              disabled={busy || resource.loading}
+              onClick={() => {
+                setBulkNotice("");
+                setOptionsOpen(false);
+                focusSelection.current = true;
+                changeSelection([]);
+              }}
+            >
+              Select sets
+            </Button>
+          ) : null}
+        </div>
+      </div>
+      {searchFilter || archived || (!inDirectory && filter !== "all") ? (
+        <div
+          className="applied-filters library-filters"
+          role="group"
+          aria-label="Applied filters"
+        >
+          {searchFilter ? (
+            <Button
+              variant="quiet"
+              className="library-search-filter"
+              aria-label="Remove search filter"
+              onClick={() => updateSearch("", { page: null })}
+            >
+              <span>“{searchFilter}”</span>
+              <X size={16} aria-hidden="true" />
+            </Button>
+          ) : null}
+          {archived ? (
+            <Button
+              variant="quiet"
+              aria-label="Show active sets"
+              onClick={() => changeScope(false)}
+            >
+              Archived <X size={16} aria-hidden="true" />
+            </Button>
+          ) : null}
+          {!inDirectory && filter !== "all" ? (
+            <Button
+              variant="quiet"
+              aria-label="Show all study set types"
+              onClick={() => update({ kind: null, page: null })}
+            >
+              {filter === "exam" ? "Exams" : "Flashcards"}
+              <X size={16} aria-hidden="true" />
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="list-announcement" role="status">
+        {bulkNotice && !inDirectory ? <p>{bulkNotice}</p> : null}
+      </div>
+      {inDirectory ? (
+        <LibraryFolders
+          key={folderVersion}
+          archived={archived}
+          page={page}
+          search={search}
+          appliedSearch={(params.get("folderSearch") ?? "")
+            .slice(0, 200)
+            .trim()}
+          sort={folderSort}
+          order={folderOrder}
+          onClearSearch={() => updateSearch("", { page: null })}
+          onPageChange={(next) =>
+            update({ page: next > 0 ? String(next) : null })
+          }
+          onChoose={chooseFolder}
+        />
+      ) : (
+        <>
           <Tabs
             label="Study set type"
             value={filter}
@@ -612,54 +741,41 @@ export function LibraryPage() {
                 ))}
               </aside>
             ) : null}
-            {visibleIds.length ? (
-              <div
-                className={
-                  currentSelection
-                    ? "selection-toolbar selection-toolbar-active"
-                    : "selection-toolbar"
-                }
-              >
+            {currentSelection && visibleIds.length ? (
+              <div className="selection-toolbar">
+                <label className="checkbox-row selection-page">
+                  <input
+                    type="checkbox"
+                    ref={selectPage}
+                    checked={allSelected}
+                    onChange={(event) =>
+                      changeSelection(event.target.checked ? visibleIds : [])
+                    }
+                  />
+                  Select this page
+                </label>
+                <span className="muted" role="status">
+                  {selectedIds.length} selected
+                </span>
                 <Button
-                  aria-pressed={!!currentSelection}
-                  disabled={busy || resource.loading}
+                  disabled={!selectedIds.length || busy}
                   onClick={() => {
-                    setBulkNotice("");
-                    if (currentSelection) setSelection(undefined);
-                    else changeSelection([]);
+                    setBulkError(undefined);
+                    changeSelection(selectedIds, true);
                   }}
                 >
-                  {currentSelection ? "Done selecting" : "Select sets"}
+                  Organize selected
                 </Button>
-                {currentSelection ? (
-                  <>
-                    <label className="checkbox-row selection-page">
-                      <input
-                        type="checkbox"
-                        ref={selectPage}
-                        checked={allSelected}
-                        onChange={(event) =>
-                          changeSelection(
-                            event.target.checked ? visibleIds : [],
-                          )
-                        }
-                      />
-                      Select this page
-                    </label>
-                    <span className="muted" role="status">
-                      {selectedIds.length} selected
-                    </span>
-                    <Button
-                      disabled={!selectedIds.length || busy}
-                      onClick={() => {
-                        setBulkError(undefined);
-                        changeSelection(selectedIds, true);
-                      }}
-                    >
-                      Organize selected
-                    </Button>
-                  </>
-                ) : null}
+                <Button
+                  variant="quiet"
+                  disabled={busy}
+                  onClick={() => {
+                    selectFocus.current = true;
+                    setSelection(undefined);
+                  }}
+                >
+                  Done selecting
+                </Button>
               </div>
             ) : null}
             {(resource.loading || emptyAfterBulk) && !visibleIds.length ? (
@@ -821,7 +937,7 @@ export function LibraryPage() {
             setSaved(set);
             resetFilters();
             setPanel(null);
-            resource.refresh();
+            refreshLibrary();
           }}
         />
       ) : panel === "ai" ? (
@@ -913,6 +1029,6 @@ export function LibraryPage() {
           </div>
         </Dialog>
       ) : null}
-    </>
+    </div>
   );
 }

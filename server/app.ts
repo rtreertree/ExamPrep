@@ -12,6 +12,7 @@ import { passwordRecoveryEnabled } from "./resetEmail";
 import { registerReviewRoutes } from "./reviewRoutes";
 import { registerSetRoutes } from "./setRoutes";
 import { registerSharing } from "./sharing";
+import { readStudySuggestion } from "./studySuggestion";
 
 export type Context = {
   Variables: {
@@ -116,6 +117,9 @@ export function createApp(
     await c.get("db").$queryRaw`SELECT 1`;
     return c.json({ status: "ready" });
   });
+  app.get("/api/study/next", async (c) =>
+    c.json(await readStudySuggestion(c.get("db"), c.get("userId"))),
+  );
   registerReviewRoutes(app);
   registerBackup(app);
   registerSharing(app, config.BETTER_AUTH_SECRET);

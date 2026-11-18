@@ -104,7 +104,7 @@ function Practice({
   const [navOpen, setNavOpen] = useState(false);
   const [retryError, setRetryError] = useState<Error>();
   const [recoveryFileError, setRecoveryFileError] = useState<Error>();
-  const [retrying, setRetrying] = useState(false);
+  const [retrying, setRetrying] = useState<RetryMode>();
   const [navFilter, setNavFilter] = useState("all");
   const [lastRating, setLastRating] = useState<{
     id: string;
@@ -185,8 +185,9 @@ function Practice({
     state.change(values, Math.min(position + 1, items.length - 1));
     await state.flush();
   }
-  async function retry(mode: RetryMode = "mistakes") {
-    setRetrying(true);
+  async function retry(mode: RetryMode) {
+    if (retrying) return;
+    setRetrying(mode);
     setRetryError(undefined);
     try {
       if (!(await state.flush())) return;
@@ -197,7 +198,7 @@ function Practice({
     } catch (e) {
       setRetryError(e as Error);
     } finally {
-      setRetrying(false);
+      setRetrying(undefined);
     }
   }
   const inProgress = attempt.status === "in_progress";
@@ -222,6 +223,40 @@ function Practice({
   const nextPending = pending.find((i) => i > position) ?? pending[0];
   const confirmedPending =
     attempt.result?.selfAssessed?.pendingCount ?? pending.length;
+  const retryOptions = (
+    [
+      {
+        mode: "mistakes",
+        label: isExam ? "Retry mistakes" : "Review again",
+        count: retryCount,
+      },
+      {
+        mode: "unreviewed",
+        label: "Study unreviewed cards",
+        count: isExam ? 0 : unanswered,
+      },
+      {
+        mode: "flagged",
+        label: "Practice flagged items",
+        count: flagged ? itemsOf(flagged).length : 0,
+      },
+      {
+        mode: "low_confidence",
+        label: "Practice low-confidence items",
+        count: uncertain ? itemsOf(uncertain).length : 0,
+      },
+    ] satisfies {
+      mode: RetryMode;
+      label: string;
+      count: number;
+    }[]
+  ).filter(({ count }) => count > 0);
+  const reviewQueue =
+    returnLabel === "Review queue"
+      ? returnTo
+      : attempt.reviewMode && attempt.studySetId
+        ? `/review/${attempt.studySetId}`
+        : null;
   function recoveryDownload(checkpoint = state.localCopy()) {
     download(
       JSON.stringify(
@@ -426,53 +461,39 @@ function Practice({
             ) : null}
             {attempt.status === "completed" ? (
               <div className="actions">
-                <Button
-                  variant="primary"
-                  disabled={!retryCount}
-                  busy={retrying}
-                  onClick={() => void retry()}
-                >
-                  {retryCount
-                    ? `${doc.kind === "exam" ? "Retry mistakes" : "Review again"} (${retryCount})`
-                    : doc.kind === "exam"
-                      ? "No mistakes to retry"
-                      : "No cards rated Review again"}
-                </Button>
+                {retryOptions.map(({ mode, label, count }, index) => (
+                  <Button
+                    key={mode}
+                    variant={index === 0 ? "primary" : "secondary"}
+                    disabled={!!retrying}
+                    busy={retrying === mode}
+                    onClick={() => void retry(mode)}
+                  >
+                    {label} ({count})
+                  </Button>
+                ))}
                 {firstMistake >= 0 ? (
                   <Button onClick={() => void go(firstMistake)}>
                     Review first mistake
                   </Button>
                 ) : null}
-                {doc.kind === "flashcards" && unanswered > 0 ? (
-                  <Button
-                    busy={retrying}
-                    onClick={() => void retry("unreviewed")}
-                  >
-                    Study unreviewed cards ({unanswered})
-                  </Button>
-                ) : null}
-                {flagged ? (
-                  <Button busy={retrying} onClick={() => void retry("flagged")}>
-                    Practice flagged items ({itemsOf(flagged).length})
-                  </Button>
-                ) : null}
-                {uncertain ? (
-                  <Button
-                    busy={retrying}
-                    onClick={() => void retry("low_confidence")}
-                  >
-                    Practice low-confidence items ({itemsOf(uncertain).length})
-                  </Button>
-                ) : null}
-                {attempt.reviewMode && attempt.studySetId ? (
+                {reviewQueue || !retryOptions.length ? (
                   <Link
-                    className="button secondary"
-                    to={`/review/${attempt.studySetId}`}
+                    className={`button ${retryOptions.length ? "secondary" : "primary"}`}
+                    to={
+                      reviewQueue ??
+                      (returnLabel === "Library" ? returnTo : "/")
+                    }
                   >
-                    Return to review queue
+                    {reviewQueue
+                      ? "Return to review queue"
+                      : "Return to library"}
                   </Link>
                 ) : null}
-                <Link className="button secondary" to="/history">
+                <Link
+                  className="button secondary"
+                  to={returnLabel === "History" ? returnTo : "/history"}
+                >
                   View history
                 </Link>
               </div>

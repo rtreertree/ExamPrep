@@ -160,7 +160,7 @@ test("complete study workflow, recovery, partial credit, flashcards, responsive 
   ).toHaveAttribute("href", "/downloads/SKILL.md");
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.screenshot({ path: "/tmp/examprep-library.png" });
-  await page.getByRole("button", { name: /Practice/ }).click();
+  await page.getByRole("button", { name: "Practice", exact: true }).click();
   await page
     .getByRole("dialog", { name: "Set up exam" })
     .getByRole("button", { name: "Start exam", exact: true })

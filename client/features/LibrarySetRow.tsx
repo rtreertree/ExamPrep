@@ -109,7 +109,7 @@ function LibrarySetActions({
     <div className="row-actions">
       {set.continuation ? (
         <Link
-          className="button primary"
+          className="button secondary"
           to={`/practice/${set.continuation.id}`}
           state={{ returnTo }}
         >
@@ -122,6 +122,11 @@ function LibrarySetActions({
           Practice <ArrowRight size={17} />
         </Button>
       )}
+      {set.kind === "flashcards" && !set.archived ? (
+        <Link className="button quiet" to={`/review/${set.id}`}>
+          Spaced review
+        </Link>
+      ) : null}
       <Menu
         label={
           <>
@@ -134,9 +139,6 @@ function LibrarySetActions({
           <button disabled={busy} onClick={() => actions.practice(set)}>
             Start new attempt
           </button>
-        ) : null}
-        {set.kind === "flashcards" && !set.archived ? (
-          <Link to={`/review/${set.id}`}>Spaced review</Link>
         ) : null}
         <Link to={`/history?setId=${set.id}`}>All attempts for this set</Link>
         <Link to={`/sets/${set.id}/edit`}>Edit set</Link>

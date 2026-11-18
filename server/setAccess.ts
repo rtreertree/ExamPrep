@@ -32,13 +32,14 @@ export const ownershipRole = sql`
 `;
 export const ownerFolderId = sql`CASE WHEN co."userId" IS NULL THEN s."folderId" ELSE co."folderId" END`;
 export const ownerRank = sql`COALESCE(co."manualRank", s."manualRank")`;
+export const ownerLastStudiedAt = sql`CASE WHEN co."userId" IS NULL THEN s."lastStudiedAt" ELSE co."lastStudiedAt" END`;
 export const ownerPreferences = sql`
   f.name AS "folderName",
   COALESCE(f.name, '') AS course,
   ${ownerFolderId} AS "folderId",
   COALESCE(co.pinned, s.pinned) AS pinned,
   COALESCE(co.archived, s.archived) AS archived,
-  CASE WHEN co."userId" IS NULL THEN s."lastStudiedAt" ELSE co."lastStudiedAt" END AS "lastStudiedAt",
+  ${ownerLastStudiedAt} AS "lastStudiedAt",
   COALESCE(co."reviewLimit", s."reviewLimit") AS "reviewLimit"
 `;
 export const joinOwnerFolder = sql`

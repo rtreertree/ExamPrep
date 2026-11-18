@@ -10,6 +10,7 @@ import {
   type RetryMode,
 } from "../../shared/attempts";
 import { type StudyContent } from "../../shared/content";
+import { itemsOf } from "../../shared/contentItems";
 
 const content: StudyContent = {
   schemaVersion: 1,
@@ -45,8 +46,8 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function fixture(page: Page) {
-  const records = new Map([["original", createAttempt(content, "original")]]);
+async function fixture(page: Page, doc: StudyContent = content) {
+  const records = new Map([["original", createAttempt(doc, "original")]]);
   let unavailable = false;
   let starts: unknown;
   let interruptedSave:
@@ -57,11 +58,17 @@ async function fixture(page: Page) {
       return route.fulfill({
         json: { user: { id: "owner", email: "owner@example.test" } },
       });
+    if (path === "/ownership-invitations") return route.fulfill({ json: [] });
     if (path === "/sets")
       return route.fulfill({
         json: {
           items: [
-            { id: "set", title: content.title, kind: content.kind, count: 3 },
+            {
+              id: "set",
+              title: doc.title,
+              kind: doc.kind,
+              count: itemsOf(doc).length,
+            },
           ],
           hasMore: false,
           courses: [],
@@ -71,7 +78,7 @@ async function fixture(page: Page) {
     if (path === "/sets/set/attempts") {
       starts = route.request().postDataJSON();
       const { snapshot, settings, fullSet } = practiceSnapshot(
-        content,
+        doc,
         starts as PracticeSettings,
         () => 0,
       );
@@ -165,12 +172,25 @@ test("starts a configured snapshot and resumes with the same order and timer", a
 }) => {
   const api = await fixture(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Practice", exact: true }).click();
+  const practice = page.getByRole("button", { name: "Practice", exact: true });
+  await practice.click();
   const dialog = page.getByRole("dialog", { name: "Set up exam" });
-  const simulation = dialog.getByRole("button", { name: "Exam simulation" });
-  const quick = dialog.getByRole("button", { name: "Quick practice" });
+  const full = dialog.getByRole("radio", { name: "Full set" });
+  const simulation = dialog.getByRole("radio", { name: "Exam simulation" });
+  const quick = dialog.getByRole("radio", { name: "Quick practice" });
+  const customize = dialog.getByRole("radio", { name: "Customize" });
+  await expect(full).toBeChecked();
+  await expect(dialog.getByLabel("Number of questions")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(practice).toBeFocused();
+  expect(api.starts()).toBeUndefined();
+  await practice.click();
+  await simulation.check();
+  await expect(simulation).toBeChecked();
+  await customize.check();
   await expect(dialog.getByLabel("Number of questions")).toHaveValue("3");
   await expect(dialog.getByLabel("Item order")).toHaveText("Original order");
+  await expect(dialog.getByLabel("Timer in minutes")).toHaveValue("30");
   const order = dialog.getByRole("combobox", { name: "Item order" });
   await order.press("s");
   await expect(order).toBeFocused();
@@ -195,18 +215,14 @@ test("starts a configured snapshot and resumes with the same order and timer", a
   await expect(order).toHaveText("Shuffled order");
   await expect(order).toHaveAttribute("aria-expanded", "false");
   await chooseOption(order, "Original order");
-  await expect(dialog.getByLabel("Timer in minutes")).toHaveValue("");
-  await expect(simulation).toHaveAttribute("aria-pressed", "false");
-  await simulation.click();
-  await expect(simulation).toHaveAttribute("aria-pressed", "true");
-  await expect(dialog.getByLabel("Timer in minutes")).toHaveValue("30");
-  await quick.click();
-  await expect(quick).toHaveAttribute("aria-pressed", "true");
-  await expect(simulation).toHaveAttribute("aria-pressed", "false");
+  await quick.check();
+  await expect(quick).toBeChecked();
+  await customize.check();
   await expect(dialog.getByLabel("Item order")).toHaveText("Shuffled order");
+  await expect(dialog.getByLabel("Timer in minutes")).toHaveValue("");
   await dialog.getByLabel("Number of questions").fill("2");
   await dialog.getByLabel("Timer in minutes").fill("5");
-  await expect(quick).toHaveAttribute("aria-pressed", "false");
+  await expect(customize).toBeChecked();
   await dialog.getByRole("button", { name: "Start exam" }).click();
   await expect(
     page.getByRole("heading", { name: "Question 1 of 2" }),
@@ -221,6 +237,214 @@ test("starts a configured snapshot and resumes with the same order and timer", a
   await page.reload();
   await expect(page.getByText("Second prompt", { exact: true })).toBeVisible();
   await expect(page.getByRole("timer")).toBeVisible();
+});
+
+test("resumes the account-wide suggestion, handles failures, and keeps the action in view", async ({
+  page,
+}) => {
+  const api = await fixture(page);
+  const attempt = api.records.get("original")!;
+  attempt.position = 1;
+  attempt.studySetId = "biology";
+  attempt.snapshot = { ...attempt.snapshot, title: "Biology midterm" };
+  let status = 200;
+  let assessing = false;
+  await page.route("**/api/study/next", (route) =>
+    route.fulfill({
+      status,
+      json:
+        status === 200
+          ? {
+              type: "resume",
+              id: attempt.id,
+              title: attempt.snapshot.title,
+              kind: "exam",
+              status: assessing ? "reviewing" : "in_progress",
+              position: attempt.position,
+              total: 3,
+              pendingCount: assessing ? 1 : null,
+              reviewMode: false,
+            }
+          : { error: "Suggestion unavailable" },
+    }),
+  );
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/?page=1");
+  const suggestion = page.getByRole("region", { name: "Next study action" });
+  const resume = suggestion.getByRole("link", { name: "Resume", exact: true });
+  for (const [width, height] of [
+    [390, 844],
+    [1440, 900],
+    [320, 740],
+  ]) {
+    if (width === 320) {
+      attempt.snapshot = {
+        ...attempt.snapshot,
+        title: "Extended practice and review ".repeat(7).trim(),
+      };
+      await page.reload();
+    }
+    await page.setViewportSize({ width, height });
+    await expect(resume).toBeInViewport({ ratio: 1 });
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(width);
+    if (width !== 320) {
+      await page.screenshot({
+        path: `/tmp/examprep-study-library-${width}.png`,
+        animations: "disabled",
+      });
+    }
+  }
+  await page.keyboard.press("Tab");
+  for (
+    let index = 0;
+    index < 12 &&
+    !(await resume.evaluate((link) => link === document.activeElement));
+    index++
+  ) {
+    await page.keyboard.press("Tab");
+  }
+  await expect(resume).toBeFocused();
+  await expect(resume).toHaveCSS("outline-style", "solid");
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByRole("heading", { name: "Question 2 of 3" }),
+  ).toBeVisible();
+  expect(api.starts()).toBeUndefined();
+  await page.getByRole("link", { name: "Library", exact: true }).click();
+  await expect(page).toHaveURL(/page=1/);
+  assessing = true;
+  await page.reload();
+  await expect(
+    suggestion.getByRole("link", { name: "Finish assessment" }),
+  ).toBeVisible();
+  await expect(suggestion).toContainText("1 written answer to assess");
+  await page
+    .getByRole("searchbox", { name: "Search library" })
+    .fill("practice");
+  await expect(suggestion).toHaveCount(0);
+  await expect(page).toHaveURL(/search=practice/);
+  status = 503;
+  const failure = page.waitForResponse("**/api/study/next");
+  await page.getByRole("button", { name: "Remove search filter" }).click();
+  expect((await failure).status()).toBe(503);
+  await expect(suggestion).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Practice", exact: true }),
+  ).toBeEnabled();
+});
+
+const deck: StudyContent = {
+  schemaVersion: 1,
+  title: "Practice cards",
+  kind: "flashcards",
+  cards: Array.from({ length: 12 }, (_, index) => ({
+    id: String(index),
+    front: `Card ${index + 1}`,
+    back: "Answer",
+  })),
+};
+
+for (const [doc, preset, settings] of [
+  [content, "Full set", { count: 3, order: "original", timerMinutes: null }],
+  [
+    content,
+    "Quick practice",
+    { count: 3, order: "shuffled", timerMinutes: null },
+  ],
+  [
+    content,
+    "Exam simulation",
+    { count: 3, order: "original", timerMinutes: 30 },
+  ],
+  [deck, "Full set", { count: 12, order: "original", timerMinutes: null }],
+  [
+    deck,
+    "Quick practice",
+    { count: 10, order: "shuffled", timerMinutes: null },
+  ],
+  [deck, "Customize", { count: 5, order: "shuffled", timerMinutes: 6 }],
+] as const) {
+  test(`starts ${doc.kind} with ${preset}`, async ({ page }) => {
+    const api = await fixture(page, doc);
+    const useSuggestion = doc.kind === "exam" && preset === "Full set";
+    if (useSuggestion) {
+      await page.route("**/api/study/next", (route) =>
+        route.fulfill({
+          json: {
+            type: "practice",
+            set: {
+              id: "set",
+              title: doc.title,
+              kind: doc.kind,
+              count: itemsOf(doc).length,
+            },
+          },
+        }),
+      );
+    }
+    const requests: string[] = [];
+    page.on("request", (request) => {
+      if (
+        request.method() === "POST" &&
+        request.url().endsWith("/sets/set/attempts")
+      )
+        requests.push(request.url());
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    await page
+      .getByRole("button", {
+        name: useSuggestion ? "Set up practice" : "Practice",
+        exact: true,
+      })
+      .click();
+    const dialog = page.getByRole("dialog");
+    if (doc.kind === "flashcards") {
+      await expect(
+        dialog.getByRole("radio", { name: "Exam simulation" }),
+      ).toHaveCount(0);
+    }
+    await dialog.getByRole("radio", { name: preset }).check();
+    if (preset === "Customize") {
+      await dialog.getByLabel("Number of cards").fill(String(settings.count));
+      await chooseOption(dialog.getByLabel("Item order"), "Shuffled order");
+      await dialog
+        .getByLabel("Timer in minutes")
+        .fill(String(settings.timerMinutes));
+    }
+    expect(requests).toHaveLength(0);
+    await dialog
+      .getByRole("button", {
+        name: doc.kind === "exam" ? "Start exam" : "Start practice",
+      })
+      .click();
+    await expect(page).toHaveURL(/\/practice\/custom$/);
+    expect(requests).toHaveLength(1);
+    expect(api.starts()).toEqual(settings);
+  });
+}
+
+test("leads a perfect result back to the Library", async ({ page }) => {
+  const api = await fixture(page);
+  const attempt = api.records.get("original")!;
+  attempt.responses = Object.fromEntries(
+    content.questions.map(({ id }) => [
+      id,
+      { text: "My answer", selfAssessment: "correct" },
+    ]),
+  );
+  Object.assign(attempt, grade(content, attempt.responses));
+  await page.goto("/practice/original");
+  const primary = page.locator(".results-intro .button.primary");
+  await expect(primary).toHaveText("Return to library");
+  await primary.click();
+  await expect(
+    page.getByRole("heading", { name: "Your library" }),
+  ).toBeVisible();
 });
 
 test("tracks answered progress and flags across the desktop map and mobile picker", async ({
