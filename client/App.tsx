@@ -15,10 +15,20 @@ import {
   ScrollRestoration,
   useLocation,
 } from "react-router-dom";
-import { BookOpen, History, UserRound, Menu, X } from "lucide-react";
+import {
+  BookOpen,
+  Compass,
+  Shield,
+  History,
+  UserRound,
+  Menu,
+  X,
+} from "lucide-react";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { AuthPage } from "./features/AuthPage";
 import { applyReadingSize, readingSize } from "./lib/readingSize";
+const Discover = lazy(() => import("./features/Discover"));
+const Admin = lazy(() => import("./features/Admin"));
 const AccountPage = lazy(() =>
   import("./features/Account").then((m) => ({ default: m.AccountPage })),
 );
@@ -77,7 +87,15 @@ function Protected({ children }: { children?: ReactNode }) {
     <Navigate to="/sign-in" replace state={{ signInReturn: location }} />
   );
 }
+function AdminPage() {
+  return useAuth().user?.role === "admin" ? (
+    <Admin />
+  ) : (
+    <Navigate to="/library" replace />
+  );
+}
 function AppShell() {
+  const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const header = useRef<HTMLElement>(null);
   const toggle = useRef<HTMLButtonElement>(null);
@@ -111,6 +129,16 @@ function AppShell() {
         <BookOpen size={20} />
         Library
       </NavLink>
+      <NavLink to="/discover" onClick={() => setOpen(false)}>
+        <Compass size={20} />
+        Discover
+      </NavLink>
+      {user?.role === "admin" && (
+        <NavLink to="/admin" onClick={() => setOpen(false)}>
+          <Shield size={20} />
+          Admin
+        </NavLink>
+      )}
       <NavLink to="/history" onClick={() => setOpen(false)}>
         <History size={20} />
         History
@@ -198,6 +226,10 @@ const router = createBrowserRouter([
             element: <AppShell />,
             children: [
               { path: "/library", element: <LibraryPage /> },
+              { path: "/discover/:id?", element: <Discover /> },
+              { path: "/admin", element: <AdminPage /> },
+              { path: "/admin/users/:userId", element: <AdminPage /> },
+              { path: "/admin/sets/:setId?", element: <AdminPage /> },
               { path: "/history", element: <HistoryPage /> },
               { path: "/review/:id", element: <DueReviewPage /> },
               { path: "/account", element: <AccountPage /> },

@@ -32,7 +32,7 @@ The initial release excluded timers, randomization, spaced repetition, and email
 
 Built-in AI, document extraction, media attachments, a public discovery library, an admin page, classes, payments, offline synchronization, social login, and registration email verification remain outside the current scope.
 
-Primary owners can share saved exams and flashcard decks through revocable copy links and invite registered accounts to co-own a set. Signed-in recipients can import independent copies through links or accept ownership invitations in their library. Co-owners edit the same content and study with private settings, attempts, and schedules.
+Primary owners can share saved exams and flashcard decks through revocable view-only links and invite registered accounts to co-own a set. Signed-in recipients can read live sets through links, clone admin-published sets from Discover, or accept ownership invitations in their library. Co-owners edit the same content and study with private settings, attempts, and schedules.
 
 ## File contract
 

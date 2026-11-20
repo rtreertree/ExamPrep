@@ -87,14 +87,14 @@ export function SetSharing({
         {settings ? (
           <>
             <section className="stack sharing-section">
-              <h3>Copy link</h3>
+              <h3>View-only link</h3>
               <p className="muted">
-                Anyone with the link can sign in and copy the latest saved
+                Anyone with the link can sign in and read the latest saved
                 version, including answers.
               </p>
               {link ? (
                 <>
-                  <Field label="Copy link">
+                  <Field label="View-only link">
                     <input ref={linkField} readOnly value={link} />
                   </Field>
                   <div className="actions">
@@ -112,7 +112,7 @@ export function SetSharing({
                           "/link",
                           "PUT",
                           { enabled: false },
-                          "Copy link turned off.",
+                          "View-only link turned off.",
                         )
                       }
                     >
@@ -129,11 +129,11 @@ export function SetSharing({
                         "/link",
                         "PUT",
                         { enabled: true },
-                        "Copy link enabled.",
+                        "View-only link enabled.",
                       )
                     }
                   >
-                    Enable copy link
+                    Enable view-only link
                   </Button>
                 </div>
               )}

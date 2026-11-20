@@ -14,7 +14,7 @@ import {
   Notice,
 } from "../components/ui";
 import { AuthForm } from "../components/AuthForm";
-type User = { id: string; email: string };
+type User = { id: string; email: string; role: "user" | "admin" };
 const AuthContext = createContext<{
   user: User | null;
   refresh: () => Promise<void>;

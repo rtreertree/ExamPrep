@@ -8,9 +8,10 @@ import { encodeStorage } from "./storage";
 import { folderForLegacyName, lockLibrary, readFolder } from "./libraryOrder";
 
 type QueryDb = Pick<Database, "$queryRaw">;
-export type OwnedSet = Omit<StudySet, "manualRank"> & {
+export type OwnedSet = Omit<StudySet, "manualRank" | "published"> & {
   ownershipRole: OwnershipRole;
   folderName: string | null;
+  ownerName: string;
 };
 
 export const unavailableSet = () =>
@@ -49,8 +50,8 @@ export const joinOwnerFolder = sql`
 export async function readOwnedSet(db: QueryDb, id: string, userId: string) {
   const [set] = await db.$queryRaw<OwnedSet[]>(sql`
     SELECT s.id, s."userId", s.title, s.kind, s.content, s.revision, s."createdAt",
-      s."updatedAt", ${ownershipRole}, ${ownerPreferences}
-    FROM "StudySet" s ${joinCoOwner(userId)} ${joinOwnerFolder}
+      u.name AS "ownerName", s."updatedAt", ${ownershipRole}, ${ownerPreferences}
+    FROM "StudySet" s JOIN "user" u ON u.id = s."userId" ${joinCoOwner(userId)} ${joinOwnerFolder}
     WHERE s.id = ${id} AND ${ownerAccess(userId)}
   `);
   if (!set) throw unavailableSet();

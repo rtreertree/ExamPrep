@@ -18,6 +18,8 @@ model User {
   id            String     @id
   name          String
   email         String     @unique
+  role          String     @default("user")
+  suspended     Boolean    @default(false)
   emailVerified Boolean    @default(false)
   image         String?
   createdAt     DateTime   @default(now())
@@ -31,6 +33,10 @@ model User {
   copyImports   StudySetCopyImport[]
   libraryFolders LibraryFolder[]
 
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "user_name_search")
+  @@index([email(ops: raw("gin_trgm_ops"))], type: Gin, map: "user_email_search")
+  @@index([role, suspended, id])
+  @@index([suspended, id])
   @@map("user")
 }
 
@@ -110,6 +116,7 @@ model StudySet {
   user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   title         String
   kind          String
+  published     Boolean      @default(false)
   content       Json
   revision      Int          @default(1)
   course        String       @default("")
@@ -129,6 +136,10 @@ model StudySet {
   copyLink      StudySetCopyLink?
   copyImport    StudySetCopyImport?
 
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "study_set_title_search")
+  @@index([published, kind, id])
+  @@index([published, id])
+  @@index([userId, id])
   @@index([userId, updatedAt])
   @@index([userId, archived, pinned, lastStudiedAt])
   @@index([userId, folderId, archived, manualRank])
@@ -150,6 +161,7 @@ model StudySetCoOwner {
   cardReviews   CoOwnerCardReview[]
 
   @@id([studySetId, userId])
+  @@index([userId, studySetId])
   @@index([userId, archived, pinned, lastStudiedAt])
   @@index([userId, folderId, archived, manualRank])
 }

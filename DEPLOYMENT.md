@@ -213,3 +213,15 @@ deployment has been performed as part of local validation.
 Apply `202611080003_attempt_progress` before starting this version. It adds nullable scoring metadata, its private validation-version marker, database protection against later metadata mutation, and an index for unfinished-attempt continuation. Existing records begin at version 0; application code validates their immutable snapshot before installing version-1 metadata. This marker is internal storage bookkeeping, not a portable-file or product version change. The additive columns permit older application code to continue reading existing records. Keep the migration when rolling application code back; do not drop columns or reset data.
 
 Progress acknowledgements and compact submission acknowledgements omit unchanged snapshot/answer data. Full attempt GETs still return the snapshot and confirmed responses for resume. Existing v1 full-map progress clients remain accepted within the existing request cap; the current client sends one changed answer per request and drains all changes before submission or navigation. Measure complete deployed operations, including database transfer and response storage, at the supported maxima before asserting Worker CPU or memory compliance.
+
+## First administrator
+
+Apply the `202611200001_admin_discover` migration before releasing the updated Node server or Worker. The migration uses PostgreSQL’s `pg_trgm` extension for indexed directory search. All existing sets start unpublished.
+
+After the intended administrator registers, verify their exact account ID in the target database. Run the following command from a checkout with generated Prisma clients and the target `DATABASE_URL`.
+
+```sh
+node --import tsx scripts/promote-admin.ts '<exact-user-id>'
+```
+
+Reload the app to see Admin. Further promotions, suspensions, and role changes can be made in the Admin tab.

@@ -1,0 +1,64 @@
+.directory-filters,
+.directory-row,
+.directory-sections {
+  display: flex;
+  align-items: end;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.directory-filters > :first-child {
+  flex: 2 1 16rem;
+}
+.directory-filters > * {
+  flex: 1 1 9rem;
+  min-width: 0;
+}
+.directory-filters > button {
+  flex: 0 0 auto;
+}
+.directory-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.directory-list li,
+.read-items > li {
+  border-bottom: 1px solid var(--divider);
+  padding: 1rem 0;
+}
+.directory-row {
+  align-items: center;
+}
+.directory-row > svg {
+  color: var(--muted);
+}
+.directory-text {
+  flex: 1 1 14rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.directory-title {
+  font-weight: 650;
+  font-size: 1.08rem;
+}
+.directory-text p,
+.directory-text small {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+}
+.directory-sections {
+  align-items: center;
+}
+.directory-sections a[aria-current="page"] {
+  text-decoration: underline;
+  text-underline-offset: 0.4rem;
+}
+.read-items {
+  padding-inline-start: 1.8rem;
+}
+.read-items > li > * {
+  margin-block: 0.5rem;
+}
+.directory-form {
+  max-width: 42rem;
+}

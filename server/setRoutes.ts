@@ -70,6 +70,10 @@ function publicSet({
   });
 }
 
+function ownedSetResponse({ ownerName, ...stored }: OwnedSet) {
+  return { ...decodeStorage(stored), ownerName };
+}
+
 function readFolders(db: Pick<Database, "$queryRaw">, userId: string) {
   return db.$queryRaw<LibraryFolder[]>(sql`
         SELECT id, name FROM "LibraryFolder" WHERE "userId" = ${userId} ORDER BY lower(name), name
@@ -126,7 +130,7 @@ export function registerSetRoutes(app: Hono<Context>) {
     // Project metadata in PostgreSQL: a page must not load thirty 2-MiB documents.
     const [sets, folders] = await Promise.all([
       db.$queryRaw<
-        (Omit<OwnedSet, "content"> & {
+        (Omit<OwnedSet, "content" | "ownerName"> & {
           count: number;
           manual: ManualOrder | null;
         })[]
@@ -258,7 +262,7 @@ export function registerSetRoutes(app: Hono<Context>) {
       c.req.param("id"),
       c.get("userId"),
     );
-    return c.json(decodeStorage(set));
+    return c.json(ownedSetResponse(set));
   });
   app.put("/api/sets/:id", async (c) => {
     const input = schema(
@@ -290,7 +294,7 @@ export function registerSetRoutes(app: Hono<Context>) {
       if (!changed.count && saved.revision !== input.revision) throw conflict();
       return saved;
     });
-    return c.json(decodeStorage(set));
+    return c.json(ownedSetResponse(set));
   });
   app.patch("/api/sets/:id/organization", async (c) => {
     const changes = schema(

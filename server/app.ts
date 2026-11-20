@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
 import { ValidationError, BACKUP_BYTES } from "../shared/json";
+import { registerDirectory } from "./directory";
+import { registerAdmin } from "./admin";
 import { registerAttemptRoutes } from "./attemptRoutes";
 import { createAuth, type Config } from "./auth";
 import { registerBackup } from "./backup";
@@ -20,6 +22,7 @@ export type Context = {
     started: number;
     db: Database;
     userId: string;
+    role: string;
     auth: ReturnType<typeof createAuth>;
   };
 };
@@ -110,6 +113,9 @@ export function createApp(
       throw new HTTPException(401, {
         message: "Your session has expired. Sign in again to continue.",
       });
+    if (session.user.suspended)
+      throw new HTTPException(403, { message: "This account is suspended." });
+    c.set("role", session.user.role);
     c.set("userId", session.user.id);
     await next();
   });
@@ -120,12 +126,22 @@ export function createApp(
   app.get("/api/study/next", async (c) =>
     c.json(await readStudySuggestion(c.get("db"), c.get("userId"))),
   );
+  app.use("/api/admin/*", async (c, next) => {
+    if (c.get("role") !== "admin")
+      throw new HTTPException(403, {
+        message: "Administrator access required.",
+      });
+    await next();
+  });
+  registerDirectory(app);
+  registerAdmin(app, config.BETTER_AUTH_SECRET);
   registerReviewRoutes(app);
   registerBackup(app);
   registerSharing(app, config.BETTER_AUTH_SECRET);
   registerFolders(app);
   registerSetRoutes(app);
   registerAttemptRoutes(app);
+  app.all("/api/*", (c) => c.json({ error: "API route not found." }, 404));
   app.notFound((c) => c.json({ error: "API route not found." }, 404));
   app.onError((error, c) => {
     if (error instanceof ValidationError)

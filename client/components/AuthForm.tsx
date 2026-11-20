@@ -17,6 +17,7 @@ export function AuthForm({
   onModeChange?: () => void;
 }) {
   const location = useLocation();
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -40,7 +41,7 @@ export function AuthForm({
       await api(
         register ? "/auth/sign-up/email" : "/auth/sign-in/email",
         "POST",
-        { email, password, ...(register ? { name: "Student" } : {}) },
+        { email, password, ...(register ? { name: name.trim() } : {}) },
       );
       await onSuccess();
     } catch (e) {
@@ -64,6 +65,18 @@ export function AuthForm({
           : "Your next study session starts here."}
       </p>
       <form onSubmit={submit} className="stack">
+        {register && (
+          <Field label="Display name">
+            <input
+              autoComplete="nickname"
+              required
+              pattern=".*\S.*"
+              maxLength={120}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </Field>
+        )}
         <Field label="Email">
           <input
             type="email"

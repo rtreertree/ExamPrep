@@ -23,7 +23,7 @@ const source: StudySet = {
   count: 1,
 };
 
-test("manages a copy link and pending co-owners from the library and editor", async ({
+test("manages a view-only link and pending co-owners from the library and editor", async ({
   page,
   context,
 }) => {
@@ -63,7 +63,7 @@ test("manages a copy link and pending co-owners from the library and editor", as
     .click();
   await page.getByRole("button", { name: "Share and manage access" }).click();
   const dialog = page.getByRole("dialog", { name: "Share and manage access" });
-  await dialog.getByRole("button", { name: "Enable copy link" }).click();
+  await dialog.getByRole("button", { name: "Enable view-only link" }).click();
   await dialog.getByRole("button", { name: "Copy link", exact: true }).click();
   await expect(dialog.getByRole("status")).toHaveText("Link copied.");
   expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(
@@ -86,15 +86,15 @@ test("manages a copy link and pending co-owners from the library and editor", as
   await page.getByRole("button", { name: "Share and manage access" }).click();
   await dialog.getByRole("button", { name: "Turn off link" }).click();
   await expect(
-    dialog.getByRole("button", { name: "Enable copy link" }),
+    dialog.getByRole("button", { name: "Enable view-only link" }),
   ).toBeVisible();
 });
 
-test("returns to the copy link after registration and retries with the same import request", async ({
+test("returns to the live reader after registering with a display name", async ({
   page,
 }) => {
   let signedIn = false;
-  const ids: string[] = [];
+
   await page.route("**/api/**", async (route) => {
     const req = route.request();
     switch (new URL(req.url()).pathname) {
@@ -105,21 +105,14 @@ test("returns to the copy link after registration and retries with the same impo
             : null,
         });
       case "/api/auth/sign-up/email":
+        expect(req.postDataJSON().name).toBe("Reader");
         signedIn = true;
         return route.fulfill({ json: { success: true } });
       case "/api/shares/preview":
         expect(req.postDataJSON()).toEqual({ token });
         return route.fulfill({
-          json: { title: source.title, kind: source.kind, count: 1 },
+          json: { content: source.content, ownerName: "Original owner" },
         });
-      case "/api/shares/import":
-        expect(req.postDataJSON().token).toBe(token);
-        ids.push(req.postDataJSON().requestId);
-        return ids.length === 1
-          ? route.abort()
-          : route.fulfill({ json: { id: "copy" } });
-      case "/api/sets/copy":
-        return route.fulfill({ json: { ...source, id: "copy" } });
       default:
         return route.fulfill({
           status: 404,
@@ -130,20 +123,17 @@ test("returns to the copy link after registration and retries with the same impo
   await page.goto(`/share#${token}`);
   await expect(page).toHaveURL(/\/sign-in$/);
   await page.getByRole("button", { name: "Create an account" }).click();
+  await page.getByLabel("Display name").fill("  Reader  ");
   await page.getByLabel("Email", { exact: true }).fill("reader@example.test");
   await page.getByLabel("Password", { exact: true }).fill("example-password");
   await page.getByRole("button", { name: "Create account" }).click();
   await expect(page).toHaveURL(/\/share#example-signed-token$/);
   await expect(page.getByRole("heading", { name: source.title })).toBeVisible();
-  await expect(page.getByText("Flashcards · 1 card")).toBeVisible();
-  await page.getByRole("button", { name: "Add to my library" }).click();
-  await expect(page.getByRole("alert")).toContainText(
-    "Could not reach the server",
-  );
-  await page.reload();
-  await page.getByRole("button", { name: "Add to my library" }).click();
-  await expect(page).toHaveURL(/\/sets\/copy\/edit$/);
-  expect(ids[1]).toBe(ids[0]);
+  await expect(page.getByText("Owned by Original owner")).toBeVisible();
+  await page.getByText("Show back").click();
+  await expect(
+    page.getByRole("button", { name: "Add to my library" }),
+  ).toHaveCount(0);
 });
 
 test("accepts a pending invitation and shows the co-owned set without owner-only controls", async ({

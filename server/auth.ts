@@ -1,3 +1,4 @@
+import { APIError } from "better-auth/api";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import type { Database } from "./db";
@@ -22,6 +23,40 @@ export function createAuth(db: Database, config: Config, atomicReset: boolean) {
       provider: "postgresql",
       transaction: atomicReset,
     }),
+    user: {
+      additionalFields: {
+        role: { type: "string", input: false, defaultValue: "user" },
+        suspended: { type: "boolean", input: false, defaultValue: false },
+      },
+    },
+    databaseHooks: {
+      user: {
+        create: {
+          before: async (user) => ({
+            data: { ...user, name: displayName(user.name) },
+          }),
+        },
+        update: {
+          before: async (user) =>
+            user.name === undefined
+              ? undefined
+              : { data: { ...user, name: displayName(user.name) } },
+        },
+      },
+      session: {
+        create: {
+          before: async (session) => {
+            const [user] = await db.$queryRaw<
+              { suspended: boolean }[]
+            >`SELECT suspended FROM "user" WHERE id = ${session.userId}`;
+            if (user?.suspended)
+              throw new APIError("FORBIDDEN", {
+                message: "This account is suspended.",
+              });
+          },
+        },
+      },
+    },
     trustedOrigins: [new URL(config.BETTER_AUTH_URL).origin],
     emailAndPassword: {
       enabled: true,
@@ -68,4 +103,12 @@ export function createAuth(db: Database, config: Config, atomicReset: boolean) {
       },
     },
   });
+}
+
+function displayName(value: unknown) {
+  if (typeof value !== "string" || !value.trim() || value.trim().length > 120)
+    throw new APIError("BAD_REQUEST", {
+      message: "Enter a display name of up to 120 characters.",
+    });
+  return value.trim();
 }

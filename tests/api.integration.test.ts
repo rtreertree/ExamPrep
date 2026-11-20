@@ -192,113 +192,275 @@ describe.skipIf(!enabled)(
         ),
       ).toEqual([set.id]);
     });
-    it("shares the latest saved exam through revocable copy links and imports each action once", async () => {
-      const create = await a("/sets", "POST", {
-        ...exam,
-        title: "Copy link exam",
-      });
-      expect(create.value).toMatchObject({
-        ownershipRole: "primary",
-        revision: 1,
-      });
-      const path = `/sets/${create.value.id}`;
-      expect((await b(path)).status).toBe(404);
-      expect((await b(path + "/sharing")).status).toBe(404);
-      expect(
-        (await b(path + "/sharing/link", "PUT", { enabled: true })).status,
-      ).toBe(404);
-      const enabled = await a(path + "/sharing/link", "PUT", { enabled: true });
-      expect(enabled.value.link).toMatch(/^\/share#/);
-      expect((await a(path + "/sharing")).value.link).toBe(enabled.value.link);
-      const token = enabled.value.link.split("#")[1];
-      const guest = client();
-      expect((await guest("/shares/preview", "POST", { token })).status).toBe(
-        401,
-      );
-      expect(
-        (await b("/shares/preview", "POST", { token: token.slice(0, -1) }))
-          .status,
-      ).toBe(404);
-      const preview = await b("/shares/preview", "POST", { token });
-      expect(preview.value).toEqual({
-        title: "Copy link exam",
-        kind: "exam",
-        count: exam.questions.length,
-      });
-      expect(preview.headers.get("Cache-Control")).toBe("no-store, private");
-      const updated = { ...exam, title: "Copy link exam updated" };
-      expect(
-        (await a(path, "PUT", { revision: 1, content: updated })).status,
-      ).toBe(200);
-      const importBody = { token, requestId: randomUUID() };
-      const concurrent = await Promise.all([
-        b("/shares/import", "POST", importBody),
-        b("/shares/import", "POST", importBody),
-      ]);
-      expect(concurrent.map(({ status }) => status).sort()).toEqual([200, 201]);
-      const copy = concurrent[0].value.id;
-      expect(concurrent[1].value.id).toBe(copy);
-      expect(copy).not.toBe(create.value.id);
-      expect((await b(`/sets/${copy}`)).value).toMatchObject({
-        ownershipRole: "primary",
-        revision: 1,
-        content: updated,
-        course: "",
-        pinned: false,
-        archived: false,
-        lastStudiedAt: null,
-      });
-      expect((await a(`/sets/${copy}`)).status).toBe(404);
-      expect((await b(path)).status).toBe(404);
-      const another = await b("/shares/import", "POST", {
-        token,
-        requestId: randomUUID(),
-      });
-      expect(another.status).toBe(201);
-      expect(another.value.id).not.toBe(copy);
-      expect(
-        (await a(path + "/sharing/link", "PUT", { enabled: false })).value.link,
-      ).toBeNull();
-      expect((await b("/shares/preview", "POST", { token })).status).toBe(404);
-      expect(
-        (await b("/shares/import", "POST", { token, requestId: randomUUID() }))
-          .status,
-      ).toBe(404);
-      expect((await b("/shares/import", "POST", importBody)).value.id).toBe(
-        copy,
-      );
-      const reenabled = await a(path + "/sharing/link", "PUT", {
-        enabled: true,
-      });
-      expect(reenabled.value.link).not.toBe(enabled.value.link);
-      expect((await b("/shares/preview", "POST", { token })).status).toBe(404);
-      const invited = await a(path + "/sharing/invitations", "POST", {
-        email: emails[1],
-      });
-      const invitationId = invited.value.invitations[0].id;
-      const accepted = await b(`/ownership-invitations/${invitationId}/respond`, "POST", {
-        accept: true,
-      });
-      expect(accepted.status).toBe(200);
-      expect((await b(path)).value).toMatchObject({
-        ownershipRole: "co_owner",
-        content: updated,
-      });
-      expect((await a(path, "DELETE", { revision: 2 })).status).toBe(200);
-      expect((await b(path)).status).toBe(404);
-      expect(
-        (
-          await b("/shares/preview", "POST", {
-            token: reenabled.value.link.split("#")[1],
+    it("publishes live sets, grants and revokes library items, and enforces view-only links", async () => {
+      const bob = (await b("/auth/get-session")).value.user;
+      expect((await client()("/admin/users")).status).toBe(401);
+      expect((await b("/admin/users")).status).toBe(403);
+      expect((await b("/discover")).status).toBe(200);
+      await db!.user.update({ where: { id: userId }, data: { role: "admin" } });
+      const source = (await a("/sets", "POST", exam)).value;
+      const base = "/admin/sets/" + source.id,
+        listing = "/discover/" + source.id;
+      const access = (input: unknown) => a(base + "/access", "POST", input);
+      const recipient = "/admin/users/" + bob.id;
+      try {
+        const q = encodeURIComponent(bob.email);
+        expect((await a("/admin/users?q=" + q)).value.items).toMatchObject([
+          { id: bob.id },
+        ]);
+        expect((await b(listing)).status).toBe(404);
+        expect(
+          (
+            await b(base + "/access", "POST", {
+              action: "publish",
+              enabled: true,
+            })
+          ).status,
+        ).toBe(403);
+        expect(
+          (await access({ action: "publish", enabled: true })).status,
+        ).toBe(200);
+        expect(
+          (
+            await a("/admin/users/" + userId, "PATCH", {
+              name: "  Owner ~7e;  ",
+            })
+          ).value.name,
+        ).toBe("Owner ~7e;");
+        expect((await b(listing)).value).toEqual({
+          ownerName: "Owner ~7e;",
+          content: exam,
+        });
+        await access({ action: "link", enabled: true });
+        const { link } = (await a(base + "/access")).value;
+        const token = link.split("#")[1];
+        const revised = { ...exam, title: "Updated discovery title" };
+        await a("/sets/" + source.id, "PUT", { revision: 1, content: revised });
+        const view = () => b("/shares/preview", "POST", { token });
+        expect((await view()).value).toEqual({
+          ownerName: "Owner ~7e;",
+          content: revised,
+        });
+        expect(
+          (
+            await b("/shares/import", "POST", {
+              token,
+              requestId: randomUUID(),
+            })
+          ).status,
+        ).toBe(404);
+        const requestId = randomUUID();
+        const copies = await Promise.all(
+          [1, 2].map(() => b(listing + "/clone", "POST", { requestId })),
+        );
+        expect(copies.map((x) => x.status).sort()).toEqual([200, 201]);
+        const copy = copies[0].value.id;
+        expect(copies[1].value.id).toBe(copy);
+        expect((await b("/sets/" + copy)).value).toMatchObject({
+          content: revised,
+          ownerName: bob.name,
+          revision: 1,
+          ownershipRole: "primary",
+        });
+        await access({ action: "invite", email: bob.email });
+        await access({ action: "grant", userId: bob.id });
+        expect((await a(base + "/access")).value).toMatchObject({
+          coOwners: 1,
+          invitations: 0,
+        });
+        expect(
+          (await a(base + "/recipients?q=" + q)).value.items,
+        ).toMatchObject([{ id: bob.id, invited: false }]);
+        expect((await b("/sets/" + source.id)).value).toMatchObject({
+          ownershipRole: "co_owner",
+          ownerName: "Owner ~7e;",
+        });
+        await b("/sets/" + source.id, "PUT", { revision: 2, content: exam });
+        expect((await b(listing)).value.content).toEqual(exam);
+        expect((await b("/sets/" + copy)).value.content).toEqual(revised);
+        const attempt = (
+          await b("/sets/" + source.id + "/attempts", "POST", {})
+        ).value;
+        await access({ action: "revoke", userId: bob.id });
+        expect((await b("/sets/" + source.id)).status).toBe(404);
+        const adminCopy = (
+          await a(recipient + "/copies", "POST", {
+            setId: source.id,
+            requestId: randomUUID(),
           })
-        ).status,
-      ).toBe(404);
-      expect((await b(`/sets/${copy}`, "DELETE", { revision: 1 })).status).toBe(
-        200,
-      );
-      expect((await b("/shares/import", "POST", importBody)).status).toBe(404);
-      await b(`/sets/${another.value.id}`, "DELETE", { revision: 1 });
+        ).value.id;
+        expect((await b("/sets/" + adminCopy)).value).toMatchObject({
+          ownerName: bob.name,
+          content: exam,
+        });
+        expect(
+          (await a(recipient + "/library?q=" + encodeURIComponent(exam.title)))
+            .value.items,
+        ).toContainEqual(
+          expect.objectContaining({ id: adminCopy, ownershipRole: "primary" }),
+        );
+        const stale = (await a(base + "/access")).value;
+        await access({ action: "publish", enabled: false });
+        expect((await b(listing)).status).toBe(404);
+        expect(
+          (await b(listing + "/clone", "POST", { requestId: randomUUID() }))
+            .status,
+        ).toBe(404);
+        expect((await view()).status).toBe(200);
+        await access({ action: "link", enabled: false });
+        expect((await view()).status).toBe(404);
+        expect((await a(base, "DELETE", stale)).status).toBe(409);
+        expect(
+          (await a(base, "DELETE", (await a(base + "/access")).value)).status,
+        ).toBe(200);
+        expect((await b("/sets/" + copy)).status).toBe(200);
+        expect(
+          (await b("/attempts/" + attempt.id)).value.studySetId,
+        ).toBeNull();
+        await db!.attempt.delete({ where: { id: attempt.id } });
+        await b("/sets/" + copy, "DELETE", { revision: 1 });
+        await b("/sets/" + adminCopy, "DELETE", { revision: 1 });
+      } finally {
+        await db!.user.update({
+          where: { id: userId },
+          data: { role: "user", name: "Test" },
+        });
+      }
     }, 60000);
+
+    it("pages directories of duplicate names and titles with stable cursors and filters", async () => {
+      const group = "Page %_ " + randomUUID(),
+        ids = Array.from({ length: 61 }, () => randomUUID());
+      const setIds = ids.map(() => randomUUID());
+      await db!.user.update({ where: { id: userId }, data: { role: "admin" } });
+      try {
+        await db!.user.createMany({
+          data: ids.map((id) => ({
+            id,
+            name: group,
+            email: id + "@example.test",
+          })),
+        });
+        await db!.studySet.createMany({
+          data: setIds.map((id) => ({
+            id,
+            userId,
+            title: group,
+            kind: "flashcards",
+            published: true,
+            content: { ...deck, title: group },
+          })),
+        });
+        await db!.studySetCoOwner.createMany({
+          data: ids.map((id) => ({ userId: id, studySetId: setIds[0] })),
+        });
+        const q = "q=" + encodeURIComponent(group);
+        const paths = [
+          ["/admin/users?role=user&status=active&" + q, ids],
+          ["/admin/sets/" + setIds[0] + "/recipients?" + q, ids],
+          ["/admin/sets?kind=flashcards&sharing=published&" + q, setIds],
+          ["/admin/users/" + userId + "/library?" + q, setIds],
+          ["/discover?" + q, setIds],
+        ] as const;
+        for (const [path, expected] of paths) {
+          const first = (await a(path)).value;
+          const second = (await a(path + "&after=" + first.next)).value;
+          const last = (await a(path + "&after=" + second.next)).value;
+          expect([
+            first.items.length,
+            second.items.length,
+            last.items.length,
+            last.next,
+          ]).toEqual([30, 30, 1, null]);
+          expect(
+            [...first.items, ...second.items, ...last.items].map(
+              (row) => row.id,
+            ),
+          ).toEqual([...expected].sort());
+          expect(first.items[0]).not.toHaveProperty("content");
+        }
+        expect((await b("/discover?kind=exam&" + q)).value.items).toEqual([]);
+      } finally {
+        await db!.studySet.deleteMany({ where: { id: { in: setIds } } });
+        await db!.user.deleteMany({ where: { id: { in: ids } } });
+        await db!.user.update({
+          where: { id: userId },
+          data: { role: "user" },
+        });
+      }
+    }, 60000);
+
+    it("revokes sessions on email change and suspension and protects the final active admin", async () => {
+      const target = client(),
+        email = "managed-" + randomUUID() + "@example.test",
+        changed = "edited-" + randomUUID() + "@example.test";
+      emails.push(email, changed);
+      const created = await target("/auth/sign-up/email", "POST", {
+        name: "   Test  ",
+        email,
+        password,
+      });
+      expect(created.value.user.name).toBe("Test");
+      const blank = await client()("/auth/sign-up/email", "POST", {
+        email: "blank-" + randomUUID() + "@example.test",
+        password,
+        name: "   ",
+      });
+      expect(blank.status).toBeGreaterThanOrEqual(400);
+      expect(blank.status).toBeLessThan(500);
+      const id = created.value.user.id,
+        path = "/admin/users/" + id;
+      await db!.user.update({ where: { id: userId }, data: { role: "admin" } });
+      try {
+        await db!.user.update({ where: { id }, data: { emailVerified: true } });
+        expect((await a(path, "PATCH", { email: changed })).status).toBe(200);
+        expect((await target("/discover")).status).toBe(401);
+        expect(
+          (
+            await target("/auth/sign-in/email", "POST", {
+              email: changed,
+              password,
+            })
+          ).value.user.emailVerified,
+        ).toBe(false);
+        await a(path, "PATCH", { suspended: true });
+        expect((await target("/discover")).status).toBe(401);
+        expect(
+          (
+            await target("/auth/sign-in/email", "POST", {
+              email: changed,
+              password,
+            })
+          ).status,
+        ).toBe(403);
+        await a(path, "PATCH", { suspended: false, role: "admin" });
+        expect(
+          (
+            await target("/auth/sign-in/email", "POST", {
+              email: changed,
+              password,
+            })
+          ).status,
+        ).toBe(200);
+        if (
+          (await db!.user.count({
+            where: { role: "admin", suspended: false },
+          })) === 2
+        ) {
+          const results = await Promise.all([
+            a("/admin/users/" + userId, "PATCH", { role: "user" }),
+            target(path, "PATCH", { suspended: true }),
+          ]);
+          expect(results.map((x) => x.status).sort()).toEqual([200, 409]);
+        }
+      } finally {
+        await db!.user.update({
+          where: { id: userId },
+          data: { role: "user" },
+        });
+        await db!.user.delete({ where: { id } });
+      }
+    }, 90000);
 
     it("enforces ownership, revisions, immutable snapshots, grading, retries, transitions, and idempotent submission", async () => {
       const unicode = {
@@ -1474,24 +1636,8 @@ describe.skipIf(!enabled)(
       });
       const token = enabledLink.value.link.split("#")[1];
       const preview = await stranger("/shares/preview", "POST", { token });
-      expect(preview.value).toEqual({
-        title: revised.title,
-        kind: "flashcards",
-        count: 2,
-      });
-      const imported = await stranger("/shares/import", "POST", {
-        token,
-        requestId: randomUUID(),
-      });
-      expect(imported.status).toBe(201);
-      const importedPath = `/sets/${imported.value.id}`;
-      expect((await stranger(importedPath)).value).toMatchObject({
-        ownershipRole: "primary",
-        content: revised,
-        lastStudiedAt: null,
-        reviewLimit: 20,
-      });
-      expect((await stranger(importedPath, "DELETE", { revision: 1 })).status).toBe(200);
+      expect(preview.value).toEqual({content:revised,ownerName:"Test"});
+      expect((await stranger("/shares/import","POST",{token,requestId:randomUUID()})).status).toBe(404);
       expect(
         (await collaborator(`/attempts/groups?setId=${original.id}`)).value
           .items[0],

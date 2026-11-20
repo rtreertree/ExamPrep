@@ -58,6 +58,7 @@ test("complete study workflow, recovery, partial credit, flashcards, responsive 
     .getByRole("region", { name: "Study on your terms." })
     .getByRole("link", { name: "Get started" })
     .click();
+  await page.getByLabel("Display name").fill("Student");
   await page.getByLabel("Email", { exact: true }).fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
   let registrationResponse = page.waitForResponse((r) =>
@@ -335,10 +336,6 @@ test("complete study workflow, recovery, partial credit, flashcards, responsive 
     .getByRole("link", { name: /Resume/ })
     .click();
   await expect(page.getByLabel("Your answer", { exact: true })).toHaveValue("");
-  await page.getByRole("link", { name: "Library", exact: true }).click();
-  await page
-    .getByRole("button", { name: "Open navigation", exact: true })
-    .click();
   await page.getByRole("link", { name: "History", exact: true }).click();
   await page
     .locator(".attempt-row")
@@ -679,6 +676,141 @@ test("multi-digit rubric awards commit on blur; invalid math warns and long form
   } finally {
     const db = connectDatabase(process.env.DATABASE_URL!);
     await db.user.deleteMany({ where: { email: accountEmail } });
+    await db.$disconnect();
+  }
+});
+
+test("Admin and Discover on desktop and mobile use the live owner and independent clones", async ({
+  page,
+  browser,
+  baseURL,
+}) => {
+  const db = connectDatabase(process.env.DATABASE_URL!);
+  const other = await browser.newContext({
+    baseURL,
+    viewport: { width: 390, height: 844 },
+  });
+  const mobile = await other.newPage();
+  const emails = ["owner", "reader"].map(
+    (prefix) => prefix + "-" + randomUUID() + "@example.test",
+  );
+  const errors: string[] = [];
+  for (const screen of [page, mobile]) {
+    screen.on("pageerror", (error) => errors.push(error.message));
+    screen.on("console", (msg) => {
+      if (msg.type() === "error") errors.push(msg.text());
+    });
+  }
+  try {
+    for (const [index, request] of [page.request, other.request].entries()) {
+      const response = await apiRequest(
+        request,
+        "/auth/sign-up/email",
+        "POST",
+        { name: index ? "Reader" : "Tutor", email: emails[index], password },
+      );
+      expect(response.ok()).toBeTruthy();
+    }
+    await db.user.update({
+      where: { email: emails[0] },
+      data: { role: "admin" },
+    });
+    const content = { ...JSON.parse(deck), title: "Foundations of ecology" };
+    const original = await (
+      await apiRequest(page.request, "/sets", "POST", content)
+    ).json();
+    await page.goto("/admin");
+    await expect(page).toHaveTitle("Exam Prep");
+    await page.getByRole("searchbox", { name: "Search users" }).fill(emails[1]);
+    await page.getByRole("link", { name: "Reader", exact: true }).click();
+    await page.getByRole("button", { name: "Add item" }).click();
+    await page
+      .getByRole("searchbox", { name: "Find a set to add" })
+      .fill(content.title);
+    await page
+      .getByRole("listitem")
+      .filter({
+        has: page.getByRole("link", { name: content.title, exact: true }),
+      })
+      .getByRole("button", { name: "Grant co-ownership" })
+      .click();
+    await expect(
+      page.getByRole("button", { name: "Revoke access" }),
+    ).toBeVisible();
+    await mobile.goto("/sets/" + original.id + "/worksheet");
+    await chooseOption(
+      mobile.getByLabel("Print content"),
+      "Worksheet and answer key",
+    );
+    await mobile.emulateMedia({ media: "print" });
+    const owners = mobile.getByText("Owned by Tutor", { exact: true });
+    await expect(owners).toHaveCount(2);
+    await expect(owners.nth(0)).toBeVisible();
+    await expect(owners.nth(1)).toBeVisible();
+    await mobile.emulateMedia({ media: "screen" });
+    await page.getByRole("button", { name: "Revoke access" }).click();
+    await expect(page.getByText("Access revoked.")).toBeVisible();
+    await page.getByRole("link", { name: "Study sets", exact: true }).click();
+    await page
+      .getByRole("searchbox", { name: "Search study sets" })
+      .fill(content.title);
+    await page.getByRole("link", { name: content.title, exact: true }).click();
+    await expect(
+      page.getByText("Owned by Tutor", { exact: true }).first(),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Publish in Discover" }).click();
+    await expect(
+      page.getByRole("button", { name: "Unpublish from Discover" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Delete set for everyone" }).click();
+    await expect(page.getByRole("dialog")).toContainText(
+      "Discover listing is published",
+    );
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.screenshot({ path: "/tmp/examprep-admin-desktop.png" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByRole("button", { name: "Open navigation" }).click();
+    await expect(
+      page
+        .getByRole("navigation", { name: "Mobile navigation" })
+        .getByRole("link", { name: "Admin" }),
+    ).toBeVisible();
+    await mobile.goto("/admin");
+    await expect(mobile).toHaveURL(/\/library$/);
+    await mobile.getByRole("button", { name: "Open navigation" }).click();
+    await expect(
+      mobile
+        .getByRole("navigation", { name: "Mobile navigation" })
+        .getByRole("link", { name: "Admin" }),
+    ).toHaveCount(0);
+    await mobile.getByRole("link", { name: "Discover" }).click();
+    await mobile
+      .getByRole("searchbox", { name: "Search published sets" })
+      .fill("ecology");
+    await chooseOption(
+      mobile.getByLabel("Type", { exact: true }),
+      "Flashcards",
+    );
+    await expect(mobile.getByText("Owned by Tutor")).toBeVisible();
+    await mobile.screenshot({ path: "/tmp/examprep-discover-mobile.png" });
+    for (const screen of [page, mobile])
+      expect(
+        await screen.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+      ).toBeTruthy();
+    await mobile.getByRole("link", { name: content.title }).click();
+    await expect(mobile.getByText("Owned by Tutor")).toBeVisible();
+    await mobile.getByRole("button", { name: "Clone to my library" }).click();
+    await expect(mobile).toHaveURL(/\/sets\/[^/]+\/edit$/);
+    await mobile.goto(
+      new URL(mobile.url()).pathname.replace(/edit$/, "worksheet"),
+    );
+    await expect(mobile.getByText("Owned by Reader")).toBeVisible();
+    expect(errors).toEqual([]);
+  } finally {
+    await other.close();
+    await db.user.deleteMany({ where: { email: { in: emails } } });
     await db.$disconnect();
   }
 });

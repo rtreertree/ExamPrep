@@ -1,19 +1,14 @@
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
-import type { Prisma, StudySet } from "../generated/prisma/client";
-import { validateContent } from "../shared/content";
-import type {
-  OwnershipInvitation,
-  SharedSetPreview,
-  ShareSettings,
-} from "../shared/sharing";
+import type { SetReaderData } from "../shared/directory";
+import type { OwnershipInvitation, ShareSettings } from "../shared/sharing";
 import type { Context } from "./app";
 import type { Database } from "./db";
 import { read, schema } from "./request";
 import { lockPrimarySet, lockSet, unavailableSet } from "./setAccess";
 import { lockLibrary } from "./libraryOrder";
-import { decodeStorage, encodeStorage } from "./storage";
+import { decodeStorage } from "./storage";
 
 type QueryDb = Pick<Database, "$queryRaw">;
 export async function readInvitations(db: QueryDb, userId: string) {
@@ -30,7 +25,7 @@ export async function readInvitations(db: QueryDb, userId: string) {
 const tokenPattern = /^([a-f0-9-]{36})\.([a-f0-9]{64})$/;
 const text = new TextEncoder();
 const invalidLink = () =>
-  new HTTPException(404, { message: "This copy link is unavailable." });
+  new HTTPException(404, { message: "This share link is unavailable." });
 const invalidInvitation = () =>
   new HTTPException(404, {
     message: "This invitation is no longer available.",
@@ -49,7 +44,7 @@ function linkKey(secret: string) {
 const linkMessage = (nonce: string) =>
   text.encode(`exam-prep-copy-v1:${nonce}`);
 
-async function signLink(nonce: string, secret: string) {
+export async function signLink(nonce: string, secret: string) {
   const signature = await crypto.subtle.sign(
     "HMAC",
     await linkKey(secret),
@@ -78,14 +73,6 @@ async function verifyLink(token: string, secret: string) {
   )
     throw invalidLink();
   return nonce;
-}
-
-async function activeLink(db: QueryDb, nonce: string) {
-  const [link] = await db.$queryRaw<{ studySetId: string }[]>`
-    SELECT "studySetId" FROM "StudySetCopyLink" WHERE nonce = ${nonce}
-  `;
-  if (!link) throw invalidLink();
-  return link.studySetId;
 }
 
 async function readShareSettings(
@@ -118,61 +105,6 @@ async function readShareSettings(
   };
 }
 
-async function importCopy(
-  db: Database,
-  userId: string,
-  nonce: string,
-  requestId: string,
-) {
-  return db.$transaction(async (tx) => {
-    await lockLibrary(tx, userId);
-    // The receipt reserves this account's action before any copy can be created.
-    const [claim] = await tx.$queryRaw<{ requestId: string }[]>`
-      INSERT INTO "StudySetCopyImport" ("userId", "requestId", "linkNonce")
-      VALUES (${userId}, ${requestId}, ${nonce})
-      ON CONFLICT ("userId", "requestId") DO NOTHING RETURNING "requestId"
-    `;
-    if (!claim) {
-      const [receipt] = await tx.$queryRaw<
-        { copyId: string | null; linkNonce: string }[]
-      >`
-        SELECT "copyId", "linkNonce" FROM "StudySetCopyImport"
-        WHERE "userId" = ${userId} AND "requestId" = ${requestId}
-      `;
-      if (receipt?.linkNonce !== nonce)
-        throw new HTTPException(409, {
-          message: "This import request was used for another link.",
-        });
-      if (!receipt.copyId)
-        throw new HTTPException(404, {
-          message: "The copy from this import was deleted.",
-        });
-      return { id: receipt.copyId, created: false };
-    }
-    const sourceId = await activeLink(tx, nonce);
-    if (!(await lockSet(tx, sourceId))) throw invalidLink();
-    const [source] = await tx.$queryRaw<Pick<StudySet, "content">[]>`
-      SELECT s.content FROM "StudySet" s JOIN "StudySetCopyLink" l ON l."studySetId" = s.id
-      WHERE s.id = ${sourceId} AND l.nonce = ${nonce}
-    `;
-    if (!source) throw invalidLink();
-    const content = validateContent(decodeStorage(source.content));
-    const copy = await tx.studySet.create({
-      data: {
-        userId,
-        title: encodeStorage(content.title),
-        kind: content.kind,
-        content: encodeStorage(content) as Prisma.InputJsonValue,
-      },
-    });
-    await tx.$executeRaw`
-      UPDATE "StudySetCopyImport" SET "copyId" = ${copy.id}
-      WHERE "userId" = ${userId} AND "requestId" = ${requestId}
-    `;
-    return { id: copy.id, created: true };
-  });
-}
-
 const tokenBody = { token: z.string().max(128) };
 
 export function registerSharing(app: Hono<Context>, secret: string) {
@@ -196,13 +128,7 @@ export function registerSharing(app: Hono<Context>, secret: string) {
     return c.json(
       await c.get("db").$transaction(async (tx) => {
         await lockPrimarySet(tx, setId, userId);
-        if (enabled)
-          await tx.$executeRaw`
-          INSERT INTO "StudySetCopyLink" ("studySetId", nonce) VALUES (${setId}, ${crypto.randomUUID()})
-          ON CONFLICT ("studySetId") DO NOTHING
-        `;
-        else
-          await tx.$executeRaw`DELETE FROM "StudySetCopyLink" WHERE "studySetId" = ${setId}`;
+        await setLink(tx, setId, enabled);
         return readShareSettings(tx, setId, userId, secret);
       }),
     );
@@ -213,27 +139,16 @@ export function registerSharing(app: Hono<Context>, secret: string) {
       await read(c.req.raw, 1024),
     );
     const nonce = await verifyLink(token, secret);
-    const [preview] = await c.get("db").$queryRaw<SharedSetPreview[]>`
-      SELECT s.title, s.kind,
-        COALESCE(jsonb_array_length(s.content->'questions'), jsonb_array_length(s.content->'cards')) AS count
-      FROM "StudySet" s JOIN "StudySetCopyLink" l ON l."studySetId" = s.id WHERE l.nonce = ${nonce}
+    const [set] = await c.get("db").$queryRaw<SetReaderData[]>`
+      SELECT s.content, u.name AS "ownerName" FROM "StudySet" s
+      JOIN "user" u ON u.id = s."userId"
+      JOIN "StudySetCopyLink" l ON l."studySetId" = s.id WHERE l.nonce = ${nonce}
     `;
-    if (!preview) throw invalidLink();
-    return c.json(decodeStorage(preview));
-  });
-  app.post("/api/shares/import", async (c) => {
-    const { token, requestId } = schema(
-      z.strictObject({ ...tokenBody, requestId: z.uuid() }),
-      await read(c.req.raw, 1024),
-    );
-    const nonce = await verifyLink(token, secret);
-    const { id, created } = await importCopy(
-      c.get("db"),
-      c.get("userId"),
-      nonce,
-      requestId.toLowerCase(),
-    );
-    return c.json({ id }, created ? 201 : 200);
+    if (!set) throw invalidLink();
+    return c.json({
+      content: decodeStorage(set.content),
+      ownerName: set.ownerName,
+    });
   });
   app.get("/api/ownership-invitations", async (c) => {
     return c.json(await readInvitations(c.get("db"), c.get("userId")));
@@ -320,15 +235,34 @@ export function registerSharing(app: Hono<Context>, secret: string) {
     return c.json(
       await c.get("db").$transaction(async (tx) => {
         await lockPrimarySet(tx, setId, ownerId);
-        const removed = await tx.$executeRaw`
-        DELETE FROM "StudySetCoOwner" WHERE "studySetId" = ${setId} AND "userId" = ${userId}
-      `;
-        if (removed)
-          await tx.$executeRaw`
-          UPDATE "Attempt" SET "studySetId" = NULL WHERE "studySetId" = ${setId} AND "userId" = ${userId}
-        `;
+        await revokeCoOwner(tx, setId, userId);
         return readShareSettings(tx, setId, ownerId, secret);
       }),
     );
   });
+}
+
+type WriteDb = Pick<Database, "$executeRaw">;
+export async function setLink(tx: WriteDb, setId: string, enabled: boolean) {
+  if (enabled)
+    await tx.$executeRaw`
+          INSERT INTO "StudySetCopyLink" ("studySetId", nonce) VALUES (${setId}, ${crypto.randomUUID()})
+          ON CONFLICT ("studySetId") DO NOTHING
+        `;
+  else
+    await tx.$executeRaw`DELETE FROM "StudySetCopyLink" WHERE "studySetId" = ${setId}`;
+}
+
+export async function revokeCoOwner(
+  tx: WriteDb,
+  setId: string,
+  userId: string,
+) {
+  const removed = await tx.$executeRaw`
+        DELETE FROM "StudySetCoOwner" WHERE "studySetId" = ${setId} AND "userId" = ${userId}
+      `;
+  if (removed)
+    await tx.$executeRaw`
+          UPDATE "Attempt" SET "studySetId" = NULL WHERE "studySetId" = ${setId} AND "userId" = ${userId}
+        `;
 }

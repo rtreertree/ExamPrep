@@ -1,13 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { ArrowLeft, Printer } from "lucide-react";
-import type {
-  Card,
-  Question,
-  StudyContent as Content,
-} from "../../shared/content";
+import type { StudyContent as Content } from "../../shared/content";
 import { itemsOf } from "../../shared/contentItems";
 import { StudyContent } from "../components/StudyContent";
+import { Solution } from "../components/Solution";
 import { Selector } from "../components/Selector";
 import { Button, ErrorNotice, Field, LoadingRows } from "../components/ui";
 import type { StudySet } from "../lib/api";
@@ -28,7 +25,9 @@ const lineOptions = [0, 2, 4, 6].map((n) => ({
 export default function WorksheetPage() {
   const { id } = useParams();
   const { state } = useLocation();
-  const { data, error, refresh } = useResource<StudySet>(`/sets/${id}`);
+  const { data, error, refresh } = useResource<
+    StudySet & { ownerName: string }
+  >(`/sets/${id}`);
   const editor = `/sets/${id}/edit`;
   const fromEditor = state?.returnTo === editor;
   const fromResults =
@@ -50,7 +49,11 @@ export default function WorksheetPage() {
       {error ? (
         <ErrorNotice error={error} retry={refresh} />
       ) : data ? (
-        <Worksheet key={data.id} content={data.content} />
+        <Worksheet
+          key={data.id}
+          content={data.content}
+          ownerName={data.ownerName}
+        />
       ) : (
         <LoadingRows label="Loading worksheet" />
       )}
@@ -58,7 +61,13 @@ export default function WorksheetPage() {
   );
 }
 
-function Worksheet({ content }: { content: Content }) {
+function Worksheet({
+  content,
+  ownerName,
+}: {
+  content: Content;
+  ownerName: string;
+}) {
   const [layout, setLayout] = useState("prompts");
   const [lines, setLines] = useState(2);
   const items = itemsOf(content);
@@ -110,6 +119,7 @@ function Worksheet({ content }: { content: Content }) {
                 {items.length === 1 ? "" : "s"}
               </p>
               <h2>{content.title}</h2>
+              <p>Owned by {ownerName}</p>
               <StudyContent source={content.description} />
             </header>
             <ol className="worksheet-items" aria-label="Worksheet prompts">
@@ -151,6 +161,7 @@ function Worksheet({ content }: { content: Content }) {
             <header className="worksheet-heading">
               <p>{content.title}</p>
               <h2>Answer key</h2>
+              <p>Owned by {ownerName}</p>
             </header>
             <ol className="worksheet-items">
               {items.map((item) => (
@@ -162,43 +173,6 @@ function Worksheet({ content }: { content: Content }) {
           </section>
         ) : null}
       </article>
-    </>
-  );
-}
-
-function Solution({ item }: { item: Question | Card }) {
-  if ("back" in item) return <StudyContent source={item.back} />;
-  const choice =
-    item.type === "single_choice"
-      ? item.options.findIndex((option) => option.id === item.answer)
-      : -1;
-  return (
-    <>
-      {item.type === "single_choice" ? (
-        <div className="worksheet-solution">
-          <strong>{String.fromCharCode(65 + choice)}.</strong>
-          <StudyContent source={item.options[choice].text} />
-        </div>
-      ) : (
-        <StudyContent source={item.answer} />
-      )}
-      {item.explanation ? (
-        <StudyContent source={item.explanation} label="Explanation" />
-      ) : null}
-      {item.type === "written" && item.rubric ? (
-        <ul aria-label="Marking rubric">
-          {item.rubric.map((criterion) => (
-            <li key={criterion.id}>
-              <div className="worksheet-solution">
-                <strong>
-                  {criterion.points} {criterion.points === 1 ? "pt" : "pts"}
-                </strong>
-                <StudyContent source={criterion.description} />
-              </div>
-            </li>
-          ))}
-        </ul>
-      ) : null}
     </>
   );
 }

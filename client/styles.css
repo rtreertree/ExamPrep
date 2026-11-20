@@ -1689,6 +1689,8 @@ progress::-moz-progress-bar {
     z-index: 30;
   }
   .mobile-header nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     position: absolute;
     top: 64px;
     right: 0;
