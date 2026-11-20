@@ -1,5 +1,6 @@
+import { useOpenAttempt } from "../lib/attemptNavigation";
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import type { Category } from "../../shared/attempts";
 import type { ProgressInsights as Insights } from "../../shared/insights";
 import { Button, ErrorNotice, LoadingRows } from "../components/ui";
@@ -48,7 +49,7 @@ function InsightDetails({
   const { data, error, loading, refresh } = useResource<Insights>(
     setId ? `/insights?setId=${encodeURIComponent(setId)}` : "/insights",
   );
-  const navigate = useNavigate();
+  const openAttempt = useOpenAttempt();
   const [retryError, setRetryError] = useState<Error>();
   const [retrying, setRetrying] = useState(false);
   const returnState = { returnTo };
@@ -62,7 +63,7 @@ function InsightDetails({
         "POST",
         { mode: "mistakes" },
       );
-      navigate(`/practice/${attempt.id}`, { state: returnState });
+      openAttempt(attempt.id, returnTo, attempt);
     } catch (e) {
       setRetryError(e as Error);
     } finally {

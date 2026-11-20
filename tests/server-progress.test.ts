@@ -52,14 +52,36 @@ function fixture(legacy = false) {
   const queries: string[] = [];
   const writes: Record<string, unknown>[] = [];
   const tx = {
-    $executeRaw: async () => 1,
+    $executeRaw: async (strings: TemplateStringsArray, ...args: unknown[]) => {
+      if (strings.join("?").includes('UPDATE "Attempt"')) {
+        const [keys, delta, position, , id, userId, revision] = args;
+        if (
+          record.id !== id ||
+          record.userId !== userId ||
+          record.revision !== revision
+        )
+          return 0;
+        const values = { ...record.responses } as Record<string, unknown>;
+        for (const key of JSON.parse(String(keys))) delete values[key];
+        record.responses = Object.assign(values, JSON.parse(String(delta)));
+        record.position = Number(position);
+        record.revision++;
+        writes.push({ delta });
+      }
+      return 1;
+    },
     $queryRaw: async (
-      strings: TemplateStringsArray,
-      id: string,
-      userId: string,
+      query: TemplateStringsArray | { strings: string[]; values: unknown[] },
+      ...parameters: unknown[]
     ) => {
+      const args =
+        "values" in query && "strings" in query ? query.values : parameters;
+      const strings = "strings" in query ? query.strings : query;
       queries.push(strings.join("?"));
+      const [id, userId] = args.slice(-2);
       if (id !== record.id || userId !== record.userId) return [];
+      if (strings.join("?").includes("SELECT snapshot FROM"))
+        return [await readSnapshot()];
       const { snapshot, ...rest } = record;
       return [structuredClone(rest)];
     },
@@ -112,6 +134,25 @@ async function request(
     body: JSON.stringify(body),
   });
 }
+it("skips the folder list query during library pagination", async () => {
+  const query = vi.fn(async () => []);
+  const app = createApp(
+    config,
+    () =>
+      ({
+        $queryRaw: query,
+        $disconnect: async () => {},
+      }) as unknown as Database,
+  );
+  const original = await app.request("/api/sets?page=1");
+  expect(await original.json()).toMatchObject({ folders: [], courses: [] });
+  expect(query).toHaveBeenCalledTimes(2);
+  query.mockClear();
+  const page = await app.request("/api/sets?page=1&folders=0");
+  expect(await page.json()).toEqual({ items: [], hasMore: false, page: 1 });
+  expect(query).toHaveBeenCalledTimes(1);
+});
+
 describe("progress API trust boundary", () => {
   it("rejects a compact submission when a newer answer and submission were saved elsewhere", async () => {
     const { app, record } = fixture();
@@ -202,6 +243,19 @@ describe("progress API trust boundary", () => {
       status: "completed",
       revision: 4,
     });
+  });
+  it("moves the cursor without selecting or updating saved answers", async () => {
+    const { app, record, writes, queries } = fixture();
+    record.responses = { one: { text: "preserve me" } };
+    const response = await request(app, "/attempts/attempt/progress", {
+      revision: 1,
+      changes: {},
+      position: 1,
+    });
+    expect(response.status).toBe(200);
+    expect(queries[0]).toContain("'{}'::jsonb AS responses");
+    expect(writes[0]).not.toHaveProperty("responses");
+    expect(record.responses).toEqual({ one: { text: "preserve me" } });
   });
   it("validates and upgrades legacy snapshots once, keeping legacy full-map clients working", async () => {
     const { app, readSnapshot, record, writes } = fixture(true);

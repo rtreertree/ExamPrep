@@ -142,6 +142,8 @@ async function planReview(
   setId: string,
   now: Date,
   set: OwnedSet,
+  knownActiveId?: string | null,
+  includePreview = true,
 ) {
   if (set.kind !== "flashcards") throw unavailable();
   const doc = validateContent(decodeStorage(set.content));
@@ -156,7 +158,9 @@ async function planReview(
       WHERE "userId" = ${userId} AND "studySetId" = ${setId} AND "reviewMode"
         AND status = 'completed' AND "completedAt" >= ${today} AND "completedAt" < ${tomorrow}
     `,
-    activeReview(db, userId, setId),
+    knownActiveId === undefined
+      ? activeReview(db, userId, setId)
+      : knownActiveId,
   ]);
   const schedulesById = new Map(schedules.map((row) => [row.cardId, row]));
   const cards = await Promise.all(
@@ -190,14 +194,16 @@ async function planReview(
     activeAttemptId,
     archived: set.archived,
     resetsAt: tomorrow.toISOString(),
-    cards: cards.map(({ card, scheduled }) => ({
-      id: card.id,
-      front:
-        [...card.front].slice(0, 240).join("") +
-        ([...card.front].length > 240 ? "…" : ""),
-      due: !scheduled || scheduled <= now,
-      nextReviewAt: scheduled?.toISOString() ?? null,
-    })),
+    cards: includePreview
+      ? cards.map(({ card, scheduled }) => ({
+          id: card.id,
+          front:
+            [...card.front].slice(0, 240).join("") +
+            ([...card.front].length > 240 ? "…" : ""),
+          due: !scheduled || scheduled <= now,
+          nextReviewAt: scheduled?.toISOString() ?? null,
+        }))
+      : [],
   };
   return { queue, due, doc, revision: set.revision };
 }
@@ -240,10 +246,17 @@ export async function changeReviewLimit(
         WHERE "studySetId" = ${setId} AND "userId" = ${userId}
       `;
     return (
-      await planReview(tx, userId, setId, new Date(), {
-        ...set,
-        reviewLimit: limit,
-      })
+      await planReview(
+        tx,
+        userId,
+        setId,
+        new Date(),
+        {
+          ...set,
+          reviewLimit: limit,
+        },
+        null,
+      )
     ).queue;
   });
 }
@@ -255,6 +268,9 @@ export async function startSpacedReview(
 ) {
   return db.$transaction(async (tx) => {
     const set = await readLockedOwnedSet(tx, setId, userId);
+    if (set.kind !== "flashcards") throw unavailable();
+    const activeId = await activeReview(tx, userId, setId);
+    if (activeId) return { id: activeId, started: false as const };
     const now = new Date();
     const { queue, due, doc, revision } = await planReview(
       tx,
@@ -262,9 +278,9 @@ export async function startSpacedReview(
       setId,
       now,
       set,
+      null,
+      false,
     );
-    if (queue.activeAttemptId)
-      return { id: queue.activeAttemptId, started: false };
     if (!queue.available)
       throw new HTTPException(409, {
         message: queue.archived
@@ -294,6 +310,10 @@ export async function startSpacedReview(
       },
     });
     await markStudied(tx, userId, setId, now);
-    return { id: attempt.id, started: true };
+    return {
+      id: attempt.id,
+      started: true as const,
+      attempt: decodeStorage(attempt),
+    };
   });
 }

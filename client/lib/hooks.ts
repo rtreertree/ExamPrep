@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 export function useResource<T>(path: string | null) {
   const [response, setResponse] = useState<{ path: string; data: T }>();
@@ -8,11 +8,21 @@ export function useResource<T>(path: string | null) {
     error?: Error;
   }>();
   const [version, setVersion] = useState(0);
+  const request = useRef<{
+    path: string;
+    version: number;
+    promise: Promise<T>;
+  } | null>(null);
   useEffect(() => {
     let live = true;
     setSettled(undefined);
-    if (path === null) return;
-    api<T>(path)
+    if (path === null) {
+      request.current = null;
+      return;
+    }
+    if (request.current?.path !== path || request.current.version !== version)
+      request.current = { path, version, promise: api<T>(path) };
+    request.current.promise
       .then((d) => {
         if (!live) return;
         setResponse({ path, data: d });

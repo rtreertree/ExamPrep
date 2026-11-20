@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { readInsights } from "../server/insights";
 import type { Database } from "../server/db";
 import { progressContent } from "../server/snapshots";
-import { cardFingerprint, nextCardReview } from "../server/spacedReview";
+import {
+  cardFingerprint,
+  nextCardReview,
+  startSpacedReview,
+} from "../server/spacedReview";
 import type { StudyContent } from "../shared/content";
 
 describe("spaced review intervals", () => {
@@ -71,4 +75,20 @@ it("clears the next retry suggestion after success without hiding recurring mist
       { attemptId: "second", itemId: "verb", prompt: "hablar", misses: 2 },
     ],
   });
+});
+
+it("returns an active spaced review after the lock and access checks", async () => {
+  const query = vi
+    .fn()
+    .mockResolvedValueOnce([{ id: "deck" }])
+    .mockResolvedValueOnce([{ id: "deck", kind: "flashcards" }])
+    .mockResolvedValueOnce([{ id: "active" }]);
+  const db = {
+    $transaction: (run: (tx: unknown) => unknown) => run({ $queryRaw: query }),
+  } as unknown as Database;
+  expect(await startSpacedReview(db, "student", "deck")).toEqual({
+    id: "active",
+    started: false,
+  });
+  expect(query).toHaveBeenCalledTimes(3);
 });

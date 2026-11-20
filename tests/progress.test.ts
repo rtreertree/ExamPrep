@@ -8,6 +8,7 @@ import {
 import { validateContent, type StudyContent } from "../shared/content";
 import { encodeStorage, decodeStorage } from "../server/storage";
 import { progressContent, readProgressContent } from "../server/snapshots";
+import { progressBatch } from "../client/lib/useAttempt";
 import { safeDiagnostic } from "../server/diagnostics";
 
 const doc: StudyContent = validateContent({
@@ -46,6 +47,21 @@ describe("bounded v1 progress", () => {
     expect(
       new TextEncoder().encode(JSON.stringify(responses)).length,
     ).toBeGreaterThan(8 * 1024 * 1024);
+    const pending = Object.entries(responses);
+    const sizes: number[] = [];
+    while (pending.length) {
+      const changes = progressBatch(pending, 1, 0);
+      const count = Object.keys(changes).length;
+      expect(count).toBeGreaterThan(0);
+      sizes.push(
+        new TextEncoder().encode(
+          JSON.stringify({ revision: 1, changes, position: 0 }),
+        ).length,
+      );
+      expect(Object.entries(changes)).toEqual(pending.splice(0, count));
+    }
+    expect(sizes.length).toBeGreaterThan(1);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(8 * 1024 * 1024);
     expect(decodeStorage(encodeStorage(responses))).toEqual(responses);
     expect(
       grade(readProgressContent(progressContent(doc)), responses).result

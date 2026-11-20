@@ -30,7 +30,7 @@ import {
   resolveProgressRules,
 } from "./snapshots";
 import { recordSpacedReview } from "./spacedReview";
-import { decodeStorage } from "./storage";
+import { decodeStorage, encodeStorage, encodeStorageKey } from "./storage";
 
 export function registerAttemptRoutes(app: Hono<Context>) {
   app.post("/api/sets/:id/attempts", async (c) => {
@@ -101,12 +101,27 @@ export function registerAttemptRoutes(app: Hono<Context>) {
     const db = c.get("db");
     const where = { id: c.req.param("id"), userId: c.get("userId") };
     const attempt = await db.$transaction(async (tx) => {
-      const current = await readAttemptProgress(tx, where.id, where.userId);
+      const keys =
+        "changes" in input ? Object.keys(input.changes as object) : undefined;
+      const storedKeys = keys && keys.map(encodeStorageKey);
+      const positionOnly = keys?.length === 0;
+      const current = await readAttemptProgress(
+        tx,
+        where.id,
+        where.userId,
+        storedKeys,
+      );
       if (!current) throw unavailable();
       if (current.revision !== input.revision) throw conflict();
       const { rules: snapshot, needsUpgrade } = await resolveProgressRules(
         current,
-        async () => (await tx.attempt.findFirstOrThrow({ where })).snapshot,
+        async () => {
+          const [row] = await tx.$queryRaw<{ snapshot: unknown }[]>`
+            SELECT snapshot FROM "Attempt" WHERE id = ${where.id} AND "userId" = ${where.userId}
+          `;
+          if (!row) throw unavailable();
+          return row.snapshot;
+        },
       );
       const responses =
         "changes" in input
@@ -125,7 +140,9 @@ export function registerAttemptRoutes(app: Hono<Context>) {
               input.position,
             );
       const scored =
-        current.status === "reviewing" ? grade(snapshot, responses) : undefined;
+        current.status === "reviewing" && !positionOnly
+          ? grade(snapshot, responses)
+          : undefined;
       const position =
         current.status === "completed" ? current.position : input.position;
       const now = new Date();
@@ -135,28 +152,48 @@ export function registerAttemptRoutes(app: Hono<Context>) {
         (await markStudied(tx, where.userId, current.studySetId, now))
           ? current.studySetId
           : null;
-      const changed = await tx.attempt.updateMany({
-        where: { ...where, revision: input.revision, status: current.status },
-        data: {
-          ...(needsUpgrade
-            ? {
-                snapshotVersion: SNAPSHOT_VERSION,
-                progressContent: json(snapshot),
-              }
-            : {}),
-          responses: json(responses),
-          position,
-          revision: { increment: 1 },
-          ...(scored
-            ? {
-                result: json(scored.result),
-                status: scored.status,
-                completedAt: scored.status === "completed" ? now : null,
-              }
-            : {}),
-        },
-      });
-      if (!changed.count) throw conflict();
+      let updated: number;
+      if (keys?.length && current.status === "in_progress" && !needsUpgrade) {
+        // The projected map contains only validated replacements. Remove every
+        // touched key first so null deltas delete the corresponding answer.
+        updated = await tx.$executeRaw`
+          UPDATE "Attempt" SET responses = (responses - ARRAY(
+            SELECT jsonb_array_elements_text(${JSON.stringify(storedKeys)}::jsonb)
+          )) || ${JSON.stringify(encodeStorage(responses))}::jsonb,
+            position = ${position}, revision = revision + 1, "updatedAt" = ${now}
+          WHERE id = ${where.id} AND "userId" = ${where.userId}
+            AND revision = ${input.revision} AND status = 'in_progress'
+        `;
+      } else {
+        updated = (
+          await tx.attempt.updateMany({
+            where: {
+              ...where,
+              revision: input.revision,
+              status: current.status,
+            },
+            data: {
+              ...(needsUpgrade
+                ? {
+                    snapshotVersion: SNAPSHOT_VERSION,
+                    progressContent: json(snapshot),
+                  }
+                : {}),
+              ...(!positionOnly ? { responses: json(responses) } : {}),
+              position,
+              revision: { increment: 1 },
+              ...(scored
+                ? {
+                    result: json(scored.result),
+                    status: scored.status,
+                    completedAt: scored.status === "completed" ? now : null,
+                  }
+                : {}),
+            },
+          })
+        ).count;
+      }
+      if (!updated) throw conflict();
       return "changes" in input
         ? {
             ...metadataOnly(current),

@@ -17,6 +17,29 @@ import {
   type PracticeCheckpoint,
 } from "./practiceRecovery";
 
+export function progressBatch(
+  entries: [string, Responses[string] | null][],
+  revision: number,
+  position: number,
+) {
+  const bytes = new TextEncoder();
+  let size = bytes.encode(
+    JSON.stringify({ revision, changes: {}, position }),
+  ).length;
+  const changes: Record<string, Responses[string] | null> = Object.create(null);
+  for (const [index, [id, value]] of entries.entries()) {
+    const entry = JSON.stringify({ [id]: value });
+    size += bytes.encode(entry).length - 2 + Number(index > 0);
+    if (size > 8 * 1024 * 1024) {
+      if (!index)
+        throw new ApiError("This answer exceeds the save limit.", 413);
+      break;
+    }
+    changes[id] = value;
+  }
+  return changes;
+}
+
 export function useAttempt(initial: Attempt, userId: string) {
   const [attempt, setAttempt] = useState(initial);
   const base = useRef(initial);
@@ -134,6 +157,8 @@ export function useAttempt(initial: Attempt, userId: string) {
       setRecoveryError(error as Error);
     }
   }
+  const jumping = useRef<number | undefined>(undefined);
+  const manualDraft = useRef(false);
   function change(
     nextResponses: Responses,
     nextPosition = desired.current.position,
@@ -150,7 +175,7 @@ export function useAttempt(initial: Attempt, userId: string) {
     }
     desired.current = {
       responses: nextResponses,
-      position: nextPosition,
+      position: jumping.current ?? nextPosition,
       generation: desired.current.generation + 1,
     };
     setResponses(nextResponses);
@@ -158,17 +183,17 @@ export function useAttempt(initial: Attempt, userId: string) {
     setDirty(true);
     setStatus("Unsaved changes");
     saveCheckpoint();
-    clearTimeout(timer.current);
-    if (!blocked.current && immediate !== "manual")
-      timer.current = setTimeout(
-        () => {
-          void flush();
-        },
-        immediate ? 0 : 500,
-      );
+    manualDraft.current = immediate === "manual";
+    if (manualDraft.current) {
+      clearTimeout(timer.current);
+      timer.current = undefined;
+    } else if (!blocked.current && !timer.current)
+      timer.current = setTimeout(() => void flush(), 2000);
   }
   async function flush(): Promise<boolean> {
     clearTimeout(timer.current);
+    timer.current = undefined;
+    if (manualDraft.current) return false;
     if (running.current) {
       const ok = await running.current;
       if (!ok) return false;
@@ -181,6 +206,7 @@ export function useAttempt(initial: Attempt, userId: string) {
       setError(undefined);
       try {
         while (confirmed.current < desired.current.generation) {
+          if (manualDraft.current) return false;
           const captured = desired.current;
           const entries = Object.entries(
             responseChanges(base.current.responses, captured.responses),
@@ -201,17 +227,19 @@ export function useAttempt(initial: Attempt, userId: string) {
             confirmed.current = captured.generation;
             continue;
           }
-          // A single legal response remains far below the request cap, even when
-          // every Unicode character needs JSON escaping. Drain all edits before leaving.
-          const changes = Object.fromEntries(entries.slice(0, 1));
+          const changes = progressBatch(
+            entries,
+            base.current.revision,
+            captured.position,
+          );
           for (const id of Object.keys(changes))
             unacknowledged.current.ids.add(id);
           if (base.current.position !== captured.position)
             unacknowledged.current.position = true;
-          const savedResponses = mergeResponses(
-            base.current.responses,
-            changes,
-          );
+          const completeBatch = entries.length === Object.keys(changes).length;
+          const savedResponses = completeBatch
+            ? captured.responses
+            : mergeResponses(base.current.responses, changes);
           const metadata = await api<Omit<Attempt, "snapshot" | "responses">>(
             `/attempts/${initial.id}/progress`,
             "PATCH",
@@ -229,7 +257,7 @@ export function useAttempt(initial: Attempt, userId: string) {
           };
           base.current = updated;
           setAttempt(updated);
-          if (entries.length <= 1) confirmed.current = captured.generation;
+          if (completeBatch) confirmed.current = captured.generation;
           if (confirmed.current < desired.current.generation) saveCheckpoint();
         }
         const restored = restoreSources.current;
@@ -262,9 +290,38 @@ export function useAttempt(initial: Attempt, userId: string) {
     return running.current;
   }
   async function moveTo(index: number) {
-    if (submittingRef.current || !(await flush())) return false;
-    // Read desired here, after the wait, never a render-captured response map.
-    change(desired.current.responses, index);
+    if (submittingRef.current) return false;
+    if (base.current.status === "completed") {
+      if (!(await flush())) return false;
+      change(desired.current.responses, index);
+      return true;
+    }
+    if (
+      !running.current &&
+      !blocked.current &&
+      desired.current.responses === base.current.responses
+    ) {
+      change(desired.current.responses, index);
+      return true;
+    }
+    jumping.current = index;
+    desired.current = {
+      ...desired.current,
+      position: index,
+      generation: desired.current.generation + 1,
+    };
+    setDirty(true);
+    saveCheckpoint();
+    try {
+      if (!(await flush())) {
+        desired.current = { ...desired.current, position };
+        saveCheckpoint();
+        return false;
+      }
+      setPosition(index);
+    } finally {
+      jumping.current = undefined;
+    }
     return true;
   }
   async function submit(): Promise<boolean> {

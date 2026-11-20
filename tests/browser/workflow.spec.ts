@@ -98,6 +98,7 @@ test("complete study workflow, recovery, partial credit, flashcards, responsive 
   await page
     .getByRole("link", { name: "Calculus practice", exact: true })
     .click();
+  await page.getByText("Set details", { exact: true }).click();
   await page
     .getByLabel("Title", { exact: true })
     .fill("Calculus practice — local draft");
@@ -115,6 +116,7 @@ test("complete study workflow, recovery, partial credit, flashcards, responsive 
   await expect(page.getByLabel("Title", { exact: true })).toHaveValue(
     "Calculus practice — local draft",
   );
+  await page.getByText("Set details", { exact: true }).click();
   await page.getByLabel("Title", { exact: true }).fill("Calculus practice");
   // Round-trip editing keeps stable IDs. Capture editor on the rubric question.
   await page.getByRole("button", { name: /02.*Differentiate/ }).click();
@@ -375,6 +377,7 @@ test("server conflicts preserve editor work; save failures retain practice input
     await page.reload();
     const saved = await request("/sets", "POST", JSON.parse(exam));
     await page.goto(`/sets/${saved.id}/edit`);
+    await page.getByText("Set details", { exact: true }).click();
     await page.getByLabel("Title", { exact: true }).fill("My preserved edits");
     await expect(
       page.getByText("Draft saved on this device", { exact: true }),

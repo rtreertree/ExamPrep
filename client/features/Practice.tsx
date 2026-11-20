@@ -1,13 +1,8 @@
+import { useOpenAttempt, useInitialAttempt } from "../lib/attemptNavigation";
 import { Selector } from "../components/Selector";
 import { NotationEditor } from "../components/NotationEditor";
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Link,
-  useBlocker,
-  useLocation,
-  useNavigate,
-  useParams,
-} from "react-router-dom";
+import { Link, useBlocker, useLocation, useParams } from "react-router-dom";
 import { ArrowLeft, ArrowRight, Flag, List } from "lucide-react";
 import { itemsOf } from "../../shared/content";
 import {
@@ -46,7 +41,11 @@ import {
 import { summarizePractice } from "./practiceSummary";
 import "./exam-practice.css";
 export function PracticePage() {
+  return <PracticeRoute key={useLocation().key} />;
+}
+function PracticeRoute() {
   const { id } = useParams();
+  const initial = useInitialAttempt(id);
   const previous = useLocation().state?.returnTo;
   const returnTo =
     typeof previous === "string" &&
@@ -58,9 +57,13 @@ export function PracticePage() {
     : returnTo.startsWith("/review/")
       ? "Review queue"
       : "Library";
-  const { data, error, loading, refresh } = useResource<Attempt>(
-    `/attempts/${id}`,
-  );
+  const {
+    data: fetched,
+    error,
+    loading,
+    refresh,
+  } = useResource<Attempt>(initial ? null : `/attempts/${id}`);
+  const data = initial ?? fetched;
   if (loading)
     return (
       <div className="focus-loading">
@@ -101,7 +104,7 @@ function Practice({
   const itemIds = useMemo(() => items.map((item) => item.id), [items]);
   const item = items[position];
   const r = own(responses, item.id);
-  const navigate = useNavigate();
+  const openAttempt = useOpenAttempt();
   const [confirm, setConfirm] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [createReviewSet, setCreateReviewSet] = useState(false);
@@ -186,7 +189,6 @@ function Practice({
       [item.id]: { ...r, revealed: true, rating },
     };
     state.change(values, Math.min(position + 1, items.length - 1));
-    await state.flush();
   }
   async function retry(mode: RetryMode) {
     if (retrying) return;
@@ -197,7 +199,7 @@ function Practice({
       const next = await api<Attempt>(`/attempts/${attempt.id}/retry`, "POST", {
         mode,
       });
-      navigate(`/practice/${next.id}`, { state: { returnTo } });
+      openAttempt(next.id, returnTo, next);
     } catch (e) {
       setRetryError(e as Error);
     } finally {
@@ -633,7 +635,6 @@ function Practice({
                       };
                       state.change(values, lastRating.index);
                       setLastRating(undefined);
-                      await state.flush();
                     }}
                   >
                     Undo last rating

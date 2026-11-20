@@ -244,12 +244,20 @@ export function SetSharing({
   );
 }
 
-export function OwnershipInvitations({ onAccept }: { onAccept: () => void }) {
-  const resource = useResource<OwnershipInvitation[]>("/ownership-invitations");
+export function OwnershipInvitations({
+  onAccept,
+  invitations,
+  onRemoved,
+  refresh,
+}: {
+  onAccept: () => void;
+  invitations: OwnershipInvitation[];
+  onRemoved: (id: string) => void;
+  refresh: () => void;
+}) {
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<Error>();
   const [status, setStatus] = useState("");
-  const invitations = resource.data ?? [];
 
   async function respond(invitation: OwnershipInvitation, accept: boolean) {
     setBusy(invitation.id);
@@ -259,7 +267,7 @@ export function OwnershipInvitations({ onAccept }: { onAccept: () => void }) {
       await api(`/ownership-invitations/${invitation.id}/respond`, "POST", {
         accept,
       });
-      resource.setData(invitations.filter(({ id }) => id !== invitation.id));
+      onRemoved(invitation.id);
       setStatus(
         accept
           ? `You now co-own “${invitation.title}”.`
@@ -268,23 +276,20 @@ export function OwnershipInvitations({ onAccept }: { onAccept: () => void }) {
       if (accept) onAccept();
     } catch (error) {
       setError(error as Error);
-      if (error instanceof ApiError && error.status === 404) resource.refresh();
+      if (error instanceof ApiError && error.status === 404) refresh();
     } finally {
       setBusy(undefined);
     }
   }
 
-  if (!invitations.length && !status && !error && !resource.error) return null;
+  if (!invitations.length && !status && !error) return null;
   return (
     <section
       className="sharing-invitations stack"
       aria-label="Ownership invitations"
     >
       <h2>Ownership invitations</h2>
-      <ErrorNotice
-        error={error ?? resource.error}
-        retry={resource.error ? resource.refresh : undefined}
-      />
+      <ErrorNotice error={error} />
       {invitations.length ? (
         <ul className="sharing-people">
           {invitations.map((invitation) => (

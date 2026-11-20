@@ -36,8 +36,10 @@ test("manages a copy link and pending co-owners from the library and editor", as
       return route.fulfill({
         json: { user: { id: "primary", email: "owner@example.test" } },
       });
-    if (path === "/api/ownership-invitations")
-      return route.fulfill({ json: [] });
+    if (path === "/api/library/context")
+      return route.fulfill({
+        json: { folders: [], invitations: [], suggestion: null },
+      });
     if (path === "/api/sets")
       return route.fulfill({ json: { items: [source], courses: [], page: 0 } });
     if (path === "/api/sets/original") return route.fulfill({ json: source });
@@ -155,18 +157,22 @@ test("accepts a pending invitation and shows the co-owned set without owner-only
       return route.fulfill({
         json: { user: { id: "reader", email: "reader@example.test" } },
       });
-    if (path === "/api/ownership-invitations")
+    if (path === "/api/library/context")
       return route.fulfill({
-        json: accepted
-          ? []
-          : [
-              {
-                id: "invitation",
-                title: source.title,
-                kind: source.kind,
-                ownerEmail: "owner@example.test",
-              },
-            ],
+        json: {
+          folders: [],
+          suggestion: null,
+          invitations: accepted
+            ? []
+            : [
+                {
+                  id: "invitation",
+                  title: source.title,
+                  kind: source.kind,
+                  ownerEmail: "owner@example.test",
+                },
+              ],
+        },
       });
     if (path === "/api/ownership-invitations/invitation/respond") {
       expect(route.request().postDataJSON()).toEqual({ accept: true });

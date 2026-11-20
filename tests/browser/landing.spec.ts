@@ -22,11 +22,8 @@ test("the landing page renders during session lookup and opens the signed-in lib
       json: { items: [], folders: [], page: 0, hasMore: false },
     }),
   );
-  await page.route("**/api/study/next", (route) =>
-    route.fulfill({ json: null }),
-  );
-  await page.route("**/api/ownership-invitations", (route) =>
-    route.fulfill({ json: [] }),
+  await page.route("**/api/library/context?**", (route) =>
+    route.fulfill({ json: { folders: [], invitations: [], suggestion: null } }),
   );
 
   const landing = page.getByRole("heading", { name: "Study on your terms." });

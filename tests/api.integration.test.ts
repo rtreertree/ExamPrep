@@ -68,6 +68,9 @@ describe.skipIf(!enabled)(
     });
     afterAll(async () => {
       await db!.user.deleteMany({ where: { email: { in: emails } } });
+      expect(await db!.user.count({ where: { email: { in: emails } } })).toBe(
+        0,
+      );
       await db!.$disconnect();
     });
     it("creates one review set per save request and scopes retries to the account", async () => {
@@ -104,6 +107,20 @@ describe.skipIf(!enabled)(
       const grouped = "/sets?course=Study%20skills&sort=studied";
       let library = (await a(grouped)).value;
       expect(library.courses).toContain("Study skills");
+      expect((await a(grouped + "&folders=0")).value).not.toHaveProperty(
+        "folders",
+      );
+      const context = (
+        await a("/library/context?include=folders,invitations,suggestion")
+      ).value;
+      expect(context.folders).toContainEqual(
+        expect.objectContaining({ name: "Study skills" }),
+      );
+      expect(context.invitations).toEqual([]);
+      expect(context.suggestion).toMatchObject({
+        type: "resume",
+        id: initial.id,
+      });
       expect(library.items[0]).toMatchObject({
         id: set.id,
         revision: 1,
@@ -520,6 +537,64 @@ describe.skipIf(!enabled)(
       });
       expect(forbidden.status).toBe(403);
     }, 120000);
+    it("merges batched maximum-length answers, upgrades legacy progress and preserves concurrent edits", async () => {
+      const snapshot = {
+        schemaVersion: 1,
+        kind: "exam",
+        title: "Delta checks",
+        questions: ["__proto__", "second", "third"].map((id) => ({
+          id,
+          type: "written",
+          prompt: "Prompt",
+          answer: "Reference",
+        })),
+      };
+      const legacy = await db!.attempt.create({ data: { userId, snapshot } });
+      const path = `/attempts/${legacy.id}`;
+      const answer = "🦊".repeat(20_000);
+      const first = await a(path + "/progress", "PATCH", {
+        revision: 1,
+        position: 1,
+        changes: {
+          ["__proto__"]: { text: answer },
+          second: { text: "old" },
+          third: { text: "keep" },
+        },
+      });
+      expect(first.status).toBe(200);
+      expect(
+        (
+          await db!.attempt.findUniqueOrThrow({
+            where: { id: legacy.id },
+            select: { snapshotVersion: true },
+          })
+        ).snapshotVersion,
+      ).toBe(1);
+      const changes = {
+        ["__proto__"]: { text: answer, flagged: true },
+        second: null,
+      };
+      const competing = await Promise.all(
+        [0, 1].map((position) =>
+          a(path + "/progress", "PATCH", { revision: 2, position, changes }),
+        ),
+      );
+      expect(competing.map((row) => row.status).sort()).toEqual([200, 409]);
+      expect(
+        (
+          await a(path + "/progress", "PATCH", {
+            revision: 3,
+            position: 2,
+            changes: {},
+          })
+        ).status,
+      ).toBe(200);
+      expect((await a(path)).value.responses).toEqual({
+        ["__proto__"]: { text: answer, flagged: true },
+        third: { text: "keep" },
+      });
+    }, 60000);
+
     it("persists flashcard reveal/rating, validates early completion, and selects exactly Review again", async () => {
       const set = (await a("/sets", "POST", deck)).value;
       let attempt = (await a(`/sets/${set.id}/attempts`, "POST", {})).value;
@@ -1150,6 +1225,16 @@ describe.skipIf(!enabled)(
       const starts = await Promise.all([a(review, "POST", {}), a(review, "POST", {})]);
       expect(starts.map((response) => response.status).sort()).toEqual([200, 201]);
       expect(starts[0].value.id).toBe(starts[1].value.id);
+      expect(
+        starts.find((row) => row.status === 201)?.value.attempt,
+      ).toMatchObject({
+        id: starts[0].value.id,
+        reviewMode: true,
+        snapshot: { cards: [content.cards[0]] },
+      });
+      expect(starts.find((row) => row.status === 200)?.value).toEqual({
+        id: starts[0].value.id,
+      });
       const path = `/attempts/${starts[0].value.id}`;
       expect((await a(path)).value).toMatchObject({ reviewMode: true, snapshot: { cards: [content.cards[0]] } });
       expect((await a(review, "PATCH", { limit: 2 })).status).toBe(409);

@@ -1,8 +1,14 @@
+import { useOpenAttempt } from "../lib/attemptNavigation";
 import { useId, useState } from "react";
-import { useNavigate } from "react-router-dom";
+
 import { itemsOf } from "../../shared/contentItems";
 import type { PracticeSettings } from "../../shared/attempts";
-import { api, type StudySet, type StudySetMetadata } from "../lib/api";
+import {
+  api,
+  type Attempt,
+  type StudySet,
+  type StudySetMetadata,
+} from "../lib/api";
 import { Selector } from "./Selector";
 import { Button, Dialog, ErrorNotice, Field } from "./ui";
 import "./practice-setup.css";
@@ -60,7 +66,7 @@ function PracticeSetupForm({
   const [minutes, setMinutes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error>();
-  const navigate = useNavigate();
+  const openAttempt = useOpenAttempt();
   const presetId = useId();
   const isExam = set.kind === "exam";
   const item = isExam ? "question" : "card";
@@ -107,12 +113,12 @@ function PracticeSetupForm({
           }
         : presets[preset];
     try {
-      const attempt = await api<{ id: string }>(
+      const attempt = await api<Attempt>(
         `/sets/${set.id}/attempts`,
         "POST",
         settings,
       );
-      navigate(`/practice/${attempt.id}`, { state: { returnTo } });
+      openAttempt(attempt.id, returnTo, attempt);
     } catch (e) {
       setError(e as Error);
     } finally {

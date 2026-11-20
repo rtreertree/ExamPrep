@@ -1,5 +1,6 @@
+import { useOpenAttempt } from "../lib/attemptNavigation";
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { MAX_DAILY_REVIEWS, type ReviewQueue } from "../../shared/spacedReview";
 import {
   Button,
@@ -9,7 +10,7 @@ import {
   LoadingRows,
   PageHeader,
 } from "../components/ui";
-import { api } from "../lib/api";
+import { api, type Attempt } from "../lib/api";
 import { useResource } from "../lib/hooks";
 import "./studyProgress.css";
 
@@ -23,7 +24,7 @@ export function DueReviewPage() {
   const path = `/sets/${id}/review`;
   const { data, setData, error, loading, refresh } =
     useResource<ReviewQueue>(path);
-  const navigate = useNavigate();
+  const openAttempt = useOpenAttempt();
   const [startError, setStartError] = useState<Error>();
   const [starting, setStarting] = useState(false);
   const returnState = { returnTo: `/review/${id}` };
@@ -32,8 +33,12 @@ export function DueReviewPage() {
     setStarting(true);
     setStartError(undefined);
     try {
-      const attempt = await api<{ id: string }>(path, "POST", {});
-      navigate(`/practice/${attempt.id}`, { state: returnState });
+      const attempt = await api<{ id: string; attempt?: Attempt }>(
+        path,
+        "POST",
+        {},
+      );
+      openAttempt(attempt.id, returnState.returnTo, attempt.attempt);
     } catch (e) {
       setStartError(e as Error);
       refresh();

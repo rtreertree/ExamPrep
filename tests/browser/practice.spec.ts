@@ -58,7 +58,10 @@ async function fixture(page: Page, doc: StudyContent = content) {
       return route.fulfill({
         json: { user: { id: "owner", email: "owner@example.test" } },
       });
-    if (path === "/ownership-invitations") return route.fulfill({ json: [] });
+    if (path === "/library/context")
+      return route.fulfill({
+        json: { folders: [], invitations: [], suggestion: null },
+      });
     if (path === "/sets")
       return route.fulfill({
         json: {
@@ -249,21 +252,25 @@ test("resumes the account-wide suggestion, handles failures, and keeps the actio
   attempt.snapshot = { ...attempt.snapshot, title: "Biology midterm" };
   let status = 200;
   let assessing = false;
-  await page.route("**/api/study/next", (route) =>
+  await page.route("**/api/library/context?**", (route) =>
     route.fulfill({
       status,
       json:
         status === 200
           ? {
-              type: "resume",
-              id: attempt.id,
-              title: attempt.snapshot.title,
-              kind: "exam",
-              status: assessing ? "reviewing" : "in_progress",
-              position: attempt.position,
-              total: 3,
-              pendingCount: assessing ? 1 : null,
-              reviewMode: false,
+              folders: [],
+              invitations: [],
+              suggestion: {
+                type: "resume",
+                id: attempt.id,
+                title: attempt.snapshot.title,
+                kind: "exam",
+                status: assessing ? "reviewing" : "in_progress",
+                position: attempt.position,
+                total: 3,
+                pendingCount: assessing ? 1 : null,
+                reviewMode: false,
+              },
             }
           : { error: "Suggestion unavailable" },
     }),
@@ -327,9 +334,11 @@ test("resumes the account-wide suggestion, handles failures, and keeps the actio
     .fill("practice");
   await expect(suggestion).toHaveCount(0);
   await expect(page).toHaveURL(/search=practice/);
-  status = 503;
-  const failure = page.waitForResponse("**/api/study/next");
   await page.getByRole("button", { name: "Remove search filter" }).click();
+  await expect(suggestion).toBeVisible();
+  status = 503;
+  const failure = page.waitForResponse("**/api/library/context?**");
+  await page.reload();
   expect((await failure).status()).toBe(503);
   await expect(suggestion).toHaveCount(0);
   await expect(
@@ -372,22 +381,33 @@ for (const [doc, preset, settings] of [
     const api = await fixture(page, doc);
     const useSuggestion = doc.kind === "exam" && preset === "Full set";
     if (useSuggestion) {
-      await page.route("**/api/study/next", (route) =>
+      await page.route("**/api/library/context?**", (route) =>
         route.fulfill({
           json: {
-            type: "practice",
-            set: {
-              id: "set",
-              title: doc.title,
-              kind: doc.kind,
-              count: itemsOf(doc).length,
+            folders: [],
+            invitations: [],
+            suggestion: {
+              type: "practice",
+              set: {
+                id: "set",
+                title: doc.title,
+                kind: doc.kind,
+                count: itemsOf(doc).length,
+              },
             },
           },
         }),
       );
     }
+    const gets: string[] = [];
     const requests: string[] = [];
     page.on("request", (request) => {
+      if (
+        request.method() === "GET" &&
+        request.url().includes("/api/") &&
+        !request.url().includes("/auth/")
+      )
+        gets.push(new URL(request.url()).pathname);
       if (
         request.method() === "POST" &&
         request.url().endsWith("/sets/set/attempts")
@@ -424,9 +444,74 @@ for (const [doc, preset, settings] of [
       .click();
     await expect(page).toHaveURL(/\/practice\/custom$/);
     expect(requests).toHaveLength(1);
+    await expect(
+      page.getByText("Saved to your account", { exact: true }),
+    ).toBeVisible();
+    expect(gets.sort()).toEqual(["/api/library/context", "/api/sets"]);
+    await page.reload();
+    await expect(
+      page.getByText("Saved to your account", { exact: true }),
+    ).toBeVisible();
+    expect(gets.at(-1)).toBe("/api/attempts/custom");
     expect(api.starts()).toEqual(settings);
   });
 }
+
+test("syncs within two seconds of the first edit during continuous typing", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.goto("/practice/original");
+  const answer = page.getByLabel("Your answer", { exact: true });
+  await expect(answer).toBeVisible();
+  const start = new Date("2026-11-01T00:00:00Z");
+  await page.clock.install({ time: start });
+  await page.clock.pauseAt(new Date(start.getTime() + 1000));
+  const writes: unknown[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/progress"))
+      writes.push(request.postDataJSON());
+  });
+  await answer.fill("First");
+  await page.clock.runFor(1500);
+  await answer.fill("Still typing");
+  expect(writes).toHaveLength(0);
+  await page.clock.runFor(500);
+  await expect.poll(() => writes).toHaveLength(1);
+  expect(writes[0]).toMatchObject({
+    changes: { one: { text: "Still typing" } },
+  });
+});
+
+test("saves a burst of edits and a question jump in one request", async ({
+  page,
+}) => {
+  const api = await fixture(page);
+  const writes: unknown[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/progress"))
+      writes.push(request.postDataJSON());
+  });
+  await page.goto("/practice/original");
+  await page.getByLabel("Your answer", { exact: true }).fill("First draft");
+  await page.getByRole("button", { name: "Flag for later" }).click();
+  await page.getByLabel("Your answer", { exact: true }).fill("Final answer");
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Question 2 of 3" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Saved to your account", { exact: true }),
+  ).toBeVisible();
+  expect(writes).toEqual([
+    {
+      revision: 1,
+      position: 1,
+      changes: { one: { text: "Final answer", flagged: true } },
+    },
+  ]);
+  expect(api.records.get("original")?.position).toBe(1);
+});
 
 test("leads a perfect result back to the Library", async ({ page }) => {
   const api = await fixture(page);

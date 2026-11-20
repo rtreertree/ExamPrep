@@ -1,3 +1,4 @@
+import { sqltag as sql } from "@prisma/client/runtime/wasm-compiler-edge";
 import type { Database } from "./db";
 import type { Attempt } from "../generated/prisma/client";
 import { z } from "zod";
@@ -124,12 +125,21 @@ export async function readAttemptProgress(
   db: Pick<Database, "$queryRaw">,
   id: string,
   userId: string,
+  changedKeys?: string[],
 ) {
-  const rows = await db.$queryRaw<Omit<Attempt, "snapshot">[]>`
+  let answers = sql`responses`;
+  if (changedKeys?.length === 0) answers = sql`'{}'::jsonb`;
+  else if (changedKeys)
+    answers = sql`CASE WHEN status = 'in_progress' AND "snapshotVersion" = 1
+      THEN (SELECT COALESCE(jsonb_object_agg(k, responses->k), '{}'::jsonb)
+        FROM jsonb_array_elements_text(${JSON.stringify(changedKeys)}::jsonb) k WHERE responses ? k)
+      ELSE responses END`;
+  const rows = await db.$queryRaw<Omit<Attempt, "snapshot">[]>(sql`
     SELECT id, "userId", "studySetId", "sourceAttemptId", status, position, result,
-      revision, "startedAt", "updatedAt", "completedAt", responses, "snapshotVersion", "progressContent",
+      revision, "startedAt", "updatedAt", "completedAt",
+      ${answers} AS responses, "snapshotVersion", "progressContent",
       "settings", "studySetRevision", "reviewMode", "fullSet"
-    FROM "Attempt" WHERE id = ${id} AND "userId" = ${userId}`;
+    FROM "Attempt" WHERE id = ${id} AND "userId" = ${userId}`);
   return rows[0];
 }
 export function metadataOnly(attempt: Omit<Attempt, "snapshot">) {

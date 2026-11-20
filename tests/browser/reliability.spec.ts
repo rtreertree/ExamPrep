@@ -155,10 +155,8 @@ async function fixture(page: Page, doc = written, position = 0) {
       value = { success: true };
     } else if (path === "/api/account/recovery") {
       value = { enabled: true };
-    } else if (path === "/api/ownership-invitations") {
-      value = [];
-    } else if (path === "/api/study/next") {
-      value = null;
+    } else if (path === "/api/library/context") {
+      value = { folders, invitations: [], suggestion: null };
     } else if (path === "/api/folders" && req.method() === "POST") {
       const folder = {
         id: `folder-${folders.length + 1}`,
@@ -2317,6 +2315,12 @@ test("changing library pages returns focus to the new results", async ({
       json: { items, hasMore: !pageIndex, page: pageIndex, courses: [] },
     });
   });
+  const queries: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/library/context" || url.pathname === "/api/sets")
+      queries.push(url.pathname);
+  });
   await page.goto("/library");
   await page.getByRole("button", { name: "Next page" }).press("Enter");
   await expect(
@@ -2328,6 +2332,11 @@ test("changing library pages returns focus to the new results", async ({
   });
   await expect(firstSet).toBeInViewport();
   await expect(page.getByText("Page 2", { exact: true })).toBeVisible();
+  expect(queries.sort()).toEqual([
+    "/api/library/context",
+    "/api/sets",
+    "/api/sets",
+  ]);
   await page.getByRole("button", { name: "Previous page" }).press("Enter");
   await expect(
     page.getByRole("link", { name: "Study set 1", exact: true }),
@@ -2394,6 +2403,10 @@ for (const mode of ["unreviewed", "mistakes"] as const) {
       ],
     };
     const api = await fixture(page, doc);
+    const reads: string[] = [];
+    page.on("request", (req) => {
+      if (req.url().endsWith("/api/attempts/fresh")) reads.push(req.url());
+    });
     api.attempt().responses = {
       one: {
         revealed: true,
@@ -2451,6 +2464,7 @@ for (const mode of ["unreviewed", "mistakes"] as const) {
       }),
     ).toBeVisible();
     expect(api.attempt().status).toBe("completed");
+    expect(reads).toHaveLength(0);
   });
 }
 
@@ -2583,7 +2597,8 @@ test("sets a deck's daily review limit and starts its due queue", async ({
       api.attempt().responses = { one: { revealed: true, rating: "known" } };
     }
     return route.fulfill({
-      json: method === "POST" ? { id: "attempt" } : queue,
+      json:
+        method === "POST" ? { id: "attempt", attempt: api.attempt() } : queue,
     });
   });
   await page.goto("/library");

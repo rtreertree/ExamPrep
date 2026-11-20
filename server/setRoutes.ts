@@ -1,3 +1,5 @@
+import { readStudySuggestion } from "./studySuggestion";
+import { readInvitations } from "./sharing";
 import type { Hono } from "hono";
 import { createHash } from "node:crypto";
 import { sqltag as sql } from "@prisma/client/runtime/wasm-compiler-edge";
@@ -68,7 +70,24 @@ function publicSet({
   });
 }
 
+function readFolders(db: Pick<Database, "$queryRaw">, userId: string) {
+  return db.$queryRaw<LibraryFolder[]>(sql`
+        SELECT id, name FROM "LibraryFolder" WHERE "userId" = ${userId} ORDER BY lower(name), name
+      `);
+}
+
 export function registerSetRoutes(app: Hono<Context>) {
+  app.get("/api/library/context", async (c) => {
+    const parts = new Set((c.req.query("include") ?? "").split(","));
+    const db = c.get("db"),
+      userId = c.get("userId");
+    const [folders, invitations, suggestion] = await Promise.all([
+      parts.has("folders") ? readFolders(db, userId) : undefined,
+      parts.has("invitations") ? readInvitations(db, userId) : undefined,
+      parts.has("suggestion") ? readStudySuggestion(db, userId) : undefined,
+    ]);
+    return c.json({ folders: decodeStorage(folders), invitations, suggestion });
+  });
   app.get("/api/sets", async (c) => {
     const page = listPage(c.req.query("page"));
     const kind = c.req.query("kind");
@@ -133,9 +152,7 @@ export function registerSetRoutes(app: Hono<Context>) {
         ORDER BY ${sort === "manual" ? sql`` : sql`pinned DESC,`} ${sortSql},
           s.id ASC LIMIT ${LIST_PAGE_SIZE + 1} OFFSET ${page * LIST_PAGE_SIZE}
       `),
-      db.$queryRaw<LibraryFolder[]>(sql`
-        SELECT id, name FROM "LibraryFolder" WHERE "userId" = ${userId} ORDER BY lower(name), name
-      `),
+      c.req.query("folders") === "0" ? undefined : readFolders(db, userId),
     ]);
     return c.json(
       decodeStorage({
@@ -145,8 +162,7 @@ export function registerSetRoutes(app: Hono<Context>) {
         ...(sets[0]?.manual ? { manual: sets[0].manual } : {}),
         hasMore: sets.length > LIST_PAGE_SIZE,
         page,
-        folders,
-        courses: folders.map(({ name }) => name),
+        ...(folders && { folders, courses: folders.map(({ name }) => name) }),
       }),
     );
   });

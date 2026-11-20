@@ -52,6 +52,7 @@ export function ArchiveScope({
 }
 
 export function LibraryFolders({
+  onFolderChange,
   archived,
   page,
   search,
@@ -68,6 +69,7 @@ export function LibraryFolders({
   appliedSearch: string;
   sort: FolderArrangement;
   order: SortOrder;
+  onFolderChange: () => void;
   onClearSearch: () => void;
   onPageChange: (page: number) => void;
   onChoose: (folderId: string) => void;
@@ -215,6 +217,7 @@ export function LibraryFolders({
           editor={editor}
           onClose={() => setEditor(undefined)}
           onSaved={(message) => {
+            onFolderChange();
             setEditor(undefined);
             setNotice(message);
             refresh();

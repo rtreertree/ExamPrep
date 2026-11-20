@@ -17,11 +17,14 @@ export function encodeStorage<T>(value: T): T {
   if (value && typeof value === "object" && !(value instanceof Date))
     return Object.fromEntries(
       Object.entries(value).map(([k, v]) => [
-        k === "__proto__" ? "~proto;" : encodeStorage(k),
+        encodeStorageKey(k),
         encodeStorage(v),
       ]),
     ) as T;
   return value;
+}
+export function encodeStorageKey(key: string): string {
+  return key === "__proto__" ? "~proto;" : encodeStorage(key);
 }
 export function decodeStorage<T>(value: T): T {
   if (typeof value === "string")

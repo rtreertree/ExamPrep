@@ -16,6 +16,17 @@ import { lockLibrary } from "./libraryOrder";
 import { decodeStorage, encodeStorage } from "./storage";
 
 type QueryDb = Pick<Database, "$queryRaw">;
+export async function readInvitations(db: QueryDb, userId: string) {
+  const invitations = await db.$queryRaw<OwnershipInvitation[]>`
+      SELECT i.id, s.title, s.kind, u.email AS "ownerEmail" FROM "StudySetInvitation" i
+      JOIN "StudySet" s ON s.id = i."studySetId" JOIN "user" u ON u.id = s."userId"
+      WHERE i."userId" = ${userId} ORDER BY i."createdAt" DESC, i.id
+    `;
+  return invitations.map((invitation) => ({
+    ...invitation,
+    title: decodeStorage(invitation.title),
+  }));
+}
 const tokenPattern = /^([a-f0-9-]{36})\.([a-f0-9]{64})$/;
 const text = new TextEncoder();
 const invalidLink = () =>
@@ -225,17 +236,7 @@ export function registerSharing(app: Hono<Context>, secret: string) {
     return c.json({ id }, created ? 201 : 200);
   });
   app.get("/api/ownership-invitations", async (c) => {
-    const invitations = await c.get("db").$queryRaw<OwnershipInvitation[]>`
-      SELECT i.id, s.title, s.kind, u.email AS "ownerEmail" FROM "StudySetInvitation" i
-      JOIN "StudySet" s ON s.id = i."studySetId" JOIN "user" u ON u.id = s."userId"
-      WHERE i."userId" = ${c.get("userId")} ORDER BY i."createdAt" DESC, i.id
-    `;
-    return c.json(
-      invitations.map((invitation) => ({
-        ...invitation,
-        title: decodeStorage(invitation.title),
-      })),
-    );
+    return c.json(await readInvitations(c.get("db"), c.get("userId")));
   });
   app.post("/api/sets/:id/sharing/invitations", async (c) => {
     const { email } = schema(

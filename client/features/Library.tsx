@@ -6,7 +6,7 @@ import { api, type StudySet, type StudySetMetadata } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { accountDrafts, type Draft } from "../lib/drafts";
 import type { AISettings } from "../lib/aiSettings";
-import type { StudySuggestion } from "../../shared/studySuggestion";
+import { useLibraryContext } from "../lib/useLibraryContext";
 import { listPage, useListQuery } from "../lib/listQuery";
 import {
   LIST_PAGE_SIZE,
@@ -133,9 +133,8 @@ export function LibraryPage() {
     items: StudySetMetadata[];
     hasMore: boolean;
     page: number;
-    folders: LibraryFolder[];
     manual?: ManualOrder;
-  }>(inDirectory ? null : `/sets?${listQuery}`);
+  }>(inDirectory ? null : `/sets?${listQuery}&folders=0`);
   const showSuggestion =
     !inDirectory &&
     folder === null &&
@@ -144,16 +143,10 @@ export function LibraryPage() {
     !searchFilter &&
     filter === "all" &&
     !saved;
-  const suggestion = useResource<StudySuggestion | null>(
-    showSuggestion ? "/study/next" : null,
-  );
+  const context = useLibraryContext(showSuggestion);
   const nextStudyAction =
-    showSuggestion &&
-    !suggestion.error &&
-    (suggestion.data?.type === "practice" || suggestion.data?.type === "resume")
-      ? suggestion.data
-      : null;
-  const folders = resource.lastData?.folders ?? emptyFolders;
+    showSuggestion && !context.error ? context.data?.suggestion : null;
+  const folders = context.data?.folders ?? emptyFolders;
   const currentFolder = folders.find(({ id }) => id === folder);
   const folderName =
     folder === "" ? "Unfiled" : (currentFolder?.name ?? legacyCourse);
@@ -230,11 +223,11 @@ export function LibraryPage() {
     )
       return;
     const match = legacyCourse
-      ? resource.data.folders?.find(({ name }) => name === legacyCourse)?.id
+      ? folders.find(({ name }) => name === legacyCourse)?.id
       : "";
     if (match !== undefined)
       update({ course: null, folder: match, view: "folders" });
-  }, [folder, inDirectory, legacyCourse, resource.data, update]);
+  }, [folder, inDirectory, legacyCourse, resource.data, folders, update]);
   useLayoutEffect(() => {
     if (!busy && !currentSelection && selectFocus.current) {
       selectFocus.current = false;
@@ -305,7 +298,7 @@ export function LibraryPage() {
   }
   function refreshLibrary() {
     resource.refresh();
-    suggestion.refresh();
+    context.refresh("suggestion");
   }
   function chooseFolder(next: string) {
     viewFocus.current = true;
@@ -489,7 +482,11 @@ export function LibraryPage() {
           onPractice={setSettingUp}
         />
       ) : null}
+      <ErrorNotice error={context.error} retry={context.retry} />
       <OwnershipInvitations
+        invitations={context.data?.invitations ?? []}
+        onRemoved={context.removeInvitation}
+        refresh={() => context.refresh("invitations")}
         onAccept={() => {
           refreshLibrary();
           if (inDirectory) setFolderVersion((version) => version + 1);
@@ -663,6 +660,7 @@ export function LibraryPage() {
       {inDirectory ? (
         <LibraryFolders
           key={folderVersion}
+          onFolderChange={() => context.refresh("folders")}
           archived={archived}
           page={page}
           search={search}

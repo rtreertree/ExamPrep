@@ -41,11 +41,13 @@ export function registerReviewRoutes(app: Hono<Context>) {
   });
   app.post("/api/sets/:id/review", async (c) => {
     schema(z.strictObject({}), await read(c.req.raw));
-    const { id, started } = await startSpacedReview(
+    const result = await startSpacedReview(
       c.get("db"),
       c.get("userId"),
       c.req.param("id"),
     );
-    return c.json({ id }, started ? 201 : 200);
+    return result.started
+      ? c.json({ id: result.id, attempt: result.attempt }, 201)
+      : c.json({ id: result.id }, 200);
   });
 }
