@@ -21,7 +21,7 @@ import { listPage } from "./libraryOrder";
 import { markStudied } from "./practice";
 import { read, schema } from "./request";
 import { conflict, json, unavailable } from "./routeHelpers";
-import { readLockedOwnedSet } from "./setAccess";
+import { readLockedLibrarySet } from "./setAccess";
 import {
   SNAPSHOT_VERSION,
   metadataOnly,
@@ -41,7 +41,7 @@ export function registerAttemptRoutes(app: Hono<Context>) {
     const db = c.get("db");
     const userId = c.get("userId");
     const attempt = await db.$transaction(async (tx) => {
-      const set = await readLockedOwnedSet(tx, c.req.param("id"), userId);
+      const set = await readLockedLibrarySet(tx, c.req.param("id"), userId);
       const { settings, snapshot, fullSet } = practiceSnapshot(
         validateContent(decodeStorage(set.content)),
         input,
@@ -259,7 +259,7 @@ export function registerAttemptRoutes(app: Hono<Context>) {
           tx,
           await tx.attempt.findFirstOrThrow({ where }),
           now,
-          role === "primary",
+          role,
         );
       const saved = compact
         ? await readAttemptProgress(tx, where.id, where.userId)

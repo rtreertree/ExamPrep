@@ -9,9 +9,9 @@ import { BACKUP_BYTES, decodeFile, parseJSON } from "../shared/json";
 import type { Context } from "./app";
 import type { Database } from "./db";
 import {
-  joinCoOwner,
+  joinMembership,
   joinOwnerFolder,
-  ownedSetIds,
+  librarySetIds,
   ownerPreferences,
   ownerRank,
   ownershipRole,
@@ -72,14 +72,14 @@ async function exportBackup(
     WITH accessible_sets AS (
       SELECT s.id, s.content, s.revision, s."createdAt", s."updatedAt",
         ${ownerPreferences}, ${ownershipRole}, ${ownerRank} AS "manualRank"
-      FROM "StudySet" s ${joinCoOwner(userId)} ${joinOwnerFolder} WHERE s.id IN ${ownedSetIds(userId)}
+      FROM "StudySet" s ${joinMembership(userId)} ${joinOwnerFolder} WHERE s.id IN ${librarySetIds(userId)} AND co.role IS DISTINCT FROM 'viewer'
     ), folders AS (
       SELECT id, name, "manualRank" FROM "LibraryFolder" WHERE "userId" = ${userId}
     ), sets AS (
       SELECT id, content, revision, course, "folderId", pinned, archived, "reviewLimit",
         "lastStudiedAt", "createdAt", "updatedAt", "manualRank" FROM accessible_sets
     ), attempts AS (
-      SELECT id, "studySetId", "studySetRevision", "sourceAttemptId", snapshot,
+      SELECT id, CASE WHEN "studySetId" IN (SELECT id FROM accessible_sets) THEN "studySetId" END AS "studySetId", "studySetRevision", "sourceAttemptId", snapshot,
         settings, "reviewMode", "fullSet", responses, result, status, position,
         "startedAt", "updatedAt", "completedAt" FROM "Attempt"
       WHERE ${includeHistory} AND "userId" = ${userId}

@@ -24,6 +24,7 @@ export type SetAccessSummary = {
   revision: number;
   published: boolean;
   coOwners: number;
+  viewers: number;
   invitations: number;
   link: string | null;
 };

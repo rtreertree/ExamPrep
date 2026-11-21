@@ -35,6 +35,7 @@ async function access(
     (Omit<SetAccessSummary, "link"> & { nonce: string | null })[]
   >`
     SELECT s.revision, s.published, l.nonce,
+      (SELECT count(*)::int FROM "StudySetViewer" WHERE "studySetId" = s.id) AS viewers,
       (SELECT count(*)::int FROM "StudySetCoOwner" WHERE "studySetId" = s.id) AS "coOwners",
       (SELECT count(*)::int FROM "StudySetInvitation" WHERE "studySetId" = s.id) AS invitations
     FROM "StudySet" s LEFT JOIN "StudySetCopyLink" l ON l."studySetId" = s.id WHERE s.id = ${id}
@@ -221,6 +222,7 @@ export function registerAdmin(app: Hono<Context>, secret: string) {
       z.strictObject({
         revision: z.number().int(),
         coOwners: z.number().int(),
+        viewers: z.number().int().default(0),
         invitations: z.number().int(),
         link: z.string().nullable(),
         published: z.boolean(),

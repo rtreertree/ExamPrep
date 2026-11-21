@@ -801,7 +801,8 @@ test("Admin and Discover on desktop and mobile use the live owner and independen
       ).toBeTruthy();
     await mobile.getByRole("link", { name: content.title }).click();
     await expect(mobile.getByText("Owned by Tutor")).toBeVisible();
-    await mobile.getByRole("button", { name: "Clone to my library" }).click();
+    await mobile.getByText("Make an editable copy", {exact:true}).click();
+    await mobile.getByRole("button", { name: "Create editable copy" }).click();
     await expect(mobile).toHaveURL(/\/sets\/[^/]+\/edit$/);
     await mobile.goto(
       new URL(mobile.url()).pathname.replace(/edit$/, "worksheet"),

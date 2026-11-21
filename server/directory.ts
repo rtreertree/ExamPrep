@@ -60,7 +60,7 @@ async function listSets(
     (SELECT s.id, 'primary' AS role, s.archived FROM "StudySet" s
       WHERE s."userId" = ${libraryId} AND s.id > ${after} ${filters} ORDER BY s.id LIMIT ${limit})
     UNION ALL
-    (SELECT co."studySetId" AS id, 'co_owner' AS role, co.archived FROM "StudySetCoOwner" co
+    (SELECT co."studySetId" AS id, co.role, co.archived FROM "LibraryMembership" co
       JOIN "StudySet" s ON s.id = co."studySetId"
       WHERE co."userId" = ${libraryId} AND co."studySetId" > ${after} ${filters}
       ORDER BY co."studySetId" LIMIT ${limit})
@@ -93,14 +93,15 @@ export async function cloneSet(
       { published: boolean }[]
     >`SELECT published FROM "StudySet" WHERE id = ${setId}`;
     if (scope === "discover" && !source.published) throw unavailableSet();
-    const key = scope + ":" + setId;
+    const legacyKey = scope + ":" + setId;
+    const key = "editable:" + legacyKey;
     const [receipt] = await tx.$queryRaw<
       { copyId: string | null; linkNonce: string }[]
     >`
       SELECT "linkNonce", "copyId" FROM "StudySetCopyImport" WHERE "userId" = ${userId} AND "requestId" = ${requestId}
     `;
     if (receipt) {
-      if (receipt.linkNonce !== key)
+      if (receipt.linkNonce !== key && receipt.linkNonce !== legacyKey)
         throw new HTTPException(409, {
           message: "This request was used for another copy.",
         });

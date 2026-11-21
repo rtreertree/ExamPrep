@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { OwnershipInvitation, ShareSettings } from "../../shared/sharing";
 import {
   Button,
@@ -54,17 +54,38 @@ export function SetSharing({
   }
 
   async function copyLink() {
-    if (!link) return;
+    setBusy(true);
+    setError(undefined);
     setStatus("");
     try {
-      await navigator.clipboard.writeText(link);
+      let url = link;
+      if (!url) {
+        const settings = await api<ShareSettings>(path + "/link", "PUT", {
+          enabled: true,
+        });
+        resource.setData(settings);
+        url = new URL(settings.link!, window.location.origin).href;
+      }
+      try {
+        await navigator.clipboard.writeText(url);
+      } catch {
+        setStatus("Link selected. Copy it from the field.");
+        return;
+      }
       setStatus("Link copied.");
-    } catch {
-      linkField.current?.focus();
-      linkField.current?.select();
-      setStatus("Link selected. Copy it from the field.");
+    } catch (err) {
+      setError(err as Error);
+    } finally {
+      setBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (status === "Link selected. Copy it from the field.") {
+      linkField.current?.focus();
+      linkField.current?.select();
+    }
+  }, [status, link]);
 
   function invite(event: FormEvent) {
     event.preventDefault();
@@ -89,8 +110,10 @@ export function SetSharing({
             <section className="stack sharing-section">
               <h3>View-only link</h3>
               <p className="muted">
-                Anyone with the link can sign in and read the latest saved
-                version, including answers.
+                {link && !settings.guestAccess
+                  ? "Sign-in is required to open this link."
+                  : "Anyone with the link can read without signing in."}{" "}
+                Readers see the latest saved version, including answers.
               </p>
               {link ? (
                 <>
@@ -103,8 +126,23 @@ export function SetSharing({
                       disabled={busy}
                       onClick={() => void copyLink()}
                     >
-                      Copy link
+                      Copy view-only link
                     </Button>
+                    {!settings.guestAccess && (
+                      <Button
+                        disabled={busy}
+                        onClick={() =>
+                          void update(
+                            "/link",
+                            "PUT",
+                            { enabled: true, allowGuests: true },
+                            "Guests can now open this link.",
+                          )
+                        }
+                      >
+                        Allow guests
+                      </Button>
+                    )}
                     <Button
                       disabled={busy}
                       onClick={() =>
@@ -123,115 +161,116 @@ export function SetSharing({
               ) : (
                 <div className="actions">
                   <Button
+                    variant="primary"
                     disabled={busy}
-                    onClick={() =>
-                      void update(
-                        "/link",
-                        "PUT",
-                        { enabled: true },
-                        "View-only link enabled.",
-                      )
-                    }
+                    onClick={() => void copyLink()}
                   >
-                    Enable view-only link
+                    Copy view-only link
                   </Button>
                 </div>
               )}
             </section>
             <section className="stack sharing-section">
-              <h3>Co-owners</h3>
-              <p className="muted">
-                Co-owners can edit and study this set. They accept the
-                invitation in Exam Prep.
-              </p>
-              <form className="stack" onSubmit={invite}>
-                <Field label="Co-owner email">
-                  <input
-                    type="email"
-                    autoComplete="off"
-                    maxLength={254}
-                    required
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                  />
-                </Field>
-                <div className="actions">
-                  <Button type="submit" disabled={busy}>
-                    Invite co-owner
-                  </Button>
-                </div>
-              </form>
-              {settings.coOwners.length || settings.invitations.length ? (
-                <ul className="sharing-people">
-                  {settings.coOwners.map((owner) => (
-                    <li key={owner.id}>
-                      <span>{owner.email}</span>
+              <details>
+                <summary>
+                  Invite an editor
+                  {settings.coOwners.length + settings.invitations.length > 0
+                    ? ` (${settings.coOwners.length + settings.invitations.length})`
+                    : ""}
+                </summary>
+                <p className="muted">
+                  Editors can change the original set. They accept the
+                  invitation in Exam Prep.
+                </p>
+                <form className="stack" onSubmit={invite}>
+                  <Field label="Editor email">
+                    <input
+                      type="email"
+                      autoComplete="off"
+                      maxLength={254}
+                      required
+                      value={email}
+                      onChange={(event) => setEmail(event.target.value)}
+                    />
+                  </Field>
+                  <div className="actions">
+                    <Button type="submit" disabled={busy}>
+                      Send invitation
+                    </Button>
+                  </div>
+                </form>
+                {settings.coOwners.length || settings.invitations.length ? (
+                  <ul className="sharing-people">
+                    {settings.coOwners.map((owner) => (
+                      <li key={owner.id}>
+                        <span>{owner.email}</span>
+                        <Button
+                          variant="quiet"
+                          disabled={busy}
+                          onClick={() => setRemoving(owner)}
+                          aria-label={`Remove ${owner.email}`}
+                        >
+                          Remove
+                        </Button>
+                      </li>
+                    ))}
+                    {settings.invitations.map((invitation) => (
+                      <li key={invitation.id}>
+                        <span>
+                          {invitation.email}
+                          <small className="muted">Pending invitation</small>
+                        </span>
+                        <Button
+                          variant="quiet"
+                          disabled={busy}
+                          aria-label={`Cancel invitation for ${invitation.email}`}
+                          onClick={() =>
+                            void update(
+                              `/invitations/${invitation.id}`,
+                              "DELETE",
+                              {},
+                              "Invitation canceled.",
+                            )
+                          }
+                        >
+                          Cancel
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {removing ? (
+                  <Notice tone="warning">
+                    <p>
+                      {removing.email} will lose access to this set. They’ll
+                      keep their past attempts.
+                    </p>
+                    <div className="actions">
                       <Button
-                        variant="quiet"
                         disabled={busy}
-                        onClick={() => setRemoving(owner)}
-                        aria-label={`Remove ${owner.email}`}
+                        onClick={() => setRemoving(undefined)}
                       >
-                        Remove
+                        Keep co-owner
                       </Button>
-                    </li>
-                  ))}
-                  {settings.invitations.map((invitation) => (
-                    <li key={invitation.id}>
-                      <span>
-                        {invitation.email}
-                        <small className="muted">Pending invitation</small>
-                      </span>
                       <Button
-                        variant="quiet"
+                        variant="danger"
                         disabled={busy}
-                        aria-label={`Cancel invitation for ${invitation.email}`}
                         onClick={() =>
                           void update(
-                            `/invitations/${invitation.id}`,
+                            `/co-owners/${removing.id}`,
                             "DELETE",
                             {},
-                            "Invitation canceled.",
+                            "Co-owner removed.",
+                            () => setRemoving(undefined),
                           )
                         }
                       >
-                        Cancel
+                        Remove co-owner
                       </Button>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              {removing ? (
-                <Notice tone="warning">
-                  <p>
-                    {removing.email} will lose access to this set. They’ll keep
-                    their past attempts.
-                  </p>
-                  <div className="actions">
-                    <Button
-                      disabled={busy}
-                      onClick={() => setRemoving(undefined)}
-                    >
-                      Keep co-owner
-                    </Button>
-                    <Button
-                      variant="danger"
-                      disabled={busy}
-                      onClick={() =>
-                        void update(
-                          `/co-owners/${removing.id}`,
-                          "DELETE",
-                          {},
-                          "Co-owner removed.",
-                          () => setRemoving(undefined),
-                        )
-                      }
-                    >
-                      Remove co-owner
-                    </Button>
-                  </div>
-                </Notice>
-              ) : null}
+                    </div>
+                  </Notice>
+                ) : null}
+              </details>
             </section>
           </>
         ) : null}

@@ -113,9 +113,9 @@ The application remains **1.0.0** and study-set files still use **schemaVersion 
 
 ### Sharing and co-ownership
 
-From a saved exam or flashcard deck, choose **Share and manage access** in its editor or library menu. A view-only link opens the latest saved version, including answers and the primary owner’s display name. Turning off the link blocks subsequent reads.
+From a saved exam or flashcard deck, choose **Share and manage access** in its editor or library menu. Choose **Copy view-only link** to share the latest saved version, including answers and the primary owner’s display name. New links open without an account. Older links require sign-in until their owner chooses **Allow guests**. Readers can sign in and choose **Save to my library** to keep a live reference and practice with private progress. Reopening or returning to the reader picks up owner edits. Turning off the link revokes access through that link. A separately saved Discover listing stays available while published.
 
-Invite a registered account by email to edit the same set together. The recipient accepts in **Your library**. Each owner has private library settings, practice history, notes, and review schedules. The primary owner manages access and can delete the original for everyone. Previous attempts stay in each person's History when access ends.
+Choose **Invite an editor** and invite a registered account by email to edit the same set together. The recipient accepts in **Your library**. Each owner has private library settings, practice history, notes, and review schedules. The primary owner manages access and can delete the original for everyone. Previous attempts stay in each person's History when access ends.
 
 Backups include sets you co-own and your own study data. Restore creates independently owned copies with sharing off. Apply the study-set sharing migration before deploying the app update. After co-ownership is in use, fix regressions forward so owners retain access during recovery.
 
@@ -125,6 +125,6 @@ Set `RESEND_API_KEY` and `RESET_EMAIL_FROM` in the Node environment or Worker bi
 
 ### Discover and Admin
 
-Signed-in users can search Discover by title, filter exams and flashcards, preview a published set, and clone it into their library. A clone belongs to the recipient and starts with fresh progress.
+Signed-in users can search Discover by title, filter exams and flashcards, preview a published set, and save the live set to their library. **Make an editable copy** creates an independent clone. A clone belongs to the recipient and starts with fresh progress.
 
 Admins can search accounts, change account details and access, inspect libraries, grant copies or co-ownership, manage sharing, and publish live sets in Discover. Removing a primary-owned set removes it for all co-owners. The confirmation shows the impact before deletion. See [deployment instructions](DEPLOYMENT.md#first-administrator) to grant the first admin role.

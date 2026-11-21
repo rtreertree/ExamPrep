@@ -24,5 +24,10 @@ export async function markStudied(
     WHERE "studySetId" = ${setId} AND "userId" = ${userId}
     RETURNING "studySetId"
   `;
-  return member ? "co_owner" : null;
+  if (member) return "co_owner";
+  const updated = await db.$executeRaw`
+    UPDATE "StudySetViewer" SET "lastStudiedAt" = GREATEST("lastStudiedAt", ${at})
+    WHERE "studySetId" = ${setId} AND "userId" = ${userId}
+  `;
+  return updated ? "viewer" : null;
 }

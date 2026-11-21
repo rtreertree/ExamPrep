@@ -28,6 +28,8 @@ model User {
   accounts      Account[]
   studySets     StudySet[]
   attempts      Attempt[]
+  conversions   CloneConversion[]
+  viewerSets    StudySetViewer[]
   coOwnedSets   StudySetCoOwner[]
   invitations   StudySetInvitation[]
   copyImports   StudySetCopyImport[]
@@ -104,6 +106,7 @@ model LibraryFolder {
   name       String
   manualRank BigInt @default(dbgenerated("nextval('library_manual_rank_seq'::regclass)"))
   sets       StudySet[]
+  viewerSets StudySetViewer[]
   coOwnedSets StudySetCoOwner[]
 
   @@unique([userId, id])
@@ -131,6 +134,7 @@ model StudySet {
   updatedAt     DateTime     @updatedAt
   attempts      Attempt[]
   cardReviews   CardReview[]
+  viewers       StudySetViewer[]
   coOwners      StudySetCoOwner[]
   invitations   StudySetInvitation[]
   copyLink      StudySetCopyLink?
@@ -194,6 +198,7 @@ model StudySetInvitation {
 model StudySetCopyLink {
   studySetId String   @id
   studySet   StudySet @relation(fields: [studySetId], references: [id], onDelete: Cascade)
+  guestAccess Boolean @default(false)
   nonce      String   @unique
 }
 
@@ -249,4 +254,57 @@ model Attempt {
   @@index([studySetId])
   @@index([sourceAttemptId])
   @@index([studySetId, reviewMode, completedAt])
+}
+
+model StudySetViewer {
+  studySetId    String
+  studySet      StudySet @relation(fields: [studySetId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course        String   @default("")
+  folderId      String?
+  folder        LibraryFolder? @relation(fields: [userId, folderId], references: [userId, id], onDelete: NoAction)
+  manualRank    BigInt @default(dbgenerated("nextval('library_manual_rank_seq'::regclass)"))
+  pinned        Boolean  @default(false)
+  archived      Boolean  @default(false)
+  lastStudiedAt DateTime?
+  reviewLimit   Int      @default(20)
+  linkNonce     String?
+  discovered    Boolean @default(false)
+  cardReviews   ViewerCardReview[]
+
+  @@id([studySetId, userId])
+  @@index([userId, studySetId])
+  @@index([userId, archived, pinned, lastStudiedAt])
+  @@index([userId, folderId, archived, manualRank])
+}
+
+model ViewerCardReview {
+  studySetId       String
+  userId           String
+  owner            StudySetViewer @relation(fields: [studySetId, userId], references: [studySetId, userId], onDelete: Cascade)
+  cardId           String
+  fingerprint      String
+  streak           Int
+  dueAt            DateTime
+  attemptStartedAt DateTime
+
+  @@id([studySetId, userId, cardId])
+}
+
+
+// Historical inventory and recovery records are retained independently of the live set.
+model CloneConversion {
+  copyId String @id
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  sourceId String?
+  recovery Json?
+  convertedAt DateTime?
+  @@index([userId, sourceId])
+}
+
+model LiveSetCutover {
+  id Int @id
+  completedAt DateTime?
 }

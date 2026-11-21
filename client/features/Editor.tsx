@@ -8,7 +8,13 @@ import {
   useRef,
   useState,
 } from "react";
-import { Link, useBlocker, useNavigate, useParams } from "react-router-dom";
+import {
+  Link,
+  Navigate,
+  useBlocker,
+  useNavigate,
+  useParams,
+} from "react-router-dom";
 import {
   ArrowUp,
   ArrowDown,
@@ -100,6 +106,11 @@ export function EditorPage() {
     );
   }
   if (!loaded) return <LoadingRows label="Loading the editor" />;
+  if (
+    loaded.set &&
+    (loaded.set.ownershipRole === "viewer" || loaded.set.id !== id)
+  )
+    return <Navigate replace to={`/sets/${loaded.set.id}/view`} />;
   if (loaded.missing && !loaded.draft)
     return (
       <Notice tone="warning">

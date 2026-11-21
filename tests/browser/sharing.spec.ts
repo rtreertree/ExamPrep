@@ -63,14 +63,34 @@ test("manages a view-only link and pending co-owners from the library and editor
     .click();
   await page.getByRole("button", { name: "Share and manage access" }).click();
   const dialog = page.getByRole("dialog", { name: "Share and manage access" });
-  await dialog.getByRole("button", { name: "Enable view-only link" }).click();
-  await dialog.getByRole("button", { name: "Copy link", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "Copy view-only link", exact: true })
+    .click();
   await expect(dialog.getByRole("status")).toHaveText("Link copied.");
   expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(
     /\/share#example-signed-token$/,
   );
-  await dialog.getByLabel("Co-owner email").fill("collaborator@example.test");
-  await dialog.getByRole("button", { name: "Invite co-owner" }).click();
+  await page.evaluate(() =>
+    Object.defineProperty(navigator.clipboard, "writeText", {
+      value: async () => {
+        throw new Error("Clipboard unavailable");
+      },
+      configurable: true,
+    }),
+  );
+  await dialog.getByRole("button", { name: "Copy view-only link" }).click();
+  await expect(dialog.getByRole("status")).toContainText("Link selected");
+  expect(
+    await dialog
+      .getByLabel("View-only link")
+      .evaluate(
+        (node: HTMLInputElement) =>
+          node.selectionStart === 0 && node.selectionEnd === node.value.length,
+      ),
+  ).toBe(true);
+  await dialog.getByText("Invite an editor", { exact: true }).click();
+  await dialog.getByLabel("Editor email").fill("collaborator@example.test");
+  await dialog.getByRole("button", { name: "Send invitation" }).click();
   await expect(dialog.getByText("Pending invitation")).toBeVisible();
   await dialog
     .getByRole("button", {
@@ -86,7 +106,7 @@ test("manages a view-only link and pending co-owners from the library and editor
   await page.getByRole("button", { name: "Share and manage access" }).click();
   await dialog.getByRole("button", { name: "Turn off link" }).click();
   await expect(
-    dialog.getByRole("button", { name: "Enable view-only link" }),
+    dialog.getByRole("button", { name: "Copy view-only link" }),
   ).toBeVisible();
 });
 
@@ -110,6 +130,7 @@ test("returns to the live reader after registering with a display name", async (
         return route.fulfill({ json: { success: true } });
       case "/api/shares/preview":
         expect(req.postDataJSON()).toEqual({ token });
+        if (!signedIn) return route.fulfill({ json: { signInRequired: true } });
         return route.fulfill({
           json: { content: source.content, ownerName: "Original owner" },
         });
@@ -196,4 +217,63 @@ test("accepts a pending invitation and shows the co-owned set without owner-only
   await expect(
     page.getByRole("button", { name: "Share and manage access" }),
   ).toHaveCount(0);
+});
+
+test("guests can read immediately, save after sign-in, and see updates on return", async ({
+  page,
+}) => {
+  let signedIn = false,
+    saves = 0,
+    title = source.title;
+  await page.route("**/api/**", async (route) => {
+    const req = route.request();
+    const path = new URL(req.url()).pathname;
+    const content = { ...source.content, title };
+    if (path === "/api/auth/get-session")
+      return route.fulfill({
+        json: signedIn
+          ? { user: { id: "learner", email: "learner@example.test" } }
+          : null,
+      });
+    if (path === "/api/auth/sign-in/email") {
+      signedIn = true;
+      return route.fulfill({ json: { success: true } });
+    }
+    if (path === "/api/shares/preview")
+      return route.fulfill({ json: { content, ownerName: "Tutor" } });
+    if (path === "/api/shares/save") {
+      expect(signedIn).toBe(true);
+      expect(req.postDataJSON()).toEqual({ token });
+      saves++;
+      return route.fulfill({ json: { id: source.id } });
+    }
+    if (path === "/api/sets/original")
+      return route.fulfill({
+        json: {
+          ...source,
+          content,
+          title,
+          ownershipRole: "viewer",
+          ownerName: "Tutor",
+        },
+      });
+    return route.fulfill({ status: 404, json: { error: "Unexpected path" } });
+  });
+  await page.setViewportSize({ width: 390, height: 740 });
+  await page.goto(`/share#${token}`);
+  await expect(page.getByRole("heading", { name: title })).toBeVisible();
+  expect(saves).toBe(0);
+  await page.getByRole("button", { name: "Save to my library" }).click();
+  await page.getByLabel("Email", { exact: true }).fill("learner@example.test");
+  await page.getByLabel("Password", { exact: true }).fill("valid-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page).toHaveURL(/\/sets\/original\/view$/);
+  expect(saves).toBe(1);
+  title = "Owner’s revised vocabulary";
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("heading", { name: title })).toBeVisible();
+  await page.getByRole("button", { name: "Practice" }).click();
+  await expect(
+    page.getByRole("dialog", { name: "Set up practice" }),
+  ).toBeVisible();
 });

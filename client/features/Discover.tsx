@@ -6,6 +6,7 @@ import { api, ApiError } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useResource } from "../lib/hooks";
 import { Directory, kindFilter, SetRow } from "./Directory";
+import { SaveLiveSet, useRefreshOnReturn } from "./SharedSet";
 import SetReader from "./SetReader";
 
 export function CloneButton({
@@ -67,7 +68,11 @@ export function CloneButton({
   }
   return (
     <>
-      <Button variant="primary" busy={busy} onClick={clone}>
+      <Button
+        variant={path.startsWith("/admin/") ? "primary" : "secondary"}
+        busy={busy}
+        onClick={clone}
+      >
         {label}
       </Button>
       <ErrorNotice error={error} />
@@ -80,6 +85,7 @@ export default function Discover() {
   const { data, error, refresh } = useResource<SetReaderData>(
     id ? "/discover/" + id : null,
   );
+  useRefreshOnReturn(refresh);
   if (id)
     return (
       <div className="stack">
@@ -89,13 +95,23 @@ export default function Discover() {
           <SetReader
             set={data}
             actions={
-              <CloneButton
-                key={id}
-                path={"/discover/" + id + "/clone"}
-                actionKey={id}
-                label="Clone to my library"
-                onCreated={(copy) => navigate("/sets/" + copy + "/edit")}
-              />
+              <div className="stack">
+                <SaveLiveSet key={"save" + id} discoverId={id} />
+                <details>
+                  <summary>Make an editable copy</summary>
+                  <p>
+                    Your copy starts with fresh progress and keeps its own
+                    edits.
+                  </p>
+                  <CloneButton
+                    key={id}
+                    path={"/discover/" + id + "/clone"}
+                    actionKey={id}
+                    label="Create editable copy"
+                    onCreated={(copy) => navigate("/sets/" + copy + "/edit")}
+                  />
+                </details>
+              </div>
             }
           />
         ) : (

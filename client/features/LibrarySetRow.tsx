@@ -60,12 +60,16 @@ export function LibrarySetRow({
       )}
       <Link
         className="set-title"
-        aria-description="Edit this study set"
-        to={`/sets/${set.id}/edit`}
+        aria-description={
+          set.ownershipRole === "viewer"
+            ? "Read this study set"
+            : "Edit this study set"
+        }
+        to={`/sets/${set.id}/${set.ownershipRole === "viewer" ? "view" : "edit"}`}
       >
         {set.title}
         <span className="set-edit-cue" aria-hidden="true">
-          Edit
+          {set.ownershipRole === "viewer" ? "View" : "Edit"}
         </span>
       </Link>
       <span className="set-meta">
@@ -79,6 +83,9 @@ export function LibrarySetRow({
         {set.ownershipRole === "co_owner" ? (
           <span className="set-detail">Co-owned</span>
         ) : null}
+        {set.ownershipRole === "viewer" && (
+          <span className="set-detail">View only</span>
+        )}
         {set.continuation?.isOlderVersion ? (
           <span className="set-detail">
             Attempt uses an earlier set version
@@ -141,7 +148,11 @@ function LibrarySetActions({
           </button>
         ) : null}
         <Link to={`/history?setId=${set.id}`}>All attempts for this set</Link>
-        <Link to={`/sets/${set.id}/edit`}>Edit set</Link>
+        <Link
+          to={`/sets/${set.id}/${set.ownershipRole === "viewer" ? "view" : "edit"}`}
+        >
+          {set.ownershipRole === "viewer" ? "View set" : "Edit set"}
+        </Link>
         <Link to={`/sets/${set.id}/worksheet`} state={{ returnTo }}>
           Print worksheet
         </Link>
@@ -150,9 +161,11 @@ function LibrarySetActions({
             Share and manage access
           </button>
         ) : null}
-        <button disabled={busy} onClick={() => actions.duplicate(set)}>
-          Duplicate set
-        </button>
+        {set.ownershipRole !== "viewer" && (
+          <button disabled={busy} onClick={() => actions.duplicate(set)}>
+            Duplicate set
+          </button>
+        )}
         <button disabled={busy} onClick={() => actions.move(set)}>
           Move to folder
         </button>
@@ -169,7 +182,14 @@ function LibrarySetActions({
         >
           {set.archived ? "Unarchive set" : "Archive set"}
         </button>
-        <button onClick={() => actions.export(set)}>Export</button>
+        {set.ownershipRole !== "viewer" && (
+          <button onClick={() => actions.export(set)}>Export</button>
+        )}
+        {set.ownershipRole === "viewer" && (
+          <button onClick={() => actions.remove(set)}>
+            Remove from my library
+          </button>
+        )}
         {set.ownershipRole === "primary" ? (
           <button className="negative" onClick={() => actions.remove(set)}>
             Delete

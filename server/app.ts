@@ -13,7 +13,7 @@ import { registerFolders } from "./libraryOrder";
 import { passwordRecoveryEnabled } from "./resetEmail";
 import { registerReviewRoutes } from "./reviewRoutes";
 import { registerSetRoutes } from "./setRoutes";
-import { registerSharing } from "./sharing";
+import { registerSharePreview, registerSharing } from "./sharing";
 import { readStudySuggestion } from "./studySuggestion";
 
 export type Context = {
@@ -105,6 +105,7 @@ export function createApp(
   app.on(["GET", "POST"], "/api/auth/*", (c) =>
     c.get("auth").handler(c.req.raw),
   );
+  registerSharePreview(app, config.BETTER_AUTH_SECRET);
   app.use("/api/*", async (c, next) => {
     const session = await c
       .get("auth")
