@@ -1,4 +1,6 @@
 import "dotenv/config";
+import {execFile} from "node:child_process";
+import {promisify} from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID, scryptSync } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -192,6 +194,168 @@ describe.skipIf(!enabled)(
         ),
       ).toEqual([set.id]);
     });
+    async function newLearner() {
+      const session = client(),
+        email = `acceptance-${randomUUID()}@example.test`;
+      emails.push(email);
+      expect(
+        (
+          await session("/auth/sign-up/email", "POST", {
+            email,
+            password,
+            name: "Learner",
+          })
+        ).status,
+      ).toBe(200);
+      return session;
+    }
+    it("saves a live viewer membership, isolates practice, and revokes each grant independently", async () => {
+      const b = await newLearner();
+      const { value: set } = await a("/sets", "POST", deck);
+      const path = "/sets/" + set.id,
+        guest = client();
+      const { value: settings } = await a(path + "/sharing/link", "PUT", {
+        enabled: true,
+      });
+      const token = settings.link.split("#")[1];
+      const preview = () => guest("/shares/preview", "POST", { token });
+      expect((await preview()).value.content).toEqual(deck);
+      expect((await guest("/shares/save", "POST", { token })).status).toBe(401);
+      await db!.studySet.update({
+        where: { id: set.id },
+        data: { published: true },
+      });
+      const saves = await Promise.all([
+        b("/shares/save", "POST", { token }),
+        b("/discover/" + set.id + "/save", "POST", {}),
+      ]);
+      expect(saves.map((x) => x.value.id)).toEqual([set.id, set.id]);
+      expect((await b(path)).value.ownershipRole).toBe("viewer");
+      expect(
+        (await b(path, "PUT", { revision: 1, content: deck })).status,
+      ).toBe(404);
+      expect((await b(path + "/duplicate", "POST", {})).status).toBe(404);
+      expect((await b(path + "/sharing")).status).toBe(404);
+      expect((await b(path, "DELETE", { revision: 1 })).status).toBe(404);
+      const old = (await b(path + "/attempts", "POST", {})).value;
+      expect((await a("/attempts/" + old.id)).status).toBe(404);
+      const revised = { ...deck, title: "Updated deck" };
+      expect(
+        (await a(path, "PUT", { revision: 1, content: revised })).status,
+      ).toBe(200);
+      expect((await preview()).value.content).toEqual(revised);
+      expect(
+        (await b(path + "/attempts", "POST", {})).value.snapshot.title,
+      ).toBe(revised.title);
+      expect((await b("/attempts/" + old.id)).value.snapshot.title).toBe(
+        deck.title,
+      );
+      expect((await b(path + "/review", "PATCH", { limit: 3 })).status).toBe(
+        200,
+      );
+      expect((await a(path + "/review")).value.limit).toBe(20);
+      expect((await b(path + "/review", "POST", {})).status).toBe(201);
+      expect(
+        (await b(path + "/organization", "PATCH", { pinned: true })).status,
+      ).toBe(200);
+      expect((await a(path)).value.pinned).toBe(false);
+      await a(path + "/sharing/link", "PUT", { enabled: false });
+      expect((await preview()).status).toBe(404);
+      expect((await b(path)).status).toBe(200);
+      await db!.studySet.update({
+        where: { id: set.id },
+        data: { published: false },
+      });
+      expect((await b(path)).status).toBe(404);
+      expect((await b("/attempts/" + old.id)).value.studySetId).toBeNull();
+      expect((await b(path + "/attempts", "POST", {})).status).toBe(404);
+    });
+    it("converts a historical clone once and preserves its private attempt, schedule and edited content", async () => {
+      const b = await newLearner();
+      const { value: source } = await a("/sets", "POST", deck);
+      const { value: copy } = await b("/sets", "POST", {
+        ...deck,
+        title: "Personal notes",
+      });
+      const user = (await b("/auth/get-session")).value.user;
+      await db!.studySetCopyImport.create({
+        data: {
+          copyId: copy.id,
+          userId: user.id,
+          linkNonce: "discover:" + source.id,
+          requestId: randomUUID(),
+        },
+      });
+      const path = "/sets/" + copy.id;
+      await b(path + "/organization", "PATCH", { pinned: true });
+      const { value: attempt } = await b(path + "/attempts", "POST", {});
+      const { cardFingerprint } = await import("../server/spacedReview");
+      await db!.cardReview.create({
+        data: {
+          studySetId: copy.id,
+          cardId: deck.cards[0].id,
+          fingerprint: await cardFingerprint(deck.cards[0]),
+          streak: 2,
+          dueAt: new Date(),
+          attemptStartedAt: new Date(),
+        },
+      });
+      const run = async (...options: string[]) => {
+        const result = await promisify(execFile)(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            "scripts/convert-clones.ts",
+            "--copy",
+            copy.id,
+            ...options,
+          ],
+          {
+            env: {
+              ...process.env,
+              DATABASE_URL_UNPOOLED: process.env.DATABASE_URL,
+            },
+          },
+        );
+        return JSON.parse(result.stdout.trim().split("\n").at(-1)!);
+      };
+      expect((await run("--apply")).counts).toEqual({ "no-current-access": 1 });
+      await db!.studySet.update({
+        where: { id: source.id },
+        data: { published: true },
+      });
+      expect((await run()).counts).toEqual({ eligible: 1 });
+      expect((await run("--apply")).counts).toEqual({ converted: 1 });
+      expect((await run("--apply")).counts).toEqual({
+        "previously-converted": 1,
+      });
+      expect((await b(path)).value).toMatchObject({
+        id: source.id,
+        ownershipRole: "viewer",
+        pinned: true,
+      });
+      expect((await a(path)).status).toBe(404);
+      expect((await b("/attempts/" + attempt.id)).value).toMatchObject({
+        studySetId: source.id,
+        studySetRevision: null,
+        snapshot: attempt.snapshot,
+      });
+      expect(
+        await db!.viewerCardReview.count({
+          where: { studySetId: source.id, userId: user.id },
+        }),
+      ).toBe(1);
+      expect(
+        (
+          await db!.cloneConversion.findUniqueOrThrow({
+            where: { copyId: copy.id },
+          })
+        ).recovery,
+      ).toMatchObject({ set: { content: copy.content } });
+      await b("/sets/" + source.id + "/membership", "DELETE", {});
+      expect((await b(path)).status).toBe(404);
+    }, 30000);
     it("publishes live sets, grants and revokes library items, and enforces view-only links", async () => {
       const bob = (await b("/auth/get-session")).value.user;
       expect((await client()("/admin/users")).status).toBe(401);
@@ -1692,6 +1856,7 @@ describe.skipIf(!enabled)(
       expect(copy.ownershipRole).toBe("primary");
       expect((await collaborator(`/sets/${copy.id}/sharing`)).value).toEqual({
         link: null,
+        guestAccess: false,
         coOwners: [],
         invitations: [],
       });

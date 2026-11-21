@@ -51,6 +51,10 @@ jobs:
         run: npm run deploy:production
       - name: Check public frontend, routing, cache policy and safe API
         run: npm run smoke -- https://exam.phonet.app
+      - name: Convert verified historical clones after the live app passes smoke checks
+        env:
+          DATABASE_URL_UNPOOLED: ${{ secrets.DATABASE_URL_UNPOOLED }}
+        run: npm run db:convert-clones -- --release
       - name: Publish deployment result
         if: always()
         env:

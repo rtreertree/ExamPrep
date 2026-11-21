@@ -11,7 +11,7 @@ import {
 } from "../shared/listing";
 import type { Database } from "./db";
 import { decodeStorage, encodeStorage } from "./storage";
-import { joinCoOwner, ownerAccess } from "./setAccess";
+import { joinMembership, libraryAccess } from "./setAccess";
 import { sortField } from "./libraryOrder";
 
 type HistoryQuery = Record<string, string | undefined>;
@@ -68,7 +68,7 @@ function historyConditions(userId: string, query: HistoryQuery) {
       search
         ? sql`
       AND (strpos(lower(a.snapshot->>'title'), lower(${search})) > 0 OR EXISTS (
-        SELECT 1 FROM "StudySet" s ${joinCoOwner(userId)} WHERE s.id = a."studySetId" AND ${ownerAccess(userId)}
+        SELECT 1 FROM "StudySet" s ${joinMembership(userId)} WHERE s.id = a."studySetId" AND ${libraryAccess(userId)}
         AND strpos(lower(s.title), lower(${search})) > 0
       ))
     `
@@ -111,8 +111,8 @@ export async function readHistory(
           ${sort === "date" ? sql`ORDER BY "latestStartedAt" ${direction}, "setId" ASC NULLS LAST ${window}` : sql``}
         ) grouped
         LEFT JOIN LATERAL (
-          SELECT s.title FROM "StudySet" s ${joinCoOwner(userId)}
-          WHERE s.id = grouped."setId" AND ${ownerAccess(userId)}
+          SELECT s.title FROM "StudySet" s ${joinMembership(userId)}
+          WHERE s.id = grouped."setId" AND ${libraryAccess(userId)}
         ) s ON true
         ORDER BY ${groupOrder}
         ${sort === "title" ? window : sql``}

@@ -225,3 +225,12 @@ node --import tsx scripts/promote-admin.ts '<exact-user-id>'
 ```
 
 Reload the app to see Admin. Further promotions, suspensions, and role changes can be made in the Admin tab.
+
+### Convert historical library clones
+
+Apply `202611210001_live_sets` through the Release workflow. It inventories the existing set IDs and tracks old copy receipts during rollout. The new app records intentional editable copies separately. The production release audits, converts verified eligible copies, and reconciles counts after the updated Worker passes smoke checks. A database completion marker makes this a one-time operation. A failed run resumes on the next successful release. The commands below also support rehearsals and reviewed follow-up cases.
+
+1. Rehearse on a disposable production branch and verify a recovery point. Use its direct Neon connection in `DATABASE_URL_UNPOOLED`. Run `npm run db:convert-clones -- --details` for a read-only inventory. The report contains set IDs, revisions, candidate IDs and eligibility reasons. Keep detailed reports private.
+2. Confirm untracked copies individually using their source and content history. Supply a local JSON array of objects with `copyId`, `sourceId` and the audited copy `revision` using `--matches path/to/matches.json`. Matching content and item IDs suggest candidates. Confirmation does not grant access. A private original requires an existing membership or a receipt for its still-active link.
+3. With the production direct connection, audit again. Run `npm run db:convert-clones -- --apply` to convert all verified eligible entries, or add `--copy ID` for one. The script commits each conversion atomically. Interrupted runs are safe to repeat. Existing placements take precedence. For multiple copies, the most recently studied one supplies initial preferences.
+4. Repeat the read-only audit and reconcile all inventory counts. Pending private, missing, re-shared or nested sets retain their contents and ownership. Overlapping unfinished spaced reviews can be converted once one is completed. To verify recovery, inspect the affected learner's `CloneConversion.recovery` record under maintenance access. It contains the original stored set and card schedules. Older edit links resolve only for the original learner with current access. For rollback after conversion, use the verified database recovery point and a compatible app release.

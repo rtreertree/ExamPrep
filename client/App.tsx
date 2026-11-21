@@ -54,6 +54,9 @@ const DueReviewPage = lazy(() =>
   import("./features/DueReview").then((m) => ({ default: m.DueReviewPage })),
 );
 const SharedSetPage = lazy(() => import("./features/SharedSet"));
+const SavedSetPage = lazy(() =>
+  import("./features/SharedSet").then((m) => ({ default: m.SavedSetPage })),
+);
 const WorksheetPage = lazy(() => import("./features/Worksheet"));
 import { Button, ErrorNotice, LoadingRows } from "./components/ui";
 function Root() {
@@ -216,6 +219,7 @@ const router = createBrowserRouter([
     ),
     children: [
       { index: true, element: <LandingPage /> },
+      { path: "/share", element: <SharedSetPage /> },
       { path: "/sign-in", element: <AuthPage /> },
       { path: "/forgot-password", element: <PasswordRecoveryPage /> },
       { path: "/reset-password", element: <PasswordRecoveryPage reset /> },
@@ -233,7 +237,7 @@ const router = createBrowserRouter([
               { path: "/history", element: <HistoryPage /> },
               { path: "/review/:id", element: <DueReviewPage /> },
               { path: "/account", element: <AccountPage /> },
-              { path: "/share", element: <SharedSetPage /> },
+              { path: "/sets/:id/view", element: <SavedSetPage /> },
               { path: "/sets/:id/edit", element: <EditorPage /> },
               { path: "/new/:kind/:draftId", element: <EditorPage /> },
             ],

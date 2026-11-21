@@ -167,7 +167,9 @@ export function SetRow({
           {set.ownershipRole &&
             (set.ownershipRole === "primary"
               ? " · Primary owner"
-              : " · Co-owned")}
+              : set.ownershipRole === "viewer"
+                ? " · View only"
+                : " · Co-owned")}
           {set.archived && " · Archived"}
           {set.published && " · Published"}
         </small>

@@ -6,9 +6,15 @@ import { validateContent, type Card } from "../shared/content";
 import type { ReviewQueue } from "../shared/spacedReview";
 import type { Database } from "./db";
 import { markStudied } from "./practice";
-import { readLockedOwnedSet, readOwnedSet, type OwnedSet } from "./setAccess";
+import {
+  readLockedLibrarySet,
+  readLibrarySet,
+  type LibrarySet,
+} from "./setAccess";
 import { progressContent, SNAPSHOT_VERSION } from "./snapshots";
 import { decodeStorage, encodeStorage } from "./storage";
+
+import type { OwnershipRole } from "../shared/sharing";
 
 type ReviewDb = Pick<Database, "$queryRaw">;
 type ReviewSchedule = {
@@ -46,8 +52,8 @@ export function nextCardReview(
   return { streak, dueAt: new Date(at.getTime() + interval * day) };
 }
 
-function reviewStorage(userId: string, primary: boolean) {
-  return primary
+function reviewStorage(userId: string, role: OwnershipRole) {
+  return role === "primary"
     ? {
         table: sql`"CardReview"`,
         ownerColumn: sql``,
@@ -55,7 +61,10 @@ function reviewStorage(userId: string, primary: boolean) {
         ownerFilter: sql``,
       }
     : {
-        table: sql`"CoOwnerCardReview"`,
+        table:
+          role === "viewer"
+            ? sql`"ViewerCardReview"`
+            : sql`"CoOwnerCardReview"`,
         ownerColumn: sql`, "userId"`,
         ownerValue: sql`, ${userId}`,
         ownerFilter: sql`AND "userId" = ${userId}`,
@@ -66,9 +75,9 @@ function readSchedules(
   db: Pick<ReviewDb, "$queryRaw">,
   setId: string,
   userId: string,
-  primary: boolean,
+  role: OwnershipRole,
 ) {
-  const { table, ownerFilter } = reviewStorage(userId, primary);
+  const { table, ownerFilter } = reviewStorage(userId, role);
   return db.$queryRaw<ReviewSchedule[]>(sql`
     SELECT "cardId", fingerprint, streak, "dueAt" FROM ${table}
     WHERE "studySetId" = ${setId} ${ownerFilter}
@@ -91,7 +100,7 @@ export async function recordSpacedReview(
   db: ReviewDb,
   attempt: Attempt,
   completedAt: Date,
-  primary: boolean,
+  role: OwnershipRole,
 ) {
   const { userId, studySetId, startedAt } = attempt;
   if (!attempt.reviewMode || !studySetId) return;
@@ -104,7 +113,7 @@ export async function recordSpacedReview(
   });
   if (!rated.length) return;
   const existing = new Map(
-    (await readSchedules(db, studySetId, userId, primary)).map((row) => [
+    (await readSchedules(db, studySetId, userId, role)).map((row) => [
       row.cardId,
       row,
     ]),
@@ -124,7 +133,7 @@ export async function recordSpacedReview(
       };
     }),
   );
-  const { table, ownerColumn, ownerValue } = reviewStorage(userId, primary);
+  const { table, ownerColumn, ownerValue } = reviewStorage(userId, role);
   await db.$queryRaw(sql`
     INSERT INTO ${table} ("studySetId" ${ownerColumn}, "cardId", fingerprint, streak, "dueAt", "attemptStartedAt")
     SELECT ${studySetId} ${ownerValue}, u."cardId", u.fingerprint, u.streak, u."dueAt", ${startedAt}
@@ -141,7 +150,7 @@ async function planReview(
   userId: string,
   setId: string,
   now: Date,
-  set: OwnedSet,
+  set: LibrarySet,
   knownActiveId?: string | null,
   includePreview = true,
 ) {
@@ -151,7 +160,7 @@ async function planReview(
   const today = new Date(Math.floor(now.getTime() / day) * day);
   const tomorrow = new Date(today.getTime() + day);
   const [schedules, counted, activeAttemptId] = await Promise.all([
-    readSchedules(db, setId, userId, set.ownershipRole === "primary"),
+    readSchedules(db, setId, userId, set.ownershipRole),
     db.$queryRaw<{ count: number }[]>`
       SELECT COALESCE(SUM(COALESCE((result->>'known')::int, 0)
         + COALESCE((result->>'reviewAgain')::int, 0)), 0)::int AS count FROM "Attempt"
@@ -219,7 +228,7 @@ export async function readReviewQueue(
       userId,
       setId,
       new Date(),
-      await readOwnedSet(db, setId, userId),
+      await readLibrarySet(db, setId, userId),
     )
   ).queue;
 }
@@ -231,7 +240,7 @@ export async function changeReviewLimit(
   limit: number,
 ) {
   return db.$transaction(async (tx) => {
-    const set = await readLockedOwnedSet(tx, setId, userId);
+    const set = await readLockedLibrarySet(tx, setId, userId);
     if (await activeReview(tx, userId, setId))
       throw new HTTPException(409, {
         message:
@@ -240,6 +249,8 @@ export async function changeReviewLimit(
     if (set.kind !== "flashcards") throw unavailable();
     if (set.ownershipRole === "primary")
       await tx.$executeRaw`UPDATE "StudySet" SET "reviewLimit" = ${limit} WHERE id = ${setId}`;
+    else if (set.ownershipRole === "viewer")
+      await tx.$executeRaw`UPDATE "StudySetViewer" SET "reviewLimit" = ${limit} WHERE "studySetId" = ${setId} AND "userId" = ${userId}`;
     else
       await tx.$executeRaw`
         UPDATE "StudySetCoOwner" SET "reviewLimit" = ${limit}
@@ -267,7 +278,7 @@ export async function startSpacedReview(
   setId: string,
 ) {
   return db.$transaction(async (tx) => {
-    const set = await readLockedOwnedSet(tx, setId, userId);
+    const set = await readLockedLibrarySet(tx, setId, userId);
     if (set.kind !== "flashcards") throw unavailable();
     const activeId = await activeReview(tx, userId, setId);
     if (activeId) return { id: activeId, started: false as const };

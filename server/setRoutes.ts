@@ -29,18 +29,18 @@ import {
 import { read, schema } from "./request";
 import { conflict, json, unavailable } from "./routeHelpers";
 import {
-  joinCoOwner,
+  joinMembership,
   joinOwnerFolder,
-  lockOwnedSet,
+  readLockedLibrarySet,
   organizeSets,
-  ownedSetIds,
+  librarySetIds,
   ownerPreferences,
   ownerFolderId,
   ownerLastStudiedAt,
   ownerRank,
   ownershipRole,
-  readOwnedSet,
-  type OwnedSet,
+  readLibrarySet,
+  type LibrarySet,
 } from "./setAccess";
 import { encodeStorage, decodeStorage } from "./storage";
 
@@ -70,7 +70,7 @@ function publicSet({
   });
 }
 
-function ownedSetResponse({ ownerName, ...stored }: OwnedSet) {
+function ownedSetResponse({ ownerName, ...stored }: LibrarySet) {
   return { ...decodeStorage(stored), ownerName };
 }
 
@@ -130,7 +130,7 @@ export function registerSetRoutes(app: Hono<Context>) {
     // Project metadata in PostgreSQL: a page must not load thirty 2-MiB documents.
     const [sets, folders] = await Promise.all([
       db.$queryRaw<
-        (Omit<OwnedSet, "content" | "ownerName"> & {
+        (Omit<LibrarySet, "content" | "ownerName"> & {
           count: number;
           manual: ManualOrder | null;
         })[]
@@ -146,8 +146,8 @@ export function registerSetRoutes(app: Hono<Context>) {
           )
           FROM "Attempt" a WHERE a."studySetId" = s.id AND a."userId" = ${userId}
           AND a.status IN ('in_progress', 'reviewing') ORDER BY a."updatedAt" DESC, a.id ASC LIMIT 1) AS continuation
-        FROM "StudySet" s ${joinCoOwner(userId)} ${joinOwnerFolder}
-        WHERE s.id IN ${ownedSetIds(userId)}
+        FROM "StudySet" s ${joinMembership(userId)} ${joinOwnerFolder}
+        WHERE s.id IN ${librarySetIds(userId)}
           AND COALESCE(co.archived, s.archived) = ${archived}
           AND (${kind ?? null}::text IS NULL OR s.kind = ${kind ?? null}::text)
           AND (${storedCourse}::text IS NULL OR COALESCE(f.name, '') = ${storedCourse}::text)
@@ -177,8 +177,8 @@ export function registerSetRoutes(app: Hono<Context>) {
     const rows = await c.get("db").$queryRaw<CourseSummary[]>(sql`
       SELECT course, COUNT(*)::int AS count FROM (
         SELECT COALESCE(f.name, '') AS course
-        FROM "StudySet" s ${joinCoOwner(userId)} ${joinOwnerFolder}
-        WHERE s.id IN ${ownedSetIds(userId)} AND COALESCE(co.archived, s.archived) = ${archived}
+        FROM "StudySet" s ${joinMembership(userId)} ${joinOwnerFolder}
+        WHERE s.id IN ${librarySetIds(userId)} AND COALESCE(co.archived, s.archived) = ${archived}
       ) courses
       GROUP BY course ORDER BY (course = ''), lower(course), course
       LIMIT ${LIST_PAGE_SIZE + 1} OFFSET ${page * LIST_PAGE_SIZE}
@@ -257,11 +257,14 @@ export function registerSetRoutes(app: Hono<Context>) {
     return c.json(publicSet(set), created ? 201 : 200);
   });
   app.get("/api/sets/:id", async (c) => {
-    const set = await readOwnedSet(
-      c.get("db"),
-      c.req.param("id"),
-      c.get("userId"),
-    );
+    const db = c.get("db"),
+      userId = c.get("userId"),
+      id = c.req.param("id");
+    const [alias] = await db.$queryRaw<{ sourceId: string }[]>`
+      SELECT "sourceId" FROM "CloneConversion" WHERE "copyId" = ${id}
+      AND "userId" = ${userId} AND "convertedAt" IS NOT NULL
+    `;
+    const set = await readLibrarySet(db, alias?.sourceId ?? id, userId);
     return c.json(ownedSetResponse(set));
   });
   app.put("/api/sets/:id", async (c) => {
@@ -275,7 +278,8 @@ export function registerSetRoutes(app: Hono<Context>) {
     const id = c.req.param("id");
     const storedContent = json(content);
     const set = await db.$transaction(async (tx) => {
-      await lockOwnedSet(tx, id, userId);
+      const membership = await readLockedLibrarySet(tx, id, userId);
+      if (membership.ownershipRole === "viewer") throw unavailable();
       const changed = await tx.studySet.updateMany({
         where: {
           id,
@@ -290,7 +294,7 @@ export function registerSetRoutes(app: Hono<Context>) {
           revision: { increment: 1 },
         },
       });
-      const saved = await readOwnedSet(tx, id, userId);
+      const saved = await readLibrarySet(tx, id, userId);
       if (!changed.count && saved.revision !== input.revision) throw conflict();
       return saved;
     });
@@ -323,8 +327,9 @@ export function registerSetRoutes(app: Hono<Context>) {
     const duplicateId = c.req.param("id");
     const set = await db.$transaction(async (tx) => {
       await lockLibrary(tx, userId);
-      const original = await readOwnedSet(tx, duplicateId, userId);
+      const original = await readLibrarySet(tx, duplicateId, userId);
       const content = validateContent(decodeStorage(original.content));
+      if (original.ownershipRole === "viewer") throw unavailable();
       const titled = {
         ...content,
         title: [...`Copy of ${content.title}`].slice(0, 200).join(""),
@@ -363,11 +368,12 @@ export function registerSetRoutes(app: Hono<Context>) {
     return c.json({ deleted: true });
   });
   app.get("/api/sets/:id/export", async (c) => {
-    const set = await readOwnedSet(
+    const set = await readLibrarySet(
       c.get("db"),
       c.req.param("id"),
       c.get("userId"),
     );
+    if (set.ownershipRole === "viewer") throw unavailable();
     const content = serializeContent(decodeStorage(set.content));
     c.header(
       "Content-Disposition",

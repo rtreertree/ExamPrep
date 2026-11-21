@@ -404,9 +404,12 @@ export function LibraryPage() {
     setBusy(true);
     setError(undefined);
     try {
-      await api(`/sets/${deleting.id}`, "DELETE", {
-        revision: deleting.revision,
-      });
+      if (deleting.ownershipRole === "viewer")
+        await api(`/sets/${deleting.id}/membership`, "DELETE", {});
+      else
+        await api(`/sets/${deleting.id}`, "DELETE", {
+          revision: deleting.revision,
+        });
       setDeleting(undefined);
       refreshLibrary();
     } catch (e) {
@@ -1012,18 +1015,24 @@ export function LibraryPage() {
       ) : null}
       {deleting ? (
         <Dialog
-          title="Delete this study set?"
+          title={
+            deleting.ownershipRole === "viewer"
+              ? "Remove from your library?"
+              : "Delete this study set?"
+          }
           onClose={() => setDeleting(undefined)}
         >
           <p>
-            “{deleting.title}” will be removed from the library of every owner.
+            {deleting.ownershipRole === "viewer"
+              ? `Remove “${deleting.title}” from your library.`
+              : `“${deleting.title}” will be removed from everyone’s library.`}
             Everyone keeps their own past attempts in History.
           </p>
           <ErrorNotice error={error} />
           <div className="actions">
             <Button onClick={() => setDeleting(undefined)}>Cancel</Button>
             <Button variant="danger" busy={busy} onClick={remove}>
-              Delete set
+              {deleting.ownershipRole === "viewer" ? "Remove" : "Delete set"}
             </Button>
           </div>
         </Dialog>

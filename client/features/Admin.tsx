@@ -428,7 +428,7 @@ function SetDetails({ id }: { id: string }) {
         >
           <p>
             Delete <strong>{preview.data.content.title}</strong> from its
-            owner’s library and revoke access for {confirm.coOwners} co-owners.
+            owner’s library and revoke access for {confirm.coOwners} co-owners and {confirm.viewers} saved viewers.
             This removes {confirm.invitations} pending invitations.
           </p>
           <p>

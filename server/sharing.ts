@@ -83,7 +83,7 @@ async function readShareSettings(
 ): Promise<ShareSettings> {
   type SettingsRow = Omit<ShareSettings, "link"> & { nonce: string | null };
   const [row] = await db.$queryRaw<SettingsRow[]>`
-    SELECT l.nonce,
+    SELECT l.nonce, COALESCE(l."guestAccess", false) AS "guestAccess",
       COALESCE((
         SELECT jsonb_agg(jsonb_build_object('id', u.id, 'email', u.email) ORDER BY u.email, u.id)
         FROM "StudySetCoOwner" co JOIN "user" u ON u.id = co."userId"
@@ -100,12 +100,73 @@ async function readShareSettings(
   if (!row) throw unavailableSet();
   return {
     link: row.nonce ? `/share#${await signLink(row.nonce, secret)}` : null,
+    guestAccess: row.guestAccess,
     coOwners: row.coOwners,
     invitations: row.invitations,
   };
 }
 
 const tokenBody = { token: z.string().max(128) };
+
+export function registerSharePreview(app: Hono<Context>, secret: string) {
+  app.post("/api/shares/preview", async (c) => {
+    const { token } = schema(
+      z.strictObject(tokenBody),
+      await read(c.req.raw, 1024),
+    );
+    const nonce = await verifyLink(token, secret);
+    const session = await c
+      .get("auth")
+      .api.getSession({ headers: c.req.raw.headers });
+    if (session?.user.suspended)
+      throw new HTTPException(403, { message: "This account is suspended." });
+    const [set] = await c.get("db").$queryRaw<
+      (SetReaderData & { guestAccess: boolean })[]
+    >`
+      SELECT CASE WHEN l."guestAccess" OR ${!!session} THEN s.content END AS content, l."guestAccess", u.name AS "ownerName" FROM "StudySet" s
+      JOIN "user" u ON u.id = s."userId"
+      JOIN "StudySetCopyLink" l ON l."studySetId" = s.id WHERE l.nonce = ${nonce}
+    `;
+    if (!set) throw invalidLink();
+    if (!set.guestAccess && !session) return c.json({ signInRequired: true });
+    return c.json({
+      content: decodeStorage(set.content),
+      ownerName: set.ownerName,
+    });
+  });
+}
+
+async function saveLiveSet(
+  db: Database,
+  userId: string,
+  source: { id: string } | { nonce: string },
+) {
+  return db.$transaction(async (tx) => {
+    await lockLibrary(tx, userId);
+    const nonce = "nonce" in source ? source.nonce : null;
+    const id =
+      "id" in source
+        ? source.id
+        : (
+            await tx.$queryRaw<{ id: string }[]>`
+      SELECT "studySetId" AS id FROM "StudySetCopyLink" WHERE nonce=${nonce}`
+          )[0]?.id;
+    if (!id || !(await lockSet(tx, id))) throw unavailableSet();
+    const [set] = await tx.$queryRaw<{ member: boolean }[]>`
+      SELECT s."userId"=${userId} OR EXISTS(SELECT 1 FROM "StudySetCoOwner" co WHERE co."studySetId"=s.id AND co."userId"=${userId}) AS member
+      FROM "StudySet" s WHERE s.id=${id} AND
+      ((${nonce}::text IS NULL AND s.published) OR EXISTS(SELECT 1 FROM "StudySetCopyLink" l WHERE l."studySetId"=s.id AND l.nonce=${nonce}))
+    `;
+    if (!set) throw unavailableSet();
+    if (!set.member)
+      await tx.$executeRaw`
+      INSERT INTO "StudySetViewer" ("studySetId","userId",discovered,"linkNonce") VALUES (${id},${userId},${nonce === null},${nonce})
+      ON CONFLICT ("studySetId","userId") DO UPDATE SET discovered="StudySetViewer".discovered OR EXCLUDED.discovered,
+        "linkNonce"=COALESCE(EXCLUDED."linkNonce","StudySetViewer"."linkNonce")
+    `;
+    return { id };
+  });
+}
 
 export function registerSharing(app: Hono<Context>, secret: string) {
   app.get("/api/sets/:id/sharing", async (c) =>
@@ -119,8 +180,11 @@ export function registerSharing(app: Hono<Context>, secret: string) {
     ),
   );
   app.put("/api/sets/:id/sharing/link", async (c) => {
-    const { enabled } = schema(
-      z.strictObject({ enabled: z.boolean() }),
+    const { enabled, allowGuests } = schema(
+      z.strictObject({
+        enabled: z.boolean(),
+        allowGuests: z.literal(true).optional(),
+      }),
       await read(c.req.raw, 1024),
     );
     const setId = c.req.param("id");
@@ -129,26 +193,36 @@ export function registerSharing(app: Hono<Context>, secret: string) {
       await c.get("db").$transaction(async (tx) => {
         await lockPrimarySet(tx, setId, userId);
         await setLink(tx, setId, enabled);
+        if (enabled && allowGuests)
+          await tx.$executeRaw`UPDATE "StudySetCopyLink" SET "guestAccess"=true WHERE "studySetId"=${setId}`;
         return readShareSettings(tx, setId, userId, secret);
       }),
     );
   });
-  app.post("/api/shares/preview", async (c) => {
+  app.post("/api/shares/save", async (c) => {
     const { token } = schema(
       z.strictObject(tokenBody),
       await read(c.req.raw, 1024),
     );
     const nonce = await verifyLink(token, secret);
-    const [set] = await c.get("db").$queryRaw<SetReaderData[]>`
-      SELECT s.content, u.name AS "ownerName" FROM "StudySet" s
-      JOIN "user" u ON u.id = s."userId"
-      JOIN "StudySetCopyLink" l ON l."studySetId" = s.id WHERE l.nonce = ${nonce}
-    `;
-    if (!set) throw invalidLink();
-    return c.json({
-      content: decodeStorage(set.content),
-      ownerName: set.ownerName,
+    return c.json(await saveLiveSet(c.get("db"), c.get("userId"), { nonce }));
+  });
+  app.post("/api/discover/:id/save", async (c) =>
+    c.json(
+      await saveLiveSet(c.get("db"), c.get("userId"), {
+        id: c.req.param("id"),
+      }),
+    ),
+  );
+  app.delete("/api/sets/:id/membership", async (c) => {
+    const id = c.req.param("id"),
+      userId = c.get("userId");
+    await c.get("db").$transaction(async (tx) => {
+      await lockLibrary(tx, userId);
+      await lockSet(tx, id);
+      await tx.$executeRaw`DELETE FROM "StudySetViewer" WHERE "studySetId"=${id} AND "userId"=${userId}`;
     });
+    return c.body(null, 204);
   });
   app.get("/api/ownership-invitations", async (c) => {
     return c.json(await readInvitations(c.get("db"), c.get("userId")));
@@ -246,7 +320,7 @@ type WriteDb = Pick<Database, "$executeRaw">;
 export async function setLink(tx: WriteDb, setId: string, enabled: boolean) {
   if (enabled)
     await tx.$executeRaw`
-          INSERT INTO "StudySetCopyLink" ("studySetId", nonce) VALUES (${setId}, ${crypto.randomUUID()})
+          INSERT INTO "StudySetCopyLink" ("studySetId", nonce, "guestAccess") VALUES (${setId}, ${crypto.randomUUID()}, true)
           ON CONFLICT ("studySetId") DO NOTHING
         `;
   else

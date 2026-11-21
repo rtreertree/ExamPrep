@@ -84,7 +84,7 @@ const setLocations = (userId: string) => sql`
   FROM "StudySet" WHERE "userId" = ${userId}
   UNION ALL
   SELECT "studySetId" AS id, "folderId", archived, "manualRank", true AS "coOwned"
-  FROM "StudySetCoOwner" WHERE "userId" = ${userId}
+  FROM "LibraryMembership" WHERE "userId" = ${userId}
 `;
 
 const folderRanks = (userId: string) => sql`
@@ -230,6 +230,9 @@ async function reorder(
         ${changes}, primary_sets AS (
           UPDATE "StudySet" s SET "manualRank" = moves."manualRank"
           FROM moves WHERE NOT moves."coOwned" AND s.id = moves.id AND s."userId" = ${userId}
+        ), viewers AS (
+          UPDATE "StudySetViewer" v SET "manualRank" = moves."manualRank"
+          FROM moves WHERE moves."coOwned" AND v."studySetId" = moves.id AND v."userId" = ${userId}
         )
         UPDATE "StudySetCoOwner" co SET "manualRank" = moves."manualRank"
         FROM moves WHERE moves."coOwned" AND co."studySetId" = moves.id AND co."userId" = ${userId}
@@ -308,6 +311,9 @@ export function registerFolders(app: Hono<Context>) {
         ), primary_sets AS (
           UPDATE "StudySet" s SET "folderId" = NULL, course = '', "manualRank" = moved.rank
           FROM moved WHERE NOT moved."coOwned" AND s.id = moved.id AND s."userId" = ${userId}
+        ), viewers AS (
+          UPDATE "StudySetViewer" v SET "folderId" = NULL, course = '', "manualRank" = moved.rank
+          FROM moved WHERE moved."coOwned" AND v."studySetId" = moved.id AND v."userId" = ${userId}
         )
         UPDATE "StudySetCoOwner" co SET "folderId" = NULL, course = '', "manualRank" = moved.rank
         FROM moved WHERE moved."coOwned" AND co."studySetId" = moved.id AND co."userId" = ${userId}
