@@ -25,7 +25,15 @@ export function readTestTarget(
       "Set test-only pooled and direct URLs and a 64-digit hex TEST_DATABASE_TOKEN.",
     );
   try {
-    checkConnections({ DATABASE_URL: runtime, DATABASE_URL_UNPOOLED: direct });
+    const urls = checkConnections({
+      DATABASE_URL: runtime,
+      DATABASE_URL_UNPOOLED: direct,
+    });
+    if (
+      decodeURIComponent(urls.runtime.username) ===
+      decodeURIComponent(urls.migration.username)
+    )
+      throw new Error("Live tests require separate database roles.");
   } catch {
     throw new Error(
       "Test connections must use separate roles on the same Neon database, pooled and direct with TLS.",

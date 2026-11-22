@@ -50,11 +50,7 @@ export function checkConnections(env) {
     throw new Error(
       "Runtime and migration URLs must target the same Neon endpoint and database.",
     );
-  if (
-    decodeURIComponent(runtime.username) ===
-    decodeURIComponent(migration.username)
-  )
-    throw new Error("Use separate runtime and migration database roles.");
+  return { runtime, migration };
 }
 
 export function productionConfig(env) {
