@@ -15,6 +15,14 @@ import { registerReviewRoutes } from "./reviewRoutes";
 import { registerSetRoutes } from "./setRoutes";
 import { registerSharePreview, registerSharing } from "./sharing";
 import { readStudySuggestion } from "./studySuggestion";
+import {
+  isLoopbackOrigin,
+  matchesTestDatabase,
+  testDatabaseDigest,
+  testDatabaseHeader,
+  testDatabasePath,
+  testDatabaseProofHeader,
+} from "./testDatabase";
 
 export type Context = {
   Variables: {
@@ -90,13 +98,38 @@ export function createApp(
       if (!c.req.header("Content-Type")?.startsWith("application/json"))
         throw new HTTPException(415, { message: "Use application/json." });
     }
+    const token = config.TEST_DATABASE_TOKEN;
+    const testProof = c.req.path === testDatabasePath;
+    if (
+      testProof &&
+      (token === undefined ||
+        c.req.method !== "GET" ||
+        c.req.header(testDatabaseHeader) !== token)
+    )
+      return c.notFound();
     const db = connectDatabase(config.DATABASE_URL);
-    c.set("db", db);
-    c.set(
-      "auth",
-      createAuth(db, config, c.req.path === "/api/auth/reset-password"),
-    );
     try {
+      if (token !== undefined) {
+        if (
+          !/^[\da-f]{64}$/.test(token) ||
+          !isLoopbackOrigin(config.BETTER_AUTH_URL) ||
+          new URL(c.req.url).origin !== config.BETTER_AUTH_URL ||
+          !(await matchesTestDatabase(db, token, true))
+        )
+          return c.json(
+            { error: "The dedicated test database could not be verified." },
+            503,
+          );
+        if (testProof)
+          return c.body(null, 204, {
+            [testDatabaseProofHeader]: await testDatabaseDigest(token),
+          });
+      }
+      c.set("db", db);
+      c.set(
+        "auth",
+        createAuth(db, config, c.req.path === "/api/auth/reset-password"),
+      );
       await next();
     } finally {
       await db.$disconnect();

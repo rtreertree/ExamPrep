@@ -1,4 +1,19 @@
-# Verification — 8 November 2026
+# Verification
+
+## Database safety and recovery — 22 November 2026
+
+| Check | Result |
+| --- | --- |
+| TypeScript and production frontend/Node build | Passed |
+| Vitest | 166 passed, 23 live integration cases skipped |
+| Simulated-data Chromium suite | 74 passed |
+| Default and production Worker dry runs | Passed |
+| Isolated PostgreSQL rehearsal using PGlite | All nine migrations applied. The recovery migration rejected invalid existing schedule data and rolled back. Restricted grants, marker checks, clone archive and recovery SQL, and backup schedule replay passed. |
+| Local Node and Worker guard | Both loaded the temporary test binding and rejected requests before accessing a fake database URL. |
+| Database acceptance workflow | YAML parsed. Live Neon acceptance requires the isolated GitHub environment or a marked disposable local branch. |
+
+Production rollout and Worker rollback-version verification remain in the
+[deployment handoff](DEPLOYMENT.md#restricted-runtime-credential-rollout).
 
 ## Deployment readiness diagnostics — 8 November 2026
 

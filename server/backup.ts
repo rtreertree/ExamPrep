@@ -2,7 +2,12 @@ import { sqltag as sql } from "@prisma/client/runtime/wasm-compiler-edge";
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { CardReview } from "../generated/prisma/client";
-import { backupSummary, validateBackup } from "../shared/backup";
+import {
+  backupSummary,
+  validateBackup,
+  type BackupPreview,
+  type BackupRestoreResult,
+} from "../shared/backup";
 import { itemsOf, type StudyContent } from "../shared/content";
 import { practiceSettingsSchema } from "../shared/attempts";
 import { BACKUP_BYTES, decodeFile, parseJSON } from "../shared/json";
@@ -20,6 +25,7 @@ import { progressContent, SNAPSHOT_VERSION } from "./snapshots";
 import { decodeStorage, encodeStorage } from "./storage";
 import { lockLibrary } from "./libraryOrder";
 import type { LibraryFolder } from "../shared/listing";
+import { planBackupReviews, restoreBackupReviews } from "./backup-reviews";
 
 async function exportBackup(
   db: Database,
@@ -67,6 +73,7 @@ async function exportBackup(
           }[]
         | null;
       reviews: CardReview[] | null;
+      viewerReviews: CardReview[] | null;
     }[]
   >(sql`
     WITH accessible_sets AS (
@@ -91,19 +98,26 @@ async function exportBackup(
       FROM "CoOwnerCardReview" r JOIN accessible_sets s ON s.id = r."studySetId"
       WHERE ${includeHistory} AND s.content->>'kind' = 'flashcards' AND r."userId" = ${userId}
         AND s."ownershipRole" = 'co_owner'
+    ), viewer_reviews AS (
+      SELECT r."studySetId", r."cardId", r.fingerprint, r.streak, r."dueAt", r."attemptStartedAt"
+      FROM "StudySetViewer" v JOIN "ViewerCardReview" r USING ("studySetId", "userId")
+      JOIN "StudySet" s ON s.id = v."studySetId"
+      WHERE ${includeHistory} AND s.kind = 'flashcards' AND v."userId" = ${userId}
     ), size AS (
       SELECT (
         COALESCE((SELECT sum(pg_column_size(f)) FROM folders f), 0) +
         COALESCE((SELECT sum(pg_column_size(s)) FROM sets s), 0) +
         COALESCE((SELECT sum(pg_column_size(a)) FROM attempts a), 0) +
-        COALESCE((SELECT sum(pg_column_size(r)) FROM reviews r), 0)
+        COALESCE((SELECT sum(pg_column_size(r)) FROM reviews r), 0) +
+        COALESCE((SELECT sum(pg_column_size(r)) FROM viewer_reviews r), 0)
       ) > ${BACKUP_BYTES} AS "tooLarge"
     )
     SELECT "tooLarge",
       CASE WHEN NOT "tooLarge" THEN (SELECT jsonb_agg(to_jsonb(f) - 'manualRank' ORDER BY "manualRank", id) FROM folders f) END AS folders,
       CASE WHEN NOT "tooLarge" THEN (SELECT jsonb_agg(to_jsonb(s) - 'manualRank' ORDER BY "manualRank", id) FROM sets s) END AS sets,
       CASE WHEN NOT "tooLarge" THEN (SELECT jsonb_agg(a ORDER BY id) FROM attempts a) END AS attempts,
-      CASE WHEN NOT "tooLarge" THEN (SELECT jsonb_agg(r ORDER BY "studySetId", "cardId") FROM reviews r) END AS reviews
+      CASE WHEN NOT "tooLarge" THEN (SELECT jsonb_agg(r ORDER BY "studySetId", "cardId") FROM reviews r) END AS reviews,
+      CASE WHEN NOT "tooLarge" THEN (SELECT jsonb_agg(r ORDER BY "studySetId", "cardId") FROM viewer_reviews r) END AS "viewerReviews"
     FROM size`);
   if (rows.tooLarge)
     throw new HTTPException(413, {
@@ -135,11 +149,13 @@ async function exportBackup(
           },
     };
   });
-  const reviews = (rows.reviews ?? []).map((row) => ({
+  const reviewDates = (row: CardReview) => ({
     ...row,
     dueAt: utc(row.dueAt),
     attemptStartedAt: utc(row.attemptStartedAt),
-  }));
+  });
+  const reviews = (rows.reviews ?? []).map(reviewDates);
+  const viewerReviews = (rows.viewerReviews ?? []).map(reviewDates);
   const backup = {
     library: {
       ...archive,
@@ -149,7 +165,13 @@ async function exportBackup(
     },
     ...(includeHistory
       ? {
-          history: { ...archive, kind: "exam-prep-history", attempts, reviews },
+          history: {
+            ...archive,
+            kind: "exam-prep-history",
+            attempts,
+            reviews,
+            ...(viewerReviews.length ? { viewerReviews } : {}),
+          },
         }
       : {}),
   };
@@ -166,15 +188,11 @@ async function exportBackup(
 const utc = (value: string | Date) =>
   (value instanceof Date ? value : new Date(value + "Z")).toISOString();
 
-async function restoreBackup(
-  db: Database,
-  userId: string,
-  backup: ReturnType<typeof validateBackup>,
-) {
+function backupIdMapper(userId: string, backupId: string) {
   // File-local IDs are remapped for this account. Repeating a restore of the
   // same file skips copies already present, even if the first reply was lost.
-  const prefix = JSON.stringify([userId, backup.backupId]);
-  const remap = async (kind: string, id: string) => {
+  const prefix = JSON.stringify([userId, backupId]);
+  return async (kind: string, id: string) => {
     const hash = await crypto.subtle.digest(
       "SHA-256",
       new TextEncoder().encode(prefix + kind + id),
@@ -183,6 +201,42 @@ async function restoreBackup(
       byte.toString(16).padStart(2, "0"),
     ).join("");
   };
+}
+
+async function previewBackup(
+  db: Database,
+  userId: string,
+  backup: ReturnType<typeof validateBackup>,
+): Promise<BackupPreview> {
+  const remap = backupIdMapper(userId, backup.backupId);
+  const reviewedSets = [
+    ...new Set(backup.reviews.map(({ studySetId }) => studySetId)),
+  ];
+  const setIds = new Map(
+    await Promise.all(
+      reviewedSets.map(async (id) => [id, await remap("set", id)] as const),
+    ),
+  );
+  const { owned, viewers, reviewSkips } = await planBackupReviews(
+    db,
+    userId,
+    backup,
+    setIds,
+    false,
+  );
+  return {
+    ...backupSummary(backup),
+    reviewCount: owned.length + viewers.length - reviewSkips.unchanged,
+    reviewSkips,
+  };
+}
+
+async function restoreBackup(
+  db: Database,
+  userId: string,
+  backup: ReturnType<typeof validateBackup>,
+): Promise<BackupRestoreResult> {
+  const remap = backupIdMapper(userId, backup.backupId);
   const [setIds, attemptIds, folderIds] = await Promise.all([
     Promise.all(
       backup.sets.map(async ({ id }) => [id, await remap("set", id)] as const),
@@ -216,13 +270,6 @@ async function restoreBackup(
       })),
     ),
   );
-  const reviews = JSON.stringify(
-    backup.reviews.map((review) => ({
-      ...review,
-      studySetId: setIds.get(review.studySetId),
-    })),
-  );
-
   return db.$transaction(async (tx) => {
     await lockLibrary(tx, userId);
     const folders = JSON.stringify(
@@ -320,13 +367,7 @@ async function restoreBackup(
         position int, "startedAt" timestamp, "updatedAt" timestamp, "completedAt" timestamp, "restoreOrder" int)
       ORDER BY "restoreOrder"
       ON CONFLICT (id) DO NOTHING RETURNING id`;
-    const restoredReviews = await tx.$queryRaw<{ cardId: string }[]>`
-      INSERT INTO "CardReview" ("studySetId", "cardId", fingerprint, streak, "dueAt", "attemptStartedAt")
-      SELECT "studySetId", "cardId", fingerprint, streak, "dueAt", "attemptStartedAt"
-      FROM jsonb_to_recordset(${reviews}::jsonb) AS r(
-        "studySetId" text, "cardId" text, fingerprint text, streak int, "dueAt" timestamp, "attemptStartedAt" timestamp)
-      ORDER BY "studySetId", "cardId"
-      ON CONFLICT ("studySetId", "cardId") DO NOTHING RETURNING "cardId"`;
+    const reviewResult = await restoreBackupReviews(tx, userId, backup, setIds);
     return {
       ...(backup.folders.length || legacyNames.length
         ? {
@@ -337,7 +378,7 @@ async function restoreBackup(
         : {}),
       setCount: restoredSets.length,
       attemptCount: restoredAttempts.length,
-      reviewCount: restoredReviews.length,
+      ...reviewResult,
     };
   });
 }
@@ -355,7 +396,13 @@ export function registerBackup(app: Hono<Context>) {
     ),
   );
   app.post("/api/backup/preview", async (c) =>
-    c.json(backupSummary(await readBackup(c.req.raw))),
+    c.json(
+      await previewBackup(
+        c.get("db"),
+        c.get("userId"),
+        await readBackup(c.req.raw),
+      ),
+    ),
   );
   app.post("/api/backup/restore", async (c) => {
     const backup = await readBackup(c.req.raw);

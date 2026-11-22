@@ -15,6 +15,7 @@ import {
 import { ValidationError } from "./json";
 
 const stamp = z.iso.datetime();
+export const maxReviewStartSkewMs = 5 * 60 * 1000;
 const archive = { schemaVersion: z.literal(1), backupId: z.uuid() };
 const revision = z.number().int().min(1).max(2_147_483_647);
 const folderEntry = z.strictObject({
@@ -72,6 +73,7 @@ const backupSchema = z.strictObject({
       kind: z.literal("exam-prep-history"),
       attempts: z.array(attemptEntry),
       reviews: z.array(reviewEntry),
+      viewerReviews: z.array(reviewEntry).optional(),
     })
     .optional(),
 });
@@ -110,7 +112,7 @@ function fullSetSignature(doc: StudyContent) {
   ]);
 }
 
-export function validateBackup(input: unknown) {
+export function validateBackup(input: unknown, now = Date.now()) {
   const parsed = backupSchema.safeParse(input);
   if (!parsed.success)
     throw new ValidationError(
@@ -269,7 +271,29 @@ export function validateBackup(input: unknown) {
     }
   }
 
-  const reviews = history?.reviews ?? [];
+  function validateReviewDates(row: z.infer<typeof reviewEntry>, path: string) {
+    const start = Date.parse(row.attemptStartedAt);
+    const due = Date.parse(row.dueAt);
+    if (!Number.isFinite(start) || start > now + maxReviewStartSkewMs)
+      invalid(
+        `${path}/attemptStartedAt`,
+        "The review attempt cannot start more than five minutes in the future.",
+      );
+    if (!Number.isFinite(due) || due < start)
+      invalid(
+        `${path}/dueAt`,
+        "The review due date cannot precede the attempt start.",
+      );
+    return {
+      ...row,
+      attemptStartedAt: new Date(start).toISOString(),
+      dueAt: new Date(due).toISOString(),
+    };
+  }
+
+  const reviews = (history?.reviews ?? []).map((row, i) =>
+    validateReviewDates(row, `/history/reviews/${i}`),
+  );
   const reviewKeys = new Set<string>();
   for (const [i, row] of reviews.entries()) {
     const set = setsById.get(row.studySetId);
@@ -281,12 +305,23 @@ export function validateBackup(input: unknown) {
       );
     reviewKeys.add(key);
   }
+  const viewerReviews = (history?.viewerReviews ?? []).map((row, i) =>
+    validateReviewDates(row, `/history/viewerReviews/${i}`),
+  );
+  const viewerReviewKeys = new Set<string>();
+  for (const [i, row] of viewerReviews.entries()) {
+    const key = `${row.studySetId}/${row.cardId}`;
+    if (viewerReviewKeys.has(key))
+      invalid(`/history/viewerReviews/${i}`, "Duplicate card review.");
+    viewerReviewKeys.add(key);
+  }
   return {
     backupId: library.backupId,
     folders: library.folders ?? [],
     sets,
     attempts: ordered,
     reviews,
+    viewerReviews,
   };
 }
 
@@ -298,8 +333,15 @@ export function backupSummary(backup: ReturnType<typeof validateBackup>) {
     ...(folderNames.size ? { folderCount: folderNames.size } : {}),
     setCount: backup.sets.length,
     attemptCount: backup.attempts.length,
-    reviewCount: backup.reviews.length,
+    reviewCount: backup.reviews.length + backup.viewerReviews.length,
     titles: backup.sets.slice(0, 20).map((set) => set.content.title),
   };
 }
 export type BackupSummary = ReturnType<typeof backupSummary>;
+export type BackupReviewSkips = {
+  unchanged: number;
+  inaccessible: number;
+  cardMismatch: number;
+};
+export type BackupPreview = BackupSummary & { reviewSkips: BackupReviewSkips };
+export type BackupRestoreResult = Omit<BackupPreview, "titles">;

@@ -62,7 +62,12 @@ import { PracticeSetup } from "../components/PracticeSetup";
 import { SetSharing } from "./SetSharing";
 import "./library-editor.css";
 
-type Loaded = { set?: StudySet; draft?: Draft; missing: boolean };
+type Loaded = {
+  set?: StudySet;
+  draft?: Draft;
+  missing: boolean;
+  readOnlySetId?: string;
+};
 export function EditorPage() {
   const { id, kind, draftId } = useParams();
   const { user } = useAuth();
@@ -84,7 +89,17 @@ export function EditorPage() {
       getDraft(user!.id, key).catch(() => undefined),
     ])
       .then(([set, draft]) => {
-        if (live) setLoaded({ set, draft, missing: !!id && !set });
+        if (!live) return;
+        const readOnlySetId =
+          set && (set.ownershipRole === "viewer" || set.id !== id)
+            ? set.id
+            : undefined;
+        setLoaded({
+          set: readOnlySetId ? undefined : set,
+          draft,
+          missing: !!id && !set,
+          readOnlySetId,
+        });
       })
       .catch((e) => {
         if (live) setError(e);
@@ -106,11 +121,8 @@ export function EditorPage() {
     );
   }
   if (!loaded) return <LoadingRows label="Loading the editor" />;
-  if (
-    loaded.set &&
-    (loaded.set.ownershipRole === "viewer" || loaded.set.id !== id)
-  )
-    return <Navigate replace to={`/sets/${loaded.set.id}/view`} />;
+  if (loaded.readOnlySetId && !loaded.draft)
+    return <Navigate replace to={`/sets/${loaded.readOnlySetId}/view`} />;
   if (loaded.missing && !loaded.draft)
     return (
       <Notice tone="warning">
@@ -138,8 +150,13 @@ function Editor({
 }) {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const detached = initial.missing || !!initial.readOnlySetId;
+  const discardDestination = initial.readOnlySetId
+    ? `/sets/${initial.readOnlySetId}/view`
+    : "/library";
   const [content, setContent] = useState<StudyContent>(
-    () => initial.set?.content ?? emptyContent(kind),
+    () =>
+      initial.set?.content ?? emptyContent(initial.draft?.content.kind ?? kind),
   );
   const [revision, setRevision] = useState<number | null>(
     initial.set?.revision ?? null,
@@ -153,7 +170,7 @@ function Editor({
     JSON.stringify(initial.set?.content ?? content),
   );
   const [recovery, setRecovery] = useState(initial.draft);
-  const [conflict, setConflict] = useState(initial.missing);
+  const [conflict, setConflict] = useState(detached);
   const [index, setIndex] = useState(0);
   const [itemSearch, setItemSearch] = useState("");
   const [itemSearchOpen, setItemSearchOpen] = useState(false);
@@ -286,9 +303,9 @@ function Editor({
     try {
       await removeDraft(user!.id, draftKey);
       setRecovery(undefined);
-      if (initial.missing) {
+      if (detached) {
         allowedLeave.current = true;
-        navigate("/library");
+        navigate(discardDestination);
       }
     } catch {
       setStorageError(
@@ -301,7 +318,7 @@ function Editor({
     setContent(recovery.content);
     setRevision(recovery.baseRevision);
     setConflict(
-      initial.missing ||
+      detached ||
         (initial.set ? recovery.baseRevision !== initial.set.revision : false),
     );
     setRecovery(undefined);
@@ -652,8 +669,7 @@ function Editor({
         <Notice tone="warning">
           <p>
             A local draft from {new Date(recovery.updatedAt).toLocaleString()}{" "}
-            is available. Restore it to continue editing, or discard it to use
-            the saved version.
+            is available. Restore it to continue editing, or discard it.
           </p>
           <div className="actions">
             <Button onClick={restore}>Restore draft</Button>
@@ -667,8 +683,10 @@ function Editor({
         <Notice tone="warning">
           <p>
             {initial.missing
-              ? "The original set was deleted."
-              : "The saved version changed since this draft began."}{" "}
+              ? "The original set is unavailable."
+              : initial.readOnlySetId
+                ? "The original set now opens in the live reader."
+                : "The saved version changed since this draft began."}{" "}
             Preserve these changes as a new set, or discard them.
           </p>
           <div className="actions">
@@ -685,7 +703,7 @@ function Editor({
                   await removeDraft(user!.id, draftKey);
                   allowedLeave.current = true;
                   window.location.assign(
-                    setId ? `/sets/${setId}/edit` : "/library",
+                    setId ? `/sets/${setId}/edit` : discardDestination,
                   );
                 } catch {
                   setStorageError(

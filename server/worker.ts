@@ -4,6 +4,7 @@ import { PrismaNeon } from "@prisma/adapter-neon";
 type WorkerEnv = Cloudflare.Env & {
   RESEND_API_KEY?: string;
   RESET_EMAIL_FROM?: string;
+  TEST_DATABASE_TOKEN?: string;
 };
 export default {
   async fetch(

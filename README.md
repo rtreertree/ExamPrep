@@ -27,9 +27,9 @@ npm run worker:check
 npm run dev:worker
 ```
 
-GitHub CI/CD, exact secrets, domain setup, migration ordering and rollback are documented in [DEPLOYMENT.md](DEPLOYMENT.md). PR checks use no secrets. Reviewed `main` changes deploy the Worker and assets together through the **production** GitHub environment after the regular CI checks pass. GitHub runs simulated-data Chromium browser regressions without secrets. It runs no live database acceptance tests and requires no Neon API key. Local opt-in acceptance tests remain available using only a dedicated test database connection. Actions → **Release** also supports manual deployment from `main`. Production migration/deployment scripts are restricted to that job; use the workflow instead of deploying the top-level local Worker configuration.
+GitHub CI/CD, secrets, domain setup, migrations and rollback are documented in [DEPLOYMENT.md](DEPLOYMENT.md). PR checks use simulated data and run without credentials. The manual **Database acceptance** workflow runs on `main` against a disposable branch in a separate Neon test project. The **Release** workflow deploys the Worker and assets through the production environment after the regular CI checks pass.
 
-The release keeps the existing `cloudflare:check` readiness guard. It uses the deployment database and is read-only apart from a transient hashing probe; it refuses remaining old-format credentials. Use `npm run cloudflare:check -- --local` to check an intentional localhost origin. `/api` and `/api/*` reach Hono and never fall back to the SPA. Public version previews are disabled to avoid sharing production resources. No production migration or public deployment was performed during local validation.
+The release runs `cloudflare:check` against the deployment database. It verifies runtime privileges, probes password hashing, and rejects old-format credentials. Use `npm run cloudflare:check -- --local` for local development checks. `/api` and `/api/*` reach Hono. Public version previews are disabled to keep production resources private.
 
 The configuration targets **Workers Free**: there is no paid-only CPU setting, the Worker is minified, and static assets bypass application execution. Better Auth still owns registration, sign-in, password changes, sessions, and throttling. Its password callbacks delegate slow hashing to native PostgreSQL `pgcrypto` bcrypt at cost **12**, installed by the second migration. The Worker performs only a small native HMAC-SHA384 pre-hash with a separate secret pepper, then awaits the database. Its 64-character base64 output avoids bcrypt's 72-byte truncation and NUL limitations without truncating Unicode passwords. This follows [OWASP's peppered bcrypt pre-hash recipe](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html#pre-hashing-passwords-with-bcrypt). No plaintext password or pepper is sent to SQL; SQL parameters must still be treated as sensitive. Keep TLS enabled and do not log query parameters.
 
@@ -64,23 +64,17 @@ npm run build
 npm run worker:check
 ```
 
-`npm test` runs the shared file/grading/storage tests and skips live database tests. To run the real database acceptance suite, start either local runtime against a **dedicated test branch**, then explicitly opt in:
+`npm test` runs the database-free suite. For live acceptance, follow the [dedicated test database setup](DEPLOYMENT.md#local-database-acceptance) and put the test connection URLs, marker token, and test auth secrets in the ignored `.env.test` file:
 
 ```sh
-RUN_DATABASE_TESTS=1 TEST_BASE_URL=http://127.0.0.1:8787 npx vitest run tests/api.integration.test.ts
-node --import tsx scripts/compatibility.ts http://127.0.0.1:8787
-npx playwright install chromium
-npm run test:e2e
+npm run build
+npm exec -- playwright install chromium
+node --env-file=.env.test --import tsx scripts/acceptance.ts
 ```
 
-For automated startup, API/browser/smoke tests on **both** runtimes, and server
-cleanup, use `TEST_DATABASE_CONFIRMED=1 npm run test:acceptance` after building and
-installing Chromium. This uses ports 8791/8792 and the dedicated test database in
-`.env`; it never overwrites `.dev.vars` or targets the production domain.
+The wrapper starts Node and Worker on ports 8791 and 8792, verifies both use the marked database, and runs the live API, browser, and smoke checks. The live suites delete their disposable accounts afterward. Keep browser runs sequential because the persistent auth limiter is enabled.
 
-The integration and browser suites use unique disposable accounts and delete those accounts and their owned records afterward. They read the ignored `.env` for cleanup, so its database **must match the runtime being tested**. Never run them against production. Keep browser tests sequential because the real persistent auth limiter is enabled. Rapid repeated test runs can correctly hit throttling; allow the 60-second window to expire.
-
-The simulated-data suite (`npm run test:e2e:mock`) starts its own Vite server on `127.0.0.1:5173` and needs no account or database. Install Chromium with `npx playwright install chromium` first. Use `npx playwright test --project=live` only against a dedicated test database. Live browser tests expect a running **built** app. Set `TEST_BASE_URL` to the Worker origin to repeat them there; that runtime's `BETTER_AUTH_URL` must match. Screenshots and browser output go to `/tmp`, not source control. Browser plugin availability and executed checks are recorded in [verification notes](VERIFICATION.md).
+The simulated-data suite (`npm run test:e2e:mock`) starts its own Vite server on `127.0.0.1:5173` and needs no account or database. For a direct live browser run, start a built local runtime in test mode, supply its exact loopback origin in `TEST_BASE_URL`, then select `--project=live`. Direct Vitest runs also require `RUN_DATABASE_TESTS=1`. Screenshots and browser output go to `/tmp`. See [verification notes](VERIFICATION.md).
 
 ## Notation input
 
@@ -117,7 +111,7 @@ From a saved exam or flashcard deck, choose **Share and manage access** in its e
 
 Choose **Invite an editor** and invite a registered account by email to edit the same set together. The recipient accepts in **Your library**. Each owner has private library settings, practice history, notes, and review schedules. The primary owner manages access and can delete the original for everyone. Previous attempts stay in each person's History when access ends.
 
-Backups include sets you co-own and your own study data. Restore creates independently owned copies with sharing off. Apply the study-set sharing migration before deploying the app update. After co-ownership is in use, fix regressions forward so owners retain access during recovery.
+Backups include sets you co-own and your own study data. Restore creates independently owned copies with sharing off. Practice history also backs up your review schedules for view-only decks. To restore those schedules, save the original decks in your library before restoring. Apply the study-set sharing migration before deploying the app update. After co-ownership is in use, fix regressions forward so owners retain access during recovery.
 
 ### Password recovery
 

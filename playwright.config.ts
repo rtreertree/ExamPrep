@@ -20,7 +20,7 @@ export default defineConfig({
         reuseExistingServer: !process.env.CI,
       },
   use: {
-    baseURL: process.env.TEST_BASE_URL || "http://127.0.0.1:8787",
+    baseURL: process.env.TEST_BASE_URL,
     viewport: { width: 1536, height: 1024 },
     trace: "off",
   },

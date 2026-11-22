@@ -1,5 +1,10 @@
 import { useRef, useState } from "react";
-import type { BackupSummary } from "../../shared/backup";
+import type {
+  BackupPreview,
+  BackupRestoreResult,
+  BackupReviewSkips,
+  BackupSummary,
+} from "../../shared/backup";
 import { BACKUP_BYTES, decodeFile, parseJSON } from "../../shared/json";
 import { Button, ErrorNotice, Field, Notice } from "../components/ui";
 import { api, download } from "../lib/api";
@@ -16,9 +21,9 @@ export function AccountBackup() {
   const [historyFile, setHistoryFile] = useState<File>();
   const [preview, setPreview] = useState<{
     files: BackupFiles;
-    summary: BackupSummary;
+    summary: BackupPreview;
   }>();
-  const [restored, setRestored] = useState<Omit<BackupSummary, "titles">>();
+  const [restored, setRestored] = useState<BackupRestoreResult>();
   const [busy, setBusy] = useState<"download" | "preview" | "restore">();
   const [error, setError] = useState<Error>();
   const libraryInput = useRef<HTMLInputElement>(null);
@@ -65,7 +70,7 @@ export function AccountBackup() {
         historyFile ? read(historyFile) : undefined,
       ]);
       const files = { library, ...(history !== undefined ? { history } : {}) };
-      const summary = await api<BackupSummary>(
+      const summary = await api<BackupPreview>(
         "/backup/preview",
         "POST",
         files,
@@ -83,7 +88,7 @@ export function AccountBackup() {
     setBusy("restore");
     setError(undefined);
     try {
-      const counts = await api<Omit<BackupSummary, "titles">>(
+      const counts = await api<BackupRestoreResult>(
         "/backup/restore",
         "POST",
         preview.files,
@@ -111,7 +116,7 @@ export function AccountBackup() {
     <section className="stack">
       <h2>Library backup</h2>
       <p className="muted">
-        Download your entire library, including archived sets, folders, and
+        Download sets you own or co-own, including archived sets, folders, and
         manual order. The optional history file includes answers, scores,
         private notes, and review schedules.
       </p>
@@ -148,7 +153,8 @@ export function AccountBackup() {
       <p className="muted">
         Choose a library file and its matching history file if you have one.
         Restoring adds copies and skips entries already restored from these
-        files. The files can total up to 16 MiB.
+        files. Review schedules restore for matching cards. View-only decks must
+        be saved in your library. The files can total up to 16 MiB.
       </p>
       <Field label="Library backup file">
         <input
@@ -187,6 +193,7 @@ export function AccountBackup() {
       {preview ? (
         <div className="stack">
           <Notice>{countsText(preview.summary)} ready to restore.</Notice>
+          <ReviewSkipNotice skips={preview.summary.reviewSkips} />
           {preview.summary.titles.length ? (
             <ul>
               {preview.summary.titles.map((title, i) => (
@@ -214,10 +221,25 @@ export function AccountBackup() {
         </div>
       ) : null}
       {restored ? (
-        <Notice tone="success">Restored {countsText(restored)}.</Notice>
+        <div className="stack">
+          <Notice tone="success">Restored {countsText(restored)}.</Notice>
+          <ReviewSkipNotice skips={restored.reviewSkips} />
+        </div>
       ) : null}
     </section>
   );
+}
+
+function ReviewSkipNotice({ skips }: { skips?: BackupReviewSkips }) {
+  if (!skips) return null;
+  const reasons = [
+    skips.unchanged && `${skips.unchanged} already current`,
+    skips.inaccessible && `${skips.inaccessible} in unavailable decks`,
+    skips.cardMismatch && `${skips.cardMismatch} for changed or removed cards`,
+  ].filter(Boolean);
+  return reasons.length ? (
+    <Notice>Skipped review schedules ({reasons.join(", ")}).</Notice>
+  ) : null;
 }
 
 function countsText({

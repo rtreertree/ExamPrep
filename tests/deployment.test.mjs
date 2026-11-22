@@ -8,7 +8,7 @@ describe("production deployment configuration", () => {
   it("rejects pooled migrations, cross-database configuration, insecure TLS and shared auth secrets", () => {
     const env = {
       DATABASE_URL:
-        "postgresql://test:fake@ep-ci-pooler.ap-southeast-1.aws.neon.tech/test?sslmode=require",
+        "postgresql://examprep_runtime:fake@ep-ci-pooler.ap-southeast-1.aws.neon.tech/test?sslmode=require",
       DATABASE_URL_UNPOOLED:
         "postgresql://test:fake@ep-ci.ap-southeast-1.aws.neon.tech/test?sslmode=require",
       BETTER_AUTH_SECRET: "a".repeat(48),
@@ -18,6 +18,12 @@ describe("production deployment configuration", () => {
       CLOUDFLARE_API_TOKEN: "fake",
     };
     expect(() => productionConfig(env)).not.toThrow();
+    expect(() =>
+      checkConnections({
+        ...env,
+        DATABASE_URL: env.DATABASE_URL.replace("examprep_runtime:", "test:"),
+      }),
+    ).toThrow(/separate/);
     expect(() =>
       checkConnections({ ...env, DATABASE_URL_UNPOOLED: env.DATABASE_URL }),
     ).toThrow(/direct/);
@@ -34,6 +40,12 @@ describe("production deployment configuration", () => {
       checkConnections({
         ...env,
         DATABASE_URL: env.DATABASE_URL.replace("require", "disable"),
+      }),
+    ).toThrow(/TLS/);
+    expect(() =>
+      checkConnections({
+        ...env,
+        DATABASE_URL: env.DATABASE_URL + "&host=other.neon.tech",
       }),
     ).toThrow(/TLS/);
     expect(() =>

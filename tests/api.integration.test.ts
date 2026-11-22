@@ -1,18 +1,19 @@
-import "dotenv/config";
 import {execFile} from "node:child_process";
 import {promisify} from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID, scryptSync } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { neonConfig } from "@neondatabase/serverless";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Prisma } from "../generated/prisma/client";
-import ws from "ws";
 import { connectDatabase } from "../server/db";
 import { databasePasswords, PASSWORD_PATTERN } from "../server/passwords";
-neonConfig.webSocketConstructor = ws;
+import { readTestTarget, verifyTestApp, verifyTestTarget } from "../scripts/test-target";
 const enabled = process.env.RUN_DATABASE_TESTS === "1";
-const base = process.env.TEST_BASE_URL || "http://127.0.0.1:8787";
-const db = enabled ? connectDatabase(process.env.DATABASE_URL!) : undefined;
+const base = process.env.TEST_BASE_URL ?? "";
+const target = enabled ? readTestTarget() : undefined;
+let db: ReturnType<typeof connectDatabase> | undefined;
 const exam = JSON.parse(
   readFileSync("public/downloads/example-exam.examprep.json", "utf8"),
 );
@@ -20,11 +21,18 @@ const deck = JSON.parse(
   readFileSync("public/downloads/example-flashcards.examprep.json", "utf8"),
 );
 const emails: string[] = [];
+async function runCloneCommand(copyId: string, ...options: string[]) {
+  const result = await promisify(execFile)(process.execPath, [
+    "--import", "tsx", "scripts/convert-clones.ts", "--copy", copyId, ...options,
+  ], { env: { ...process.env, DATABASE_URL_UNPOOLED: target!.direct } });
+  return JSON.parse(result.stdout.trim().split("\n").at(-1)!);
+}
 function client() {
   let cookie = "";
   return async (path: string, method = "GET", body?: unknown, raw?: string) => {
     const options = {
       method,
+      redirect: "error" as const,
       headers: {
         Origin: new URL(base).origin,
         Cookie: cookie,
@@ -56,6 +64,9 @@ describe.skipIf(!enabled)(
     const password = randomUUID() + "aB9!";
     let userId: string;
     beforeAll(async () => {
+      await verifyTestTarget(target!);
+      await verifyTestApp(base, target!.token);
+      db = connectDatabase(target!.direct);
       for (const c of [a, b]) {
         const email = `acceptance-${randomUUID()}@example.test`;
         emails.push(email);
@@ -69,11 +80,13 @@ describe.skipIf(!enabled)(
       }
     });
     afterAll(async () => {
-      await db!.user.deleteMany({ where: { email: { in: emails } } });
-      expect(await db!.user.count({ where: { email: { in: emails } } })).toBe(
-        0,
-      );
-      await db!.$disconnect();
+      if (!db) return;
+      try {
+        await db.user.deleteMany({ where: { email: { in: emails } } });
+        expect(await db.user.count({ where: { email: { in: emails } } })).toBe(0);
+      } finally {
+        await db.$disconnect();
+      }
     });
     it("creates one review set per save request and scopes retries to the account", async () => {
       const path = `/sets?requestId=${randomUUID()}`;
@@ -270,92 +283,250 @@ describe.skipIf(!enabled)(
       expect((await b("/attempts/" + old.id)).value.studySetId).toBeNull();
       expect((await b(path + "/attempts", "POST", {})).status).toBe(404);
     });
-    it("converts a historical clone once and preserves its private attempt, schedule and edited content", async () => {
-      const b = await newLearner();
-      const { value: source } = await a("/sets", "POST", deck);
-      const { value: copy } = await b("/sets", "POST", {
-        ...deck,
-        title: "Personal notes",
+    it("round-trips private viewer review schedules without granting access to a deck", async () => {
+      const viewer = await newLearner();
+      const { value: set } = await a("/sets", "POST", deck);
+      const path = `/sets/${set.id}`;
+      const { value: settings } = await a(path + "/sharing/link", "PUT", {
+        enabled: true,
       });
-      const user = (await b("/auth/get-session")).value.user;
-      await db!.studySetCopyImport.create({
-        data: {
-          copyId: copy.id,
-          userId: user.id,
-          linkNonce: "discover:" + source.id,
-          requestId: randomUUID(),
+      const token = settings.link.split("#")[1];
+      const save = () => viewer("/shares/save", "POST", { token });
+      expect((await save()).status).toBe(200);
+      const started = await viewer(path + "/review", "POST", {});
+      expect(started.status).toBe(201);
+      const attempt = started.value;
+      const cardId = deck.cards[0].id;
+      const progress = await viewer(
+        `/attempts/${attempt.id}/progress`,
+        "PATCH",
+        {
+          revision: 1,
+          position: 0,
+          responses: { [cardId]: { revealed: true, rating: "known" } },
         },
-      });
-      const path = "/sets/" + copy.id;
-      await b(path + "/organization", "PATCH", { pinned: true });
-      const { value: attempt } = await b(path + "/attempts", "POST", {});
-      const { cardFingerprint } = await import("../server/spacedReview");
-      await db!.cardReview.create({
-        data: {
-          studySetId: copy.id,
-          cardId: deck.cards[0].id,
-          fingerprint: await cardFingerprint(deck.cards[0]),
-          streak: 2,
-          dueAt: new Date(),
-          attemptStartedAt: new Date(),
-        },
-      });
-      const run = async (...options: string[]) => {
-        const result = await promisify(execFile)(
-          process.execPath,
-          [
-            "--import",
-            "tsx",
-            "scripts/convert-clones.ts",
-            "--copy",
-            copy.id,
-            ...options,
-          ],
-          {
-            env: {
-              ...process.env,
-              DATABASE_URL_UNPOOLED: process.env.DATABASE_URL,
-            },
-          },
-        );
-        return JSON.parse(result.stdout.trim().split("\n").at(-1)!);
-      };
-      expect((await run("--apply")).counts).toEqual({ "no-current-access": 1 });
-      await db!.studySet.update({
-        where: { id: source.id },
-        data: { published: true },
-      });
-      expect((await run()).counts).toEqual({ eligible: 1 });
-      expect((await run("--apply")).counts).toEqual({ converted: 1 });
-      expect((await run("--apply")).counts).toEqual({
-        "previously-converted": 1,
-      });
-      expect((await b(path)).value).toMatchObject({
-        id: source.id,
-        ownershipRole: "viewer",
-        pinned: true,
-      });
-      expect((await a(path)).status).toBe(404);
-      expect((await b("/attempts/" + attempt.id)).value).toMatchObject({
-        studySetId: source.id,
-        studySetRevision: null,
-        snapshot: attempt.snapshot,
-      });
-      expect(
-        await db!.viewerCardReview.count({
-          where: { studySetId: source.id, userId: user.id },
-        }),
-      ).toBe(1);
+      );
+      expect(progress.status).toBe(200);
       expect(
         (
-          await db!.cloneConversion.findUniqueOrThrow({
-            where: { copyId: copy.id },
+          await viewer(`/attempts/${attempt.id}/submit`, "POST", {
+            revision: progress.value.revision,
           })
-        ).recovery,
-      ).toMatchObject({ set: { content: copy.content } });
-      await b("/sets/" + source.id + "/membership", "DELETE", {});
-      expect((await b(path)).status).toBe(404);
-    }, 30000);
+        ).status,
+      ).toBe(200);
+      const { cards } = (await viewer(path + "/review")).value;
+      const dueAt = cards.find(
+        ({ id }: { id: string }) => id === cardId,
+      ).nextReviewAt;
+      const { value: backup } = await viewer("/backup?history=1");
+      expect(backup.library.sets).toEqual([]);
+      expect(backup.history.attempts).toMatchObject([
+        { id: attempt.id, studySetId: null },
+      ]);
+      expect(backup.history.viewerReviews).toMatchObject([
+        { studySetId: set.id, cardId, streak: 1, dueAt: expect.any(String) },
+      ]);
+      expect(
+        new Date(backup.history.viewerReviews[0].dueAt).toISOString(),
+      ).toBe(dueAt);
+      expect((await a("/backup?history=1")).value.history).not.toHaveProperty(
+        "viewerReviews",
+      );
+      expect((await viewer("/backup")).value).not.toHaveProperty("history");
+      expect((await viewer("/backup/preview", "POST", backup)).value).toMatchObject({
+        reviewCount: 0, reviewSkips: { unchanged: 1 },
+      });
+      await db!.viewerCardReview.deleteMany({ where: { studySetId: set.id } });
+      expect((await viewer("/backup/preview", "POST", backup)).value.reviewCount).toBe(1);
+
+      expect((await viewer(path + "/membership", "DELETE", {})).status).toBe(
+        204,
+      );
+      expect(
+        (await viewer("/backup/restore", "POST", backup)).value,
+      ).toMatchObject({
+        setCount: 0,
+        attemptCount: 1,
+        reviewCount: 0,
+        reviewSkips: { inaccessible: 1 },
+      });
+      expect((await viewer("/backup/preview", "POST", backup)).value).toMatchObject({
+        reviewCount: 0, reviewSkips: { inaccessible: 1 },
+      });
+      expect((await viewer(path)).status).toBe(404);
+      expect((await save()).status).toBe(200);
+      expect(
+        (await viewer("/backup/restore", "POST", backup)).value,
+      ).toMatchObject({
+        setCount: 0,
+        attemptCount: 0,
+        reviewCount: 1,
+      });
+      expect((await viewer(path + "/review")).value.cards).toContainEqual(
+        expect.objectContaining({
+          id: cardId,
+          nextReviewAt: dueAt,
+          due: false,
+        }),
+      );
+      expect(
+        (await viewer("/backup?history=1")).value.history.viewerReviews,
+      ).toEqual(backup.history.viewerReviews);
+      expect((await viewer("/backup/restore", "POST", backup)).value).toMatchObject({
+        reviewCount: 0, reviewSkips: { unchanged: 1 },
+      });
+      const revised = {
+        ...deck,
+        cards: deck.cards.map((card: { id: string; front: string; back: string }) =>
+          card.id === cardId ? { ...card, front: "Revised card" } : card),
+      };
+      expect((await a(path, "PUT", { revision: set.revision, content: revised })).status).toBe(200);
+      for (const endpoint of ["/backup/preview", "/backup/restore"]) {
+        expect((await viewer(endpoint, "POST", backup)).value).toMatchObject({
+          reviewCount: 0, reviewSkips: { cardMismatch: 1 },
+        });
+      }
+      const trimmed = { ...revised, cards: revised.cards.filter((card: { id: string }) => card.id !== cardId) };
+      expect((await a(path, "PUT", { revision: set.revision + 1, content: trimmed })).status).toBe(200);
+      expect((await viewer("/backup/preview", "POST", backup)).value).toMatchObject({
+        reviewCount: 0, reviewSkips: { cardMismatch: 1 },
+      });
+      const badBackup = structuredClone(backup);
+      badBackup.history.viewerReviews[0].attemptStartedAt = "2099-01-01T00:00:00.000Z";
+      expect((await viewer("/backup/restore", "POST", badBackup)).status).toBe(422);
+    });
+    it.each(["discover", "link", "both"] as const)(
+      "converts a historical clone with %s access and preserves its private study data",
+      async (grant) => {
+        const { value: source } = await a("/sets", "POST", deck);
+        const nonce = grant === "discover" ? null : randomUUID();
+        if (nonce)
+          await db!.studySetCopyLink.create({
+            data: { studySetId: source.id, nonce },
+          });
+        const { value: copy } = await b("/sets", "POST", deck);
+        const user = (await b("/auth/get-session")).value.user;
+        await db!.studySetCopyImport.create({
+          data: {
+            copyId: copy.id,
+            userId: user.id,
+            linkNonce: nonce ?? "discover:" + source.id,
+            requestId: randomUUID(),
+          },
+        });
+        const path = "/sets/" + copy.id;
+        await b(path + "/organization", "PATCH", { pinned: true });
+        const { value: attempt } = await b(path + "/attempts", "POST", {});
+        const { cardFingerprint } = await import("../server/spacedReview");
+        const start = new Date();
+        await db!.cardReview.create({
+          data: {
+            studySetId: copy.id,
+            cardId: deck.cards[0].id,
+            fingerprint: await cardFingerprint(deck.cards[0]),
+            streak: 2,
+            dueAt: start,
+            attemptStartedAt: start,
+          },
+        });
+        const run = (...options: string[]) => runCloneCommand(copy.id, ...options);
+        if (!nonce)
+          expect((await run("--apply")).counts).toEqual({
+            "no-current-access": 1,
+          });
+        await db!.studySet.update({
+          where: { id: source.id },
+          data: { published: true },
+        });
+        if (grant === "both")
+          expect(
+            (await b(`/discover/${source.id}/save`, "POST", {})).status,
+          ).toBe(200);
+        expect((await run()).counts).toEqual({ eligible: 1 });
+        expect((await run("--apply")).counts).toEqual({ converted: 1 });
+        expect((await run("--apply")).counts).toEqual({
+          "previously-converted": 1,
+        });
+        expect((await b(path)).value).toMatchObject({
+          id: source.id,
+          ownershipRole: "viewer",
+          pinned: grant !== "both",
+        });
+        expect((await a(path)).status).toBe(404);
+        expect((await b("/attempts/" + attempt.id)).value).toMatchObject({
+          studySetId: source.id,
+          studySetRevision: null,
+          snapshot: attempt.snapshot,
+        });
+        expect(
+          await db!.viewerCardReview.count({
+            where: { studySetId: source.id, userId: user.id },
+          }),
+        ).toBe(1);
+        expect(
+          (
+            await db!.cloneConversion.findUniqueOrThrow({
+              where: { copyId: copy.id },
+            })
+          ).recovery,
+        ).toMatchObject({ set: { content: copy.content } });
+        if (grant === "both") {
+          expect(await run("--recover")).toMatchObject({ status: "recoverable", reviewCount: 1 });
+          const recovered = await run("--recover", "--apply");
+          expect(recovered).toMatchObject({ status: "recovered", reviewCount: 1 });
+          expect(await run("--recover", "--apply")).toEqual({
+            status: "previously-recovered", recoveredCopyId: recovered.recoveredCopyId,
+          });
+          expect((await b(`/sets/${recovered.recoveredCopyId}`)).value).toMatchObject({
+            content: deck, ownershipRole: "primary", pinned: true,
+          });
+          expect((await b(path)).value.id).toBe(source.id);
+          expect((await b(`/attempts/${attempt.id}`)).value.studySetId).toBe(source.id);
+          expect(await db!.cardReview.count({ where: { studySetId: recovered.recoveredCopyId } })).toBe(1);
+        }
+        if (nonce) {
+          await a(`/sets/${source.id}/sharing/link`, "PUT", { enabled: false });
+          expect((await b(path)).status).toBe(grant === "both" ? 200 : 404);
+        }
+        await b("/sets/" + source.id + "/membership", "DELETE", {});
+        expect((await b(path)).status).toBe(404);
+      },
+      45000,
+    );
+    it("retains changed or shared copies and refuses to remap a recorded missing original", async () => {
+      const { value: source } = await a("/sets", "POST", deck);
+      const { value: replacement } = await a("/sets", "POST", deck);
+      const learner = (await b("/auth/get-session")).value.user;
+      const recordedCopy = async (content: unknown) => {
+        const { value: clone } = await b("/sets", "POST", content);
+        await db!.studySetCopyImport.create({ data: { copyId: clone.id, userId: learner.id,
+          linkNonce: "discover:" + source.id, requestId: randomUUID() } });
+        return clone;
+      };
+      await db!.studySet.update({ where: { id: source.id }, data: { published: true } });
+      for (const content of [{ ...deck, title: "My own title" }, { ...deck,
+        cards: [{ ...deck.cards[0], back: "My edit" }, ...deck.cards.slice(1)] }]) {
+        const clone = await recordedCopy(content);
+        expect((await runCloneCommand(clone.id, "--apply")).counts).toEqual({ "divergent-content": 1 });
+        expect((await b(`/sets/${clone.id}`)).value.content).toEqual(content);
+      }
+      const shared = await recordedCopy(deck);
+      expect((await b(`/sets/${shared.id}/sharing/link`, "PUT", { enabled: true })).status).toBe(200);
+      expect((await runCloneCommand(shared.id, "--apply")).counts).toEqual({ "shared-or-nested": 1 });
+      const missing = await recordedCopy(deck);
+      expect((await a(`/sets/${source.id}`, "DELETE", { revision: source.revision })).status).toBe(200);
+      expect((await runCloneCommand(missing.id, "--apply")).counts).toEqual({ "missing-origin": 1 });
+      const dir = await mkdtemp(join(tmpdir(), "exam-prep-clone-matches-"));
+      try {
+        const path = join(dir, "matches.json");
+        await writeFile(path, JSON.stringify([{ copyId: missing.id, sourceId: replacement.id, revision: missing.revision,
+          evidence: "Fixture with matching replacement content" }]));
+        expect((await runCloneCommand(missing.id, "--apply", "--matches", path)).counts).toEqual({ "conflicting-origin": 1 });
+        expect((await b(`/sets/${missing.id}`)).status).toBe(200);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }, 45000);
     it("publishes live sets, grants and revokes library items, and enforces view-only links", async () => {
       const bob = (await b("/auth/get-session")).value.user;
       expect((await client()("/admin/users")).status).toBe(401);

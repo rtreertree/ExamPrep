@@ -8,6 +8,7 @@ import ws from "ws";
 import { connectDatabase } from "../server/db";
 import { PASSWORD_PATTERN, PASSWORD_PREFIX } from "../server/passwords";
 import { readinessError } from "./readiness-error";
+import { assertRuntimeRole } from "./runtime-role";
 
 neonConfig.webSocketConstructor = ws;
 const local = process.argv.includes("--local");
@@ -116,6 +117,10 @@ let db: ReturnType<typeof connectDatabase> | undefined;
 let databaseStage = "runtime connection";
 try {
   db = connectDatabase(process.env.DATABASE_URL ?? "");
+  if (!local) {
+    databaseStage = "restricted runtime role privileges";
+    await assertRuntimeRole(db);
+  }
   databaseStage = "runtime connection/password-hashing probe";
   const probe = await db.$queryRaw<{ supported: boolean }[]>`
     SELECT length(public.crypt('Exam Prep readiness probe', public.gen_salt('bf', 12))) = 60 AS supported
