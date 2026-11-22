@@ -7,7 +7,13 @@ import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { parse } from "jsonc-parser";
 import { connectDatabase } from "../server/db";
-import { readTestTarget, verifyTestApp, verifyTestTarget } from "./test-target";
+import { provisionRuntimeRole } from "./provision-runtime-role";
+import {
+  readTestTarget,
+  verifyNoTestAccounts,
+  verifyTestApp,
+  verifyTestTarget,
+} from "./test-target";
 
 const target = readTestTarget();
 const productionPackage = process.argv.includes("--production-package");
@@ -72,26 +78,32 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
     for (const child of children) child.kill("SIGTERM");
     process.exitCode = 1;
   });
-async function verifyNoTestAccounts() {
+async function verifyCleanDatabase(beforeMigrations = false) {
   const db = connectDatabase(target.direct);
   try {
-    if ((await db.user.count()) !== 0)
-      throw new Error(
-        "The test database contains accounts. Remove verified leftover test accounts or use a fresh dedicated test branch.",
-      );
+    await verifyNoTestAccounts(db, { beforeMigrations });
   } finally {
     await db.$disconnect();
   }
 }
 
 try {
-  if (sharedTestDatabase || process.env.CI) await verifyNoTestAccounts();
+  if (sharedTestDatabase || process.env.CI)
+    await verifyCleanDatabase(sharedTestDatabase);
   if (sharedTestDatabase) {
     await command(["scripts/migrate.mjs"], {
       ...process.env,
       DATABASE_URL_UNPOOLED: target.direct,
     });
+    try {
+      await provisionRuntimeRole(target.direct);
+    } catch {
+      throw new Error(
+        "Could not apply the runtime grants. Verify that the direct test connection owns the migrated tables and examprep_runtime exists.",
+      );
+    }
     await verifyTestTarget(target);
+    await verifyCleanDatabase();
   }
   for (const [runtime, port] of [
     ["node", 8791],
@@ -188,7 +200,7 @@ try {
       await stop(server);
       children.delete(server);
     }
-    if (sharedTestDatabase) await verifyNoTestAccounts();
+    if (sharedTestDatabase) await verifyCleanDatabase();
   }
 } finally {
   await Promise.all([...children].map(stop));

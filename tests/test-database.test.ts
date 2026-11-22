@@ -8,7 +8,11 @@ import {
   testDatabaseProofHeader,
 } from "../server/testDatabase";
 import { assertRuntimeRole } from "../scripts/runtime-role";
-import { readTestTarget, verifyTestApp } from "../scripts/test-target";
+import {
+  readTestTarget,
+  verifyNoTestAccounts,
+  verifyTestApp,
+} from "../scripts/test-target";
 
 const origin = "http://127.0.0.1:8791";
 const challenge = "a".repeat(64);
@@ -24,6 +28,24 @@ const env = {
 afterEach(() => vi.restoreAllMocks());
 
 describe("live database guards", () => {
+  it("allows a missing user table before migrations and checks accounts once it exists", async () => {
+    const count = vi.fn().mockResolvedValue(1);
+    const query = vi.fn().mockResolvedValue([{ initialized: false }]);
+    const db = { $queryRaw: query, user: { count } } as unknown as Parameters<
+      typeof verifyNoTestAccounts
+    >[0];
+    await expect(
+      verifyNoTestAccounts(db, { beforeMigrations: true }),
+    ).resolves.toBeUndefined();
+    expect(count).not.toHaveBeenCalled();
+    query.mockResolvedValue([{ initialized: true }]);
+    await expect(
+      verifyNoTestAccounts(db, { beforeMigrations: true }),
+    ).rejects.toThrow(/contains accounts/);
+    count.mockResolvedValue(0);
+    await expect(verifyNoTestAccounts(db)).resolves.toBeUndefined();
+  });
+
   it("requires test-only credentials with a single database and distinct roles", () => {
     expect(() =>
       readTestTarget({ DATABASE_URL: runtime, DATABASE_URL_UNPOOLED: direct }),

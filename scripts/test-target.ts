@@ -54,18 +54,39 @@ export async function verifyTestTarget(
         if (!beforeMigrations) await assertRuntimeRole(db);
       } else {
         const [row] = await db.$queryRaw<{ owner: boolean }[]>`
-          SELECT count(*) = 2 AND bool_and(relowner = current_user::regrole::oid) AS owner
-          FROM pg_class WHERE oid IN ('public."StudySet"'::regclass, 'public."CloneConversion"'::regclass)
+          SELECT count(*) >= CASE WHEN ${beforeMigrations} THEN 1 ELSE 3 END
+            AND bool_and(relowner = current_user::regrole::oid) AS owner
+          FROM pg_class WHERE oid IN (
+            to_regclass('examprep_test.target'),
+            to_regclass('public."StudySet"'),
+            to_regclass('public."CloneConversion"')
+          )
         `;
         if (!row?.owner)
           throw new Error(
-            "The direct test connection must own the test schema tables.",
+            "The direct test connection must own the marker and application tables. Verify the test database schema and migration history.",
           );
       }
     } finally {
       await db.$disconnect();
     }
   }
+}
+
+export async function verifyNoTestAccounts(
+  db: Pick<ReturnType<typeof connectDatabase>, "$queryRaw" | "user">,
+  { beforeMigrations = false } = {},
+) {
+  if (beforeMigrations) {
+    const [row] = await db.$queryRaw<{ initialized: boolean }[]>`
+      SELECT to_regclass('public."user"') IS NOT NULL AS initialized
+    `;
+    if (row?.initialized === false) return;
+  }
+  if ((await db.user.count()) !== 0)
+    throw new Error(
+      "The test database contains accounts. Remove verified leftover test accounts or use a fresh dedicated test branch.",
+    );
 }
 
 export async function verifyTestApp(base: string, runtime: string) {
