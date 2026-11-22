@@ -153,10 +153,24 @@ describe("live database guards", () => {
     await expect(
       verifyTestApp(origin, runtime.replace("ep-test", "ep-other")),
     ).rejects.toThrow(/marker/);
+    const privileges = {
+      login: true,
+      independent: true,
+      restricted: true,
+      protected: true,
+      granted: true,
+    };
+    const query = vi.fn().mockResolvedValue([privileges]);
     await expect(
-      assertRuntimeRole({
-        $queryRaw: vi.fn().mockResolvedValue([{ safe: false }]),
-      }),
-    ).rejects.toThrow(/restricted runtime/);
+      assertRuntimeRole({ $queryRaw: query }),
+    ).resolves.toBeUndefined();
+    query.mockResolvedValue([{ ...privileges, independent: false }]);
+    await expect(assertRuntimeRole({ $queryRaw: query })).rejects.toThrow(
+      /NOINHERIT.*neon_superuser/,
+    );
+    query.mockResolvedValue([{ ...privileges, granted: false }]);
+    await expect(assertRuntimeRole({ $queryRaw: query })).rejects.toThrow(
+      /required application grants/,
+    );
   });
 });
