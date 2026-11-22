@@ -5,25 +5,29 @@ import {
 } from "../scripts/deployment-config.mjs";
 
 describe("production deployment configuration", () => {
-  it("rejects pooled migrations, cross-database configuration, insecure TLS and shared auth secrets", () => {
-    const env = {
-      DATABASE_URL:
-        "postgresql://examprep_runtime:fake@ep-ci-pooler.ap-southeast-1.aws.neon.tech/test?sslmode=require",
-      DATABASE_URL_UNPOOLED:
-        "postgresql://test:fake@ep-ci.ap-southeast-1.aws.neon.tech/test?sslmode=require",
-      BETTER_AUTH_SECRET: "a".repeat(48),
-      PASSWORD_PEPPER: "b".repeat(48),
-      BETTER_AUTH_URL: "https://exam.phonet.app",
-      CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
-      CLOUDFLARE_API_TOKEN: "fake",
-    };
+  const env = {
+    DATABASE_URL:
+      "postgresql://examprep_runtime:fake@ep-ci-pooler.ap-southeast-1.aws.neon.tech/test?sslmode=require",
+    DATABASE_URL_UNPOOLED:
+      "postgresql://test:fake@ep-ci.ap-southeast-1.aws.neon.tech/test?sslmode=require",
+    BETTER_AUTH_SECRET: "a".repeat(48),
+    PASSWORD_PEPPER: "b".repeat(48),
+    BETTER_AUTH_URL: "https://exam.phonet.app",
+    CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
+    CLOUDFLARE_API_TOKEN: "fake",
+  };
+
+  it("allows shared or separate roles for the pooled and direct production URLs", () => {
     expect(() => productionConfig(env)).not.toThrow();
     expect(() =>
-      checkConnections({
+      productionConfig({
         ...env,
         DATABASE_URL: env.DATABASE_URL.replace("examprep_runtime:", "test:"),
       }),
-    ).toThrow(/separate/);
+    ).not.toThrow();
+  });
+
+  it("rejects pooled migrations, cross-database configuration, insecure TLS and shared auth secrets", () => {
     expect(() =>
       checkConnections({ ...env, DATABASE_URL_UNPOOLED: env.DATABASE_URL }),
     ).toThrow(/direct/);

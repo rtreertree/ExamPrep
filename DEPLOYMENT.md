@@ -46,7 +46,7 @@ GitHub **production** environment:
 | --- | --- | --- |
 | Variable | `CLOUDFLARE_ACCOUNT_ID` | `90145ce51d276d276787dc0ee9561f0a` (verified, already set) |
 | Secret | `CLOUDFLARE_API_TOKEN` | Scoped deployment token described above |
-| Secret | `DATABASE_URL` | Production pooled Neon URL (`-pooler` hostname) for `examprep_runtime` |
+| Secret | `DATABASE_URL` | Production pooled Neon URL (`-pooler` hostname) for the application |
 | Secret | `DATABASE_URL_UNPOOLED` | Direct owner URL for the **same endpoint/database**, without `-pooler` |
 | Secret | `BETTER_AUTH_SECRET` | Independent cryptographically random secret, at least 32 characters |
 | Secret | `PASSWORD_PEPPER` | Separate stable random secret, at least 32 characters; encrypted backup required |
@@ -58,8 +58,9 @@ the release workflow, not another secret or a `VITE_` setting. Do not rotate an
 existing pepper when connecting an existing database: preserve the pepper that
 created its password hashes. Changing it makes those passwords unverifiable.
 
-The production environment uses database credentials for persistence and
-migrations. The Neon management key belongs in the separate acceptance environment below.
+The production URLs can use the same Neon login. They must use TLS and point to
+the same endpoint and database. The Neon management key belongs in the separate
+acceptance environment below.
 
 Cloudflare production bindings:
 
@@ -82,8 +83,8 @@ not uploaded. Never enable SQL parameter logging or dump runtime environments.
   dependency lockfile is retained. Checkout does not persist Git credentials;
   package-manager caches are disabled between trust boundaries.
 - **Production:** after the CI checks succeed, rebuild/dry-run, validate configuration,
-  preflight schedules, apply migrations with the direct URL, run the free-tier,
-  runtime-privilege and password readiness checks, then deploy a matching code/secrets version. A failed readiness
+  preflight schedules, apply migrations with the direct URL, run the free-tier
+  and password readiness checks, then deploy a matching code/secrets version. A failed readiness
   check prevents deployment, including when legacy scrypt credentials remain.
   Preserve the Node sign-in migration path documented in README; never delete or
   reset users to bypass this guard.
@@ -173,9 +174,11 @@ Never clear more data just to bypass a readiness error.
 
 ## Restricted runtime credential rollout
 
+Production can adopt a restricted runtime login as a separate rollout. Live database acceptance requires one.
+
 1. Rehearse the new role through Node and Worker in the isolated test project. Record results for sign-up, sign-in, backup and restore, scheduling, viewer access and converted IDs. Verify the pooled role cannot modify schema, truncate tables, change triggers, access migration history, or read recovery payloads.
 2. In the separately authorized rollout, verify the active production Worker’s bindings, its deploy commit and the rollback candidate’s version ID. Secure a Neon recovery point. Set `DATABASE_URL_UNPOOLED` explicitly to the verified direct migration owner and supply a random 64-digit hex `RUNTIME_DATABASE_PASSWORD` through the shell environment. Run `node --import tsx scripts/provision-runtime-role.ts`. Rerunning the script reapplies grants and leaves an existing role’s password in place.
-3. Build the pooled URL with the new role and password. Verify it with `npm run cloudflare:check` after building both packages. Stage the GitHub production `DATABASE_URL` secret, then run Release. Release checks the distinct roles and uses the new URL in the deployed code-and-secrets version. Verify the serving version and viewer access before rotating any credential still used by the active or rollback version. Keep the pepper stable.
+3. Build the pooled URL with the new role and password. Verify the connection and password hashing with `npm run cloudflare:check` after building both packages. Stage the GitHub production `DATABASE_URL` secret, then run Release. Verify the serving version and viewer access before rotating any credential still used by the active or rollback version. Keep the pepper stable.
 4. Give routine auditors a separate SQL-created read-only role with schema usage and explicit `SELECT` on approved tables or views. Keep `recovery` and credential secrets limited to authorized maintenance access.
 
 ## Database acceptance in GitHub
