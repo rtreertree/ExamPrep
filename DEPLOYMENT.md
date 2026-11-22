@@ -238,6 +238,21 @@ and use that password in the pooled URL.
 CREATE ROLE examprep_runtime NOINHERIT LOGIN PASSWORD '<random 64-digit hex password>';
 ```
 
+Create the runtime role with SQL. Roles created in Neon's Roles page receive
+`neon_superuser` membership by default. If acceptance reports inherited
+privileges, connect as the owner of the dedicated test branch and inspect the
+runtime role's memberships.
+
+```sql
+SELECT parent.rolname AS granted_role
+FROM pg_auth_members AS membership
+JOIN pg_roles AS parent ON parent.oid = membership.roleid
+JOIN pg_roles AS member ON member.oid = membership.member
+WHERE member.rolname = 'examprep_runtime';
+```
+
+The runtime role should have no memberships and use `NOINHERIT`.
+
 For local acceptance, set `DATABASE_URL_UNPOOLED` to the branch's direct owner
 connection and `RUNTIME_DATABASE_PASSWORD` to a random 64-digit hex password.
 Apply migrations and provision the runtime role.

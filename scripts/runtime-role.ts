@@ -55,11 +55,20 @@ export const runtimeGrants = `
 `;
 
 export async function assertRuntimeRole(db: Pick<Database, "$queryRaw">) {
-  const [row] = await db.$queryRaw<{ safe: boolean }[]>`
-    SELECT (
-      current_user = ${runtimeDatabaseRole} AND current_user = session_user
-      AND NOT (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls OR r.rolinherit)
-      AND NOT EXISTS (SELECT 1 FROM pg_auth_members WHERE member = r.oid)
+  const [row] = await db.$queryRaw<
+    {
+      login: boolean;
+      independent: boolean;
+      restricted: boolean;
+      protected: boolean;
+      granted: boolean;
+    }[]
+  >`
+    SELECT
+      (current_user = ${runtimeDatabaseRole} AND current_user = session_user) AS login,
+      (NOT r.rolinherit AND NOT EXISTS (SELECT 1 FROM pg_auth_members WHERE member = r.oid)) AS independent,
+      (
+      NOT (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls)
       AND NOT has_database_privilege(current_database(), 'CREATE')
       AND NOT EXISTS (
         SELECT 1 FROM pg_namespace n WHERE n.nspname !~ '^pg_(temp|toast_temp)_'
@@ -73,7 +82,9 @@ export async function assertRuntimeRole(db: Pick<Database, "$queryRaw">) {
           ))
         )
       )
-      AND NOT has_any_column_privilege('public."_prisma_migrations"', 'SELECT, INSERT, UPDATE, REFERENCES')
+      ) AS restricted,
+      (
+      NOT has_any_column_privilege('public."_prisma_migrations"', 'SELECT, INSERT, UPDATE, REFERENCES')
       AND NOT has_table_privilege('public."_prisma_migrations"', 'DELETE')
       AND NOT has_any_column_privilege('public."LiveSetCutover"', 'SELECT, INSERT, UPDATE, REFERENCES')
       AND NOT has_table_privilege('public."LiveSetCutover"', 'DELETE')
@@ -81,7 +92,10 @@ export async function assertRuntimeRole(db: Pick<Database, "$queryRaw">) {
       AND NOT has_column_privilege('public."CloneConversion"', 'restoredCopyId', 'SELECT, INSERT, UPDATE')
       AND NOT has_any_column_privilege('public."CloneConversion"', 'UPDATE')
       AND NOT has_table_privilege('public."CloneConversion"', 'DELETE')
-      AND NOT EXISTS (
+      AND NOT has_sequence_privilege('public.library_manual_rank_seq', 'UPDATE')
+      ) AS protected,
+      (
+      NOT EXISTS (
         SELECT 1 FROM unnest(ARRAY['copyId', 'userId', 'sourceId', 'convertedAt']) AS c(name)
         WHERE NOT has_column_privilege('public."CloneConversion"', c.name, 'SELECT')
       )
@@ -93,14 +107,30 @@ export async function assertRuntimeRole(db: Pick<Database, "$queryRaw">) {
         WHERE NOT has_table_privilege(p.relation, p.privilege)
       )
       AND has_sequence_privilege('public.library_manual_rank_seq', 'USAGE')
-      AND NOT has_sequence_privilege('public.library_manual_rank_seq', 'UPDATE')
       AND has_function_privilege('public.crypt(text, text)', 'EXECUTE')
       AND has_function_privilege('public.gen_salt(text, integer)', 'EXECUTE')
       AND has_function_privilege('public.attempt_graded_responses(jsonb)', 'EXECUTE')
-    ) AS safe FROM pg_roles r WHERE r.rolname = current_user
+    ) AS granted FROM pg_roles r WHERE r.rolname = current_user
   `;
-  if (row?.safe !== true)
+  const issues = [];
+  if (!row?.login)
+    issues.push("The connection must log in directly as examprep_runtime.");
+  if (!row?.independent)
+    issues.push(
+      "Use NOINHERIT and remove all role memberships, including neon_superuser.",
+    );
+  if (!row?.restricted)
+    issues.push(
+      "Remove administrative, schema creation, table ownership, TRUNCATE, or TRIGGER privileges.",
+    );
+  if (!row?.protected)
+    issues.push(
+      "Remove access to migration metadata, protected recovery fields, and sequence updates.",
+    );
+  if (!row?.granted)
+    issues.push("Apply the required application grants as the database owner.");
+  if (issues.length)
     throw new Error(
-      "The pooled database role failed the restricted runtime privilege check.",
+      `The pooled database role failed the restricted runtime privilege check. ${issues.join(" ")}`,
     );
 }
