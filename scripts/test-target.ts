@@ -7,6 +7,7 @@ import { checkConnections } from "./deployment-config.mjs";
 import {
   isLoopbackOrigin,
   matchesTestDatabase,
+  runtimeDatabaseRole,
   testDatabaseDigest,
   testDatabaseHeader,
   testDatabasePath,
@@ -22,21 +23,18 @@ export function readTestTarget(
   const direct = env.TEST_DATABASE_URL_UNPOOLED;
   if (!runtime || !direct)
     throw new Error("Set test-only pooled and direct database URLs.");
-  try {
-    const urls = checkConnections({
-      DATABASE_URL: runtime,
-      DATABASE_URL_UNPOOLED: direct,
-    });
-    if (
-      decodeURIComponent(urls.runtime.username) ===
-      decodeURIComponent(urls.migration.username)
-    )
-      throw new Error("Live tests require separate database roles.");
-  } catch {
+  const urls = checkConnections(
+    { DATABASE_URL: runtime, DATABASE_URL_UNPOOLED: direct },
+    { runtime: "TEST_DATABASE_URL", migration: "TEST_DATABASE_URL_UNPOOLED" },
+  );
+  if (decodeURIComponent(urls.runtime.username) !== runtimeDatabaseRole)
     throw new Error(
-      "Test connections must use separate roles on the same Neon database, pooled and direct with TLS.",
+      `TEST_DATABASE_URL must sign in as ${runtimeDatabaseRole}.`,
     );
-  }
+  if (decodeURIComponent(urls.migration.username) === runtimeDatabaseRole)
+    throw new Error(
+      "Test connections require separate roles. TEST_DATABASE_URL_UNPOOLED must sign in as the owner.",
+    );
   return { runtime, direct };
 }
 

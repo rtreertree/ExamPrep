@@ -43,6 +43,27 @@ describe("live database guards", () => {
         ),
       }),
     ).toThrow(/separate roles/);
+    expect(() =>
+      readTestTarget({
+        ...env,
+        TEST_DATABASE_URL: runtime.replace("examprep_runtime:", "owner:"),
+      }),
+    ).toThrow(/TEST_DATABASE_URL must sign in as examprep_runtime/);
+    expect(() =>
+      readTestTarget({
+        ...env,
+        TEST_DATABASE_URL: runtime.replace("-pooler", ""),
+      }),
+    ).toThrow(/TEST_DATABASE_URL must use the pooled/);
+    expect(() =>
+      readTestTarget({
+        ...env,
+        TEST_DATABASE_URL_UNPOOLED: direct.replace(
+          "sslmode=require",
+          "sslmode=disable",
+        ),
+      }),
+    ).toThrow(/TEST_DATABASE_URL_UNPOOLED needs one TLS sslmode/);
     expect(readTestTarget(env)).toEqual({ runtime, direct });
   });
 

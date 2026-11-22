@@ -210,6 +210,12 @@ For automatic releases, use the branch restriction without a required reviewer.
    | `TEST_DATABASE_URL` | Pooled TLS URL for `examprep_runtime` on the test branch |
    | `TEST_DATABASE_URL_UNPOOLED` | Direct TLS URL for the owner of the same test database |
 
+   Paste the raw `postgresql://...` URLs. The runtime host has `-pooler` and
+   uses the password set for `examprep_runtime`. The direct host has the same
+   endpoint without `-pooler` and uses the owner's credentials, typically
+   `neondb_owner`. Both URLs use the same database name and include
+   `sslmode=require` or a stricter TLS mode.
+
 3. Use Actions → **Database acceptance** → Run workflow on `main` to verify
    the environment. The workflow generates fresh auth secrets, verifies both
    database connections, applies pending migrations, and runs the Node and Worker
