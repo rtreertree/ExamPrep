@@ -27,7 +27,7 @@ npm run worker:check
 npm run dev:worker
 ```
 
-PR checks use simulated data and run without credentials. On `main`, **Release** builds a package in CI, runs **Database acceptance** against a dedicated database in an isolated Neon test project, and deploys the accepted package if the commit is still current. Database acceptance can also run manually. See the CI/CD, secrets, migrations, and rollback instructions in [DEPLOYMENT.md](DEPLOYMENT.md).
+PR checks use simulated data and run without credentials. On `main`, **Release** verifies the dedicated test database, applies pending migrations, and smoke-tests the packaged Worker before deploying. Run **Database acceptance** manually for the full live Node and Worker suites. See the CI/CD, secrets, migrations, and rollback instructions in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 The release runs `cloudflare:check` against the deployment database. It verifies the runtime connection, probes password hashing, and rejects old-format credentials. Use `npm run cloudflare:check -- --local` for local development checks. `/api` and `/api/*` reach Hono. Public version previews are disabled to keep production resources private.
 
@@ -64,7 +64,7 @@ npm run build
 npm run worker:check
 ```
 
-`npm test` runs the database-free suite. For live acceptance, follow the [dedicated test database setup](DEPLOYMENT.md#local-database-acceptance) and put the test connection URLs, marker token, and test auth secrets in the ignored `.env.test` file:
+`npm test` runs the database-free suite. For live acceptance, follow the [dedicated test database setup](DEPLOYMENT.md#local-database-acceptance) and put the test connection URLs and test auth secrets in the ignored `.env.test` file:
 
 ```sh
 npm run build

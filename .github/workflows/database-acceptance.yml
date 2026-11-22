@@ -73,10 +73,18 @@ jobs:
         run: |
           npm run build
           npm run worker:package
-      - run: npm exec -- playwright install --with-deps chromium
-      - name: Prepare the test database and run live acceptance on Node and Worker
+      - name: Install Chromium for manual acceptance
+        if: ${{ !inputs.use_release_package }}
+        run: npm exec -- playwright install --with-deps chromium
+      - name: Prepare the test database and check the application
         env:
+          USE_RELEASE_PACKAGE: ${{ inputs.use_release_package }}
           TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
           TEST_DATABASE_URL_UNPOOLED: ${{ secrets.TEST_DATABASE_URL_UNPOOLED }}
-        run: npm run test:acceptance -- --production-package --shared-test-database
+        run: |
+          args=(--production-package --shared-test-database)
+          if [[ "$USE_RELEASE_PACKAGE" == true ]]; then
+            args+=(--release-smoke)
+          fi
+          npm run test:acceptance -- "${args[@]}"
         timeout-minutes: 35
