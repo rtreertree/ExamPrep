@@ -31,6 +31,7 @@ try {
     "--outdir",
     "dist/worker-production",
   ]);
+  run(process.execPath, ["--import", "tsx", "scripts/check-review-schedules.ts"]);
   run(process.execPath, ["scripts/migrate.mjs"]);
   run(process.execPath, ["--import", "tsx", "scripts/free-tier-check.ts"]);
   directory = await mkdtemp(join(tmpdir(), "exam-prep-release-"));

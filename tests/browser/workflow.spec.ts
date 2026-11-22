@@ -1,12 +1,10 @@
 import { chooseOption } from "./selector";
-import "dotenv/config";
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { connectDatabase } from "../../server/db";
-import { neonConfig } from "@neondatabase/serverless";
-import ws from "ws";
-neonConfig.webSocketConstructor = ws;
+import { readTestTarget, verifyTestApp, verifyTestTarget } from "../../scripts/test-target";
+let db: ReturnType<typeof connectDatabase>;
 const email = `browser-${randomUUID()}@example.test`;
 const password = randomUUID() + "aB9!";
 const exam = readFileSync(
@@ -25,7 +23,8 @@ async function apiRequest(
 ) {
   const options = {
     method,
-    headers: { Origin: process.env.TEST_BASE_URL || "http://127.0.0.1:8787" },
+    headers: { Origin: process.env.TEST_BASE_URL! },
+    maxRedirects: 0,
     data,
   };
   let response = await request.fetch("/api" + path, options);
@@ -38,10 +37,19 @@ async function apiRequest(
   }
   return response;
 }
+test.beforeAll(async ({ baseURL }) => {
+  const target = readTestTarget();
+  await verifyTestTarget(target);
+  await verifyTestApp(baseURL ?? "", target.token);
+  db = connectDatabase(target.direct);
+});
 test.afterAll(async () => {
-  const db = connectDatabase(process.env.DATABASE_URL!);
-  await db.user.deleteMany({ where: { email } });
-  await db.$disconnect();
+  if (!db) return;
+  try {
+    await db.user.deleteMany({ where: { email } });
+  } finally {
+    await db.$disconnect();
+  }
 });
 test("complete study workflow, recovery, partial credit, flashcards, responsive layouts and keyboard", async ({
   page,
@@ -453,7 +461,7 @@ test("server conflicts preserve editor work; save failures retain practice input
     await context.clearCookies();
     await page.goto("/sign-in");
     const separate = await context.browser()!.newContext({
-      baseURL: process.env.TEST_BASE_URL || "http://127.0.0.1:8787",
+      baseURL: process.env.TEST_BASE_URL,
     });
     const otherEmail = `browser-other-${randomUUID()}@example.test`;
     const response = await apiRequest(
@@ -474,9 +482,7 @@ test("server conflicts preserve editor work; save failures retain practice input
         page.getByRole("button", { name: "Restore draft" }),
       ).toHaveCount(0);
     } finally {
-      const db = connectDatabase(process.env.DATABASE_URL!);
       await db.user.deleteMany({ where: { email: otherEmail } });
-      await db.$disconnect();
       await separate.close();
     }
     await context.clearCookies();
@@ -564,9 +570,7 @@ test("server conflicts preserve editor work; save failures retain practice input
       page.getByRole("heading", { name: "Welcome back" }),
     ).toBeVisible();
   } finally {
-    const db = connectDatabase(process.env.DATABASE_URL!);
     await db.user.deleteMany({ where: { email: extraEmail } });
-    await db.$disconnect();
   }
 });
 
@@ -674,9 +678,7 @@ test("multi-digit rubric awards commit on blur; invalid math warns and long form
       "Unsaved device draft",
     );
   } finally {
-    const db = connectDatabase(process.env.DATABASE_URL!);
     await db.user.deleteMany({ where: { email: accountEmail } });
-    await db.$disconnect();
   }
 });
 
@@ -685,7 +687,6 @@ test("Admin and Discover on desktop and mobile use the live owner and independen
   browser,
   baseURL,
 }) => {
-  const db = connectDatabase(process.env.DATABASE_URL!);
   const other = await browser.newContext({
     baseURL,
     viewport: { width: 390, height: 844 },
@@ -812,6 +813,5 @@ test("Admin and Discover on desktop and mobile use the live owner and independen
   } finally {
     await other.close();
     await db.user.deleteMany({ where: { email: { in: emails } } });
-    await db.$disconnect();
   }
 });

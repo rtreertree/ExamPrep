@@ -76,6 +76,83 @@ const fixture = () => ({
 });
 
 describe("v1 backup validation", () => {
+  it.each(["reviews", "viewerReviews"])(
+    "rejects invalid review chronology in %s",
+    (key) => {
+      const { library, history } = fixture();
+      const deck = {
+        ...library.sets[0],
+        content: {
+          schemaVersion: 1,
+          kind: "flashcards",
+          title: "Cards",
+          cards: [{ id: "one", front: "Q", back: "A" }],
+        },
+      };
+      const review = {
+        studySetId: deck.id,
+        cardId: "one",
+        fingerprint: "1".repeat(64),
+        streak: 1,
+        attemptStartedAt: "2026-11-09T10:05:00.000Z",
+        dueAt: "2026-11-10T10:00:00.000Z",
+      };
+      const input = (row: typeof review) => ({
+        library: { ...library, sets: [deck] },
+        history: { ...history, attempts: [], [key]: [row] },
+      });
+      const at = Date.parse(now);
+      expect(() => validateBackup(input(review), at)).not.toThrow();
+      expect(() =>
+        validateBackup(input({ ...review, dueAt: now }), at),
+      ).toThrow(
+        expect.objectContaining({
+          issues: [
+            expect.objectContaining({ path: `/history/${key}/0/dueAt` }),
+          ],
+        }),
+      );
+      expect(() =>
+        validateBackup(
+          input({ ...review, attemptStartedAt: "2026-11-09T10:05:00.001Z" }),
+          at,
+        ),
+      ).toThrow(
+        expect.objectContaining({
+          issues: [
+            expect.objectContaining({
+              path: `/history/${key}/0/attemptStartedAt`,
+            }),
+          ],
+        }),
+      );
+    },
+  );
+
+  it("accepts and counts live viewer schedules without an owned deck in the archive", () => {
+    const { library, history } = fixture();
+    const review = {
+      studySetId: "shared-deck",
+      cardId: "one",
+      fingerprint: "1".repeat(64),
+      streak: 2,
+      dueAt: now,
+      attemptStartedAt: now,
+    };
+    const backup = validateBackup({
+      library,
+      history: { ...history, viewerReviews: [review] },
+    });
+    expect(backup.viewerReviews).toEqual([review]);
+    expect(backupSummary(backup).reviewCount).toBe(1);
+    expect(() =>
+      validateBackup({
+        library,
+        history: { ...history, viewerReviews: [review, review] },
+      }),
+    ).toThrow(ValidationError);
+  });
+
   it("keeps organization, immutable snapshots and private responses and recalculates scores", () => {
     const backup = validateBackup(fixture());
     expect(backupSummary(backup)).toEqual({

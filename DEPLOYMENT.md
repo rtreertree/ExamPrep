@@ -46,8 +46,8 @@ GitHub **production** environment:
 | --- | --- | --- |
 | Variable | `CLOUDFLARE_ACCOUNT_ID` | `90145ce51d276d276787dc0ee9561f0a` (verified, already set) |
 | Secret | `CLOUDFLARE_API_TOKEN` | Scoped deployment token described above |
-| Secret | `DATABASE_URL` | Production pooled Neon URL (`-pooler` hostname); runtime access |
-| Secret | `DATABASE_URL_UNPOOLED` | Direct URL for the **same endpoint/database**, without `-pooler`; migration tooling only |
+| Secret | `DATABASE_URL` | Production pooled Neon URL (`-pooler` hostname) for `examprep_runtime` |
+| Secret | `DATABASE_URL_UNPOOLED` | Direct owner URL for the **same endpoint/database**, without `-pooler` |
 | Secret | `BETTER_AUTH_SECRET` | Independent cryptographically random secret, at least 32 characters |
 | Secret | `PASSWORD_PEPPER` | Separate stable random secret, at least 32 characters; encrypted backup required |
 | Optional secret | `RESEND_API_KEY` | Sending-only Resend key for password recovery |
@@ -58,8 +58,8 @@ the release workflow, not another secret or a `VITE_` setting. Do not rotate an
 existing pepper when connecting an existing database: preserve the pepper that
 created its password hashes. Changing it makes those passwords unverifiable.
 
-GitHub requires no Neon management API key, CI project, branch IDs or test-database
-secrets. Production connection URLs are still required for persistence and migrations.
+The production environment uses database credentials for persistence and
+migrations. The Neon management key belongs in the separate acceptance environment below.
 
 Cloudflare production bindings:
 
@@ -81,9 +81,9 @@ not uploaded. Never enable SQL parameter logging or dump runtime environments.
   Actions are pinned to verified release commits; Node is 24.14.0 and the existing
   dependency lockfile is retained. Checkout does not persist Git credentials;
   package-manager caches are disabled between trust boundaries.
-- **Production:** only after the CI checks succeed, rebuild/dry-run, validate configuration,
-  apply production migrations with the direct URL, run the existing free-tier/password
-  readiness guard, then deploy a matching code/secrets version. A failed readiness
+- **Production:** after the CI checks succeed, rebuild/dry-run, validate configuration,
+  preflight schedules, apply migrations with the direct URL, run the free-tier,
+  runtime-privilege and password readiness checks, then deploy a matching code/secrets version. A failed readiness
   check prevents deployment, including when legacy scrypt credentials remain.
   Preserve the Node sign-in migration path documented in README; never delete or
   reset users to bypass this guard.
@@ -93,11 +93,9 @@ not uploaded. Never enable SQL parameter logging or dump runtime environments.
   JavaScript, `/history` SPA fallback, `/api/health`, JSON API errors and unauthenticated
   private-response cache policy. Smoke creates no accounts and makes no writes.
 
-GitHub runs simulated-data Chromium browser regressions with no production secrets.
-It runs no live database acceptance tests, creates no Neon branches and schedules no branch cleanup. The optional local API/browser suites use
-only an existing dedicated test database connection; no Neon API key is needed.
-Those local checks do not gate deployment. Run them locally when changing auth,
-ownership, persistence, grading or migrations.
+PR CI runs simulated-data Chromium checks. For auth, ownership, persistence,
+grading, or migration changes, run **Database acceptance** from `main` or use the
+guarded local workflow. This acceptance workflow is separate from Release.
 
 Never use `pull_request_target` to execute PR code. Production credentials are
 available only to the production deployment job on trusted `main`; do not weaken
@@ -134,13 +132,16 @@ Use expand → migrate/backfill → contract across separate releases: additive 
 first, code supporting both shapes next, remove old fields only after old code and
 rollback needs are retired. A deploy failure can leave new schema in place; it is
 not undone automatically. Review lock duration and take/verify a Neon recovery
-point before risky changes. CI does not exercise migrations against a database;
-validate schema upgrades and backfills locally against a dedicated test database.
+point before risky changes. The manual Database acceptance workflow applies the
+full chain on an empty branch. Rehearse upgrades and backfills against the
+preceding schema in a dedicated test database before release.
 
-The study-set sharing migration adds ownership, invitation, and copy-link tables
-while retaining the existing primary-owner data. Once co-owners have access,
-use a forward fix for sharing regressions so those owners can still reach their
-sets and review schedules.
+After the live-set cutover, the minimum compatible code revision is `7e0fcae`.
+Earlier builds hide live viewer memberships and lack the retired-ID route.
+Use the deployed version's commit label to verify the viewer and alias paths.
+Record its actual Cloudflare version ID and verify that its database binding
+will work after credential rotation. If no deployed version qualifies, ship a
+forward fix or deploy a compatible build with current secrets.
 
 For an application rollback, pause new releases, inspect the currently deployed
 version and schema compatibility, then use an authorized shell:
@@ -152,14 +153,13 @@ npm exec -- wrangler rollback VERSION_ID --env production
 npm run smoke -- https://exam.phonet.app
 ```
 
-Choose a verified compatible version; never invent a version ID. Worker rollback
-does **not** reverse SQL migrations or restore database records. Keep current
-password hashing callbacks and the matching pepper; old scrypt-only code cannot
-read new hashes. If schema/data need repair, use a reviewed forward migration or
-restore a Neon recovery point into a **separate branch**, verify it, and plan the
-cutover and any lost writes. Never reset/drop production or automatically run down
-migrations. Fix/revert `main` through review so the next automatic release does not
-undo the rollback. First deployment has no earlier Worker version to restore.
+Worker rollback changes the deployed Worker version. SQL migrations and live data
+persist. Keep the current password hashing callbacks and pepper. For schema or
+data repair, use a reviewed forward migration or restore a Neon recovery point
+into a **separate branch**, verify viewer access and converted IDs, and reconcile
+writes made after the recovery point before switching traffic. Fix or revert
+`main` through review to keep the next release aligned with the rollback.
+[Cloudflare rollback behavior](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/)
 
 ## Diagnosing readiness failures
 
@@ -171,31 +171,72 @@ schema/functions after a manual reset require reviewed schema repair; retaining
 migration history can prevent already-applied migrations from recreating objects.
 Never clear more data just to bypass a readiness error.
 
-## Local reproduction and remaining setup
+## Restricted runtime credential rollout
+
+1. Rehearse the new role through Node and Worker in the isolated test project. Record results for sign-up, sign-in, backup and restore, scheduling, viewer access and converted IDs. Verify the pooled role cannot modify schema, truncate tables, change triggers, access migration history, or read recovery payloads.
+2. In the separately authorized rollout, verify the active production Worker’s bindings, its deploy commit and the rollback candidate’s version ID. Secure a Neon recovery point. Set `DATABASE_URL_UNPOOLED` explicitly to the verified direct migration owner and supply a random 64-digit hex `RUNTIME_DATABASE_PASSWORD` through the shell environment. Run `node --import tsx scripts/provision-runtime-role.ts`. Rerunning the script reapplies grants and leaves an existing role’s password in place.
+3. Build the pooled URL with the new role and password. Verify it with `npm run cloudflare:check` after building both packages. Stage the GitHub production `DATABASE_URL` secret, then run Release. Release checks the distinct roles and uses the new URL in the deployed code-and-secrets version. Verify the serving version and viewer access before rotating any credential still used by the active or rollback version. Keep the pepper stable.
+4. Give routine auditors a separate SQL-created read-only role with schema usage and explicit `SELECT` on approved tables or views. Keep `recovery` and credential secrets limited to authorized maintenance access.
+
+## Database acceptance in GitHub
+
+Create a protected `database-acceptance` environment restricted to `main`.
+Provide `NEON_TEST_PROJECT_ID`, `NEON_TEST_PARENT_ID`, `NEON_TEST_DATABASE` and
+`NEON_TEST_OWNER` as environment variables. The project must be independent
+of production and the parent must contain an empty application database. Add
+`NEON_TEST_API_KEY` as a project-scoped key for that project. Each run verifies
+the newly created branch and database before migration, creates disposable auth
+and runtime credentials, and deletes that run's branch on exit. If the runner is
+terminated before cleanup, inspect the separate project for the exact
+`examprep-ci-<run-id>-<attempt>` branch and delete it after verifying its parent.
+
+## Local database acceptance
+
+Use an empty, disposable Neon branch in the isolated test project. Verify its
+endpoint in Neon and set `DATABASE_URL_UNPOOLED` to that branch's direct owner
+connection. Apply migrations and provision the pooled role:
 
 ```sh
 npm ci
 npm run build
 npm test
 npm run worker:check
-# Only with .env targeting a confirmed dedicated test database:
 npm run db:migrate
+node --import tsx scripts/provision-runtime-role.ts
 npm exec -- playwright install chromium
-TEST_DATABASE_CONFIRMED=1 npm run test:acceptance
 ```
 
-Acceptance uses isolated ports 8791/8792 and temporary Worker configuration; it
-does not overwrite local secret files or stop another developer server. Local
-success does not verify remote Workers Free CPU accounting or production HTTPS
-auth. Measure deployed authentication and maximum-size import/grading/retry CPU
-before production reliance. Local Docker validation needs a running Docker engine;
-GitHub CI builds the image independently.
+Use a separate random 64-digit hex value for `TEST_DATABASE_TOKEN`. In the
+verified test database as its owner, create the marker with its SHA-256 digest:
 
-Production uses the five secrets listed above. Supply the production database
-region before choosing explicit placement. No Neon management API key is required.
-An older integration environment may contain saved settings, but no workflow uses it.
-The test database was not promoted to production. No production migration or public
-deployment has been performed as part of local validation.
+```sql
+CREATE SCHEMA examprep_test;
+CREATE TABLE examprep_test.target (digest text PRIMARY KEY);
+GRANT USAGE ON SCHEMA examprep_test TO examprep_runtime;
+GRANT SELECT ON examprep_test.target TO examprep_runtime;
+INSERT INTO examprep_test.target (digest)
+VALUES (encode(public.digest('<TEST_DATABASE_TOKEN>', 'sha256'), 'hex'));
+```
+
+Put the pooled runtime URL in `TEST_DATABASE_URL`, the direct owner URL in
+`TEST_DATABASE_URL_UNPOOLED`, and the marker token in `TEST_DATABASE_TOKEN`.
+Add dedicated `BETTER_AUTH_SECRET` and `PASSWORD_PEPPER` values to an ignored
+`.env.test` and run `node --env-file=.env.test --import tsx scripts/acceptance.ts`.
+For a standalone Node test server, also set its runtime `DATABASE_URL` to the
+same pooled URL and its `BETTER_AUTH_URL` to its loopback origin. For a standalone
+Worker test server, copy the development config and add `TEST_DATABASE_TOKEN` to
+`secrets.required` in that test-only copy. The wrapper handles this automatically
+and starts Node and Worker on ports 8791 and 8792.
+
+## Review schedule preflight
+
+Run `node --import tsx scripts/check-review-schedules.ts` with the verified
+direct URL before applying the recovery migration to an existing database. The
+read-only check reports aggregate counts of invalid and future-dated rows. If
+it reports a problem, export the affected rows under maintenance access and
+review them against legitimate completed attempts before applying a repair.
+Backup replay skips schedules for edited or removed cards. Practice on the
+current card establishes its new schedule.
 
 ## Official references checked
 
@@ -231,6 +272,7 @@ Reload the app to see Admin. Further promotions, suspensions, and role changes c
 Apply `202611210001_live_sets` through the Release workflow. It inventories the existing set IDs and tracks old copy receipts during rollout. The new app records intentional editable copies separately. The production release audits, converts verified eligible copies, and reconciles counts after the updated Worker passes smoke checks. A database completion marker makes this a one-time operation. A failed run resumes on the next successful release. The commands below also support rehearsals and reviewed follow-up cases.
 
 1. Rehearse on a disposable production branch and verify a recovery point. Use its direct Neon connection in `DATABASE_URL_UNPOOLED`. Run `npm run db:convert-clones -- --details` for a read-only inventory. The report contains set IDs, revisions, candidate IDs and eligibility reasons. Keep detailed reports private.
-2. Confirm untracked copies individually using their source and content history. Supply a local JSON array of objects with `copyId`, `sourceId` and the audited copy `revision` using `--matches path/to/matches.json`. Matching content and item IDs suggest candidates. Confirmation does not grant access. A private original requires an existing membership or a receipt for its still-active link.
+2. Verify the provenance of untracked copies using source and content history. Supply a local JSON array of objects with `copyId`, `sourceId`, the audited `revision`, and an `evidence` string describing what verifies provenance, using `--matches path/to/matches.json`. Conversion also requires exact content equality and current access. A recorded origin that is missing or conflicts with the mapping stays under review.
 3. With the production direct connection, audit again. Run `npm run db:convert-clones -- --apply` to convert all verified eligible entries, or add `--copy ID` for one. The script commits each conversion atomically. Interrupted runs are safe to repeat. Existing placements take precedence. For multiple copies, the most recently studied one supplies initial preferences.
-4. Repeat the read-only audit and reconcile all inventory counts. Pending private, missing, re-shared or nested sets retain their contents and ownership. Overlapping unfinished spaced reviews can be converted once one is completed. To verify recovery, inspect the affected learner's `CloneConversion.recovery` record under maintenance access. It contains the original stored set and card schedules. Older edit links resolve only for the original learner with current access. For rollback after conversion, use the verified database recovery point and a compatible app release.
+4. Repeat the read-only audit and reconcile counts. Renamed, edited, shared, nested and inaccessible sets remain independent. Overlapping unfinished spaced reviews can be converted once one is completed.
+5. To recover an already retired clone, use the direct migration owner and run `npm run db:convert-clones -- --recover --copy ID`. Add `--apply` to recover a private independent set with a new ID. The command restores matching, valid schedules and the original folder when available. It preserves the archived copy record, retired-ID alias, and existing attempt history. A retry reports the same recovered ID.

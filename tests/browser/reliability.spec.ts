@@ -1322,6 +1322,48 @@ test("editor locates invalid fields, recovers unfinished content, and saves befo
   );
   expect(api.starts).toBe(1);
 });
+
+test("continues a converted clone's local draft and saves it as a separate set", async ({
+  page,
+}) => {
+  const api = await fixture(page);
+  const liveSet: StudySet = {
+    ...api.set(),
+    id: "original",
+    ownershipRole: "viewer",
+  };
+  await page.goto("/sets/set/edit");
+  await page
+    .getByLabel("Question", { exact: true })
+    .fill("Unpublished edits");
+  await expect(page.getByText("Draft saved on this device")).toBeVisible();
+
+  await page.route(/\/api\/sets\/(?:set|original)$/, (route) => {
+    expect(route.request().method()).toBe("GET");
+    return route.fulfill({ json: liveSet });
+  });
+  await page.goto("/library");
+  await page.getByRole("link", { name: "Continue Reliable study" }).click();
+  await expect(page).toHaveURL(/\/sets\/set\/edit$/);
+  await expect(page).toHaveTitle("Exam Prep");
+  await page.getByRole("button", { name: "Restore draft" }).click();
+  await expect(page.getByLabel("Question", { exact: true })).toHaveValue(
+    "Unpublished edits",
+  );
+  await expect(
+    page.getByRole("button", { name: "Save", exact: true }),
+  ).toBeDisabled();
+  await page.screenshot({ path: "/tmp/examprep-converted-draft.png" });
+  await page.getByRole("button", { name: "Save as new set" }).click();
+  await expect(page).toHaveURL(/\/sets\/imported\/edit$/);
+  await expect(page.getByLabel("Question", { exact: true })).toHaveValue(
+    "Unpublished edits",
+  );
+
+  await page.goto("/sets/set/edit");
+  await expect(page).toHaveURL(/\/sets\/original\/view$/);
+  await expect(page.getByText("Explain 1", { exact: true })).toBeVisible();
+});
 test("import errors identify the field and preserve source for repair without saving", async ({
   page,
   context,

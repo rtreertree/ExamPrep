@@ -1,0 +1,43 @@
+name: Database acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    environment: database-acceptance
+    env:
+      NEON_TEST_PROJECT_ID: ${{ vars.NEON_TEST_PROJECT_ID }}
+      NEON_TEST_PARENT_ID: ${{ vars.NEON_TEST_PARENT_ID }}
+      NEON_TEST_DATABASE: ${{ vars.NEON_TEST_DATABASE }}
+      NEON_TEST_OWNER: ${{ vars.NEON_TEST_OWNER }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24.14.0
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run build
+      - run: npm exec -- playwright install --with-deps chromium
+      - name: Provision and verify a disposable test branch
+        id: provision
+        env:
+          NEON_TEST_API_KEY: ${{ secrets.NEON_TEST_API_KEY }}
+        run: node --import tsx scripts/neon-test-branch.ts prepare
+      - name: Run Node and Worker acceptance
+        run: npm run test:acceptance
+        timeout-minutes: 30
+      - name: Delete this run's disposable branch
+        if: ${{ always() && steps.provision.outcome != 'skipped' }}
+        env:
+          NEON_TEST_API_KEY: ${{ secrets.NEON_TEST_API_KEY }}
+        run: node --import tsx scripts/neon-test-branch.ts cleanup

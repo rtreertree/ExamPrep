@@ -1,4 +1,3 @@
-import "dotenv/config";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,17 +5,14 @@ import { join, resolve } from "node:path";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { parse } from "jsonc-parser";
-import { neonConfig } from "@neondatabase/serverless";
-import ws from "ws";
 import { connectDatabase } from "../server/db";
+import { readTestTarget, verifyTestApp, verifyTestTarget } from "./test-target";
 
-if (process.env.TEST_DATABASE_CONFIRMED !== "1")
-  throw new Error(
-    "Set TEST_DATABASE_CONFIRMED=1 only for a dedicated Neon test database.",
-  );
-for (const key of ["DATABASE_URL", "PASSWORD_PEPPER", "BETTER_AUTH_SECRET"])
-  if (!process.env[key]) throw new Error(`Test ${key} is missing.`);
-neonConfig.webSocketConstructor = ws;
+const target = readTestTarget();
+for (const key of ["PASSWORD_PEPPER", "BETTER_AUTH_SECRET"])
+  if ((process.env[key]?.length ?? 0) < 32)
+    throw new Error(`Set a test ${key} of at least 32 characters.`);
+await verifyTestTarget(target);
 const directory = await mkdtemp(join(tmpdir(), "examprep-acceptance-"));
 const children = new Set<ChildProcess>();
 async function stop(child: ChildProcess) {
@@ -63,7 +59,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
     process.exitCode = 1;
   });
 try {
-  const db = connectDatabase(process.env.DATABASE_URL!);
+  const db = connectDatabase(target.direct);
   try {
     // CI requires a pristine branch: this also catches an accidentally populated parent.
     if (process.env.CI && (await db.user.count()) !== 0)
@@ -80,11 +76,15 @@ try {
     const base = `http://127.0.0.1:${port}`;
     const env = {
       ...process.env,
+      DATABASE_URL: target.runtime,
+      DATABASE_URL_UNPOOLED: target.direct,
       BETTER_AUTH_URL: base,
       TEST_BASE_URL: base,
       RUN_DATABASE_TESTS: "1",
       PORT: String(port),
       WRANGLER_SEND_METRICS: "false",
+      RESEND_API_KEY: "",
+      RESET_EMAIL_FROM: "",
     };
     let args: string[];
     if (runtime === "worker") {
@@ -92,6 +92,9 @@ try {
       // Local test config has no production routes, account ID, envs or secrets.
       delete config.env;
       delete config.$schema;
+      config.secrets = {
+        required: [...config.secrets.required, "TEST_DATABASE_TOKEN"],
+      };
       Object.assign(config, {
         name: "exam-prep-acceptance",
         main: resolve(config.main),
@@ -110,6 +113,7 @@ try {
           "BETTER_AUTH_SECRET",
           "PASSWORD_PEPPER",
           "BETTER_AUTH_URL",
+          "TEST_DATABASE_TOKEN",
         ]
           .map(
             (key) => `${key}=${JSON.stringify(env[key as keyof typeof env])}`,
@@ -134,6 +138,7 @@ try {
     children.add(server);
     try {
       await ready(base, server, runtime);
+      await verifyTestApp(base, target.token);
       console.info(`Running API and browser acceptance on ${runtime}.`);
       if (!process.argv.includes("--smoke-only")) {
         await command(

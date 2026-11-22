@@ -27,6 +27,7 @@ app.route(
       PASSWORD_PEPPER: process.env.PASSWORD_PEPPER ?? "",
       RESEND_API_KEY: process.env.RESEND_API_KEY,
       RESET_EMAIL_FROM: process.env.RESET_EMAIL_FROM,
+      TEST_DATABASE_TOKEN: process.env.TEST_DATABASE_TOKEN,
       RUNTIME: "node",
     },
     connectDatabase,
@@ -37,7 +38,7 @@ app.get("*", serveStatic({ path: "./dist/client/index.html" }));
 const server = serve({
   fetch: app.fetch,
   port: Number(process.env.PORT ?? 8787),
-  hostname: "0.0.0.0",
+  hostname: process.env.TEST_DATABASE_TOKEN ? "127.0.0.1" : "0.0.0.0",
 });
 console.info(`Exam Prep listening on port ${process.env.PORT ?? 8787}`);
 for (const signal of ["SIGINT", "SIGTERM"])

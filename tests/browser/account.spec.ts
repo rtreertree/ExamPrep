@@ -34,6 +34,7 @@ test("previews a backup before restoring and saves study text size", async ({
           setCount: 1,
           attemptCount: 2,
           reviewCount: 0,
+          reviewSkips: { unchanged: 0, inaccessible: 1, cardMismatch: 0 },
           titles: ["Calculus"],
         },
       });
@@ -41,7 +42,8 @@ test("previews a backup before restoring and saves study text size", async ({
       restoreRequests.push(route.request().postData() ?? "");
       return route.fulfill({
         status: 201,
-        json: { setCount: 1, attemptCount: 2, reviewCount: 0 },
+        json: { setCount: 1, attemptCount: 2, reviewCount: 0,
+          reviewSkips: { unchanged: 0, inaccessible: 0, cardMismatch: 1 } },
       });
     }
     return route.fulfill({ status: 404, json: { error: "Unexpected path." } });
@@ -87,11 +89,13 @@ test("previews a backup before restoring and saves study text size", async ({
   });
   await page.getByRole("button", { name: "Preview restore" }).click();
   await expect(page.getByText("Calculus", { exact: true })).toBeVisible();
+  await expect(page.getByText("Skipped review schedules (1 in unavailable decks).")).toBeVisible();
   expect(restoreRequests).toEqual([]);
   await page.getByRole("button", { name: "Restore backup" }).click();
   await expect(
     page.getByText("Restored 1 study set, 2 attempts, and 0 scheduled cards."),
   ).toBeVisible();
+  await expect(page.getByText("Skipped review schedules (1 for changed or removed cards).")).toBeVisible();
   expect(restoreRequests.map((body) => JSON.parse(body))).toEqual([
     { library: file, history },
   ]);

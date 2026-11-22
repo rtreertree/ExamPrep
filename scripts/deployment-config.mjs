@@ -10,6 +10,21 @@ export function databaseConnection(value, pooled) {
     !url.hostname.endsWith(".neon.tech") ||
     !url.username ||
     !url.password ||
+    url.pathname.length < 2 ||
+    [...url.searchParams.keys()].some((key) =>
+      [
+        "host",
+        "hostaddr",
+        "port",
+        "user",
+        "username",
+        "database",
+        "dbname",
+        "password",
+        "ssl",
+      ].includes(key.toLowerCase()),
+    ) ||
+    url.searchParams.getAll("sslmode").length !== 1 ||
     !["require", "verify-ca", "verify-full"].includes(
       url.searchParams.get("sslmode"),
     ) ||
@@ -29,11 +44,17 @@ export function checkConnections(env) {
   const migration = databaseConnection(env.DATABASE_URL_UNPOOLED, false);
   if (
     runtime.hostname.replace("-pooler.", ".") !== migration.hostname ||
+    (runtime.port || "5432") !== (migration.port || "5432") ||
     runtime.pathname !== migration.pathname
   )
     throw new Error(
       "Runtime and migration URLs must target the same Neon endpoint and database.",
     );
+  if (
+    decodeURIComponent(runtime.username) ===
+    decodeURIComponent(migration.username)
+  )
+    throw new Error("Use separate runtime and migration database roles.");
 }
 
 export function productionConfig(env) {

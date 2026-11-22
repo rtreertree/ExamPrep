@@ -301,6 +301,7 @@ model CloneConversion {
   sourceId String?
   recovery Json?
   convertedAt DateTime?
+  restoredCopyId String?
   @@index([userId, sourceId])
 }
 
