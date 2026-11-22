@@ -103,23 +103,22 @@ export function createApp(
       if (!c.req.header("Content-Type")?.startsWith("application/json"))
         throw new HTTPException(415, { message: "Use application/json." });
     }
-    const token = config.TEST_DATABASE_TOKEN;
     const testProof = c.req.path === testDatabasePath;
+    const challenge = c.req.header(testDatabaseHeader);
     if (
       testProof &&
-      (token === undefined ||
+      (!config.TEST_DATABASE_MODE ||
         c.req.method !== "GET" ||
-        c.req.header(testDatabaseHeader) !== token)
+        !/^[\da-f]{64}$/.test(challenge ?? ""))
     )
       return c.notFound();
     const db = connectDatabase(config.DATABASE_URL);
     try {
-      if (token !== undefined) {
+      if (config.TEST_DATABASE_MODE) {
         if (
-          !/^[\da-f]{64}$/.test(token) ||
           !isLoopbackOrigin(config.BETTER_AUTH_URL) ||
           new URL(c.req.url).origin !== config.BETTER_AUTH_URL ||
-          !(await matchesTestDatabase(db, token, true))
+          !(await matchesTestDatabase(db, true))
         )
           return c.json(
             { error: "The dedicated test database could not be verified." },
@@ -127,7 +126,9 @@ export function createApp(
           );
         if (testProof)
           return c.body(null, 204, {
-            [testDatabaseProofHeader]: await testDatabaseDigest(token),
+            [testDatabaseProofHeader]: await testDatabaseDigest(
+              `${challenge}\n${config.DATABASE_URL}`,
+            ),
           });
       }
       c.set("db", db);

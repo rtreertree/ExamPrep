@@ -106,6 +106,7 @@ try {
       BETTER_AUTH_URL: base,
       TEST_BASE_URL: base,
       RUN_DATABASE_TESTS: "1",
+      TEST_DATABASE_MODE: "1",
       PORT: String(port),
       WRANGLER_SEND_METRICS: "false",
       RESEND_API_KEY: "",
@@ -118,7 +119,7 @@ try {
       delete config.env;
       delete config.$schema;
       config.secrets = {
-        required: [...config.secrets.required, "TEST_DATABASE_TOKEN"],
+        required: [...config.secrets.required, "TEST_DATABASE_MODE"],
       };
       Object.assign(config, {
         name: "exam-prep-acceptance",
@@ -140,7 +141,7 @@ try {
           "BETTER_AUTH_SECRET",
           "PASSWORD_PEPPER",
           "BETTER_AUTH_URL",
-          "TEST_DATABASE_TOKEN",
+          "TEST_DATABASE_MODE",
         ]
           .map(
             (key) => `${key}=${JSON.stringify(env[key as keyof typeof env])}`,
@@ -166,7 +167,7 @@ try {
     children.add(server);
     try {
       await ready(base, server, runtime);
-      await verifyTestApp(base, target.token);
+      await verifyTestApp(base, target.runtime);
       console.info(`Running API and browser acceptance on ${runtime}.`);
       if (!process.argv.includes("--smoke-only")) {
         await command(

@@ -1,7 +1,7 @@
 import type { Database } from "./db";
 
 export const testDatabasePath = "/api/_test/database";
-export const testDatabaseHeader = "X-ExamPrep-Test-Token";
+export const testDatabaseHeader = "X-ExamPrep-Test-Challenge";
 export const testDatabaseProofHeader = "X-ExamPrep-Test-Proof";
 export const runtimeDatabaseRole = "examprep_runtime";
 
@@ -30,13 +30,11 @@ export async function testDatabaseDigest(token: string) {
 
 export async function matchesTestDatabase(
   db: Pick<Database, "$queryRaw">,
-  token: string,
   runtime = false,
 ) {
   try {
-    const digest = await testDatabaseDigest(token);
     const [row] = await db.$queryRaw<{ matched: boolean }[]>`
-      SELECT EXISTS(SELECT 1 FROM examprep_test.target WHERE digest = ${digest})
+      SELECT EXISTS(SELECT 1 FROM examprep_test.target)
         AND (NOT ${runtime} OR current_user = ${runtimeDatabaseRole}) AS matched
     `;
     return row?.matched === true;

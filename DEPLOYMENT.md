@@ -209,7 +209,6 @@ For automatic releases, use the branch restriction without a required reviewer.
    | --- | --- |
    | `TEST_DATABASE_URL` | Pooled TLS URL for `examprep_runtime` on the test branch |
    | `TEST_DATABASE_URL_UNPOOLED` | Direct TLS URL for the owner of the same test database |
-   | `TEST_DATABASE_TOKEN` | The 64-digit hex token used to create the test marker |
 
 3. Use Actions → **Database acceptance** → Run workflow on `main` to verify
    the environment. The workflow generates fresh auth secrets, verifies both
@@ -237,16 +236,15 @@ npm run db:migrate
 node --import tsx scripts/provision-runtime-role.ts
 ```
 
-Use a separate random 64-digit hex value for `TEST_DATABASE_TOKEN`. In the
-verified test database as its owner, create the marker with its SHA-256 digest:
+In the verified test database, run this SQL as its owner to mark it for acceptance.
+If you already installed the old marker and its table contains a row, reuse it.
 
 ```sql
 CREATE SCHEMA examprep_test;
-CREATE TABLE examprep_test.target (digest text PRIMARY KEY);
+CREATE TABLE examprep_test.target (enabled boolean PRIMARY KEY CHECK (enabled));
 GRANT USAGE ON SCHEMA examprep_test TO examprep_runtime;
 GRANT SELECT ON examprep_test.target TO examprep_runtime;
-INSERT INTO examprep_test.target (digest)
-VALUES (encode(public.digest('<TEST_DATABASE_TOKEN>', 'sha256'), 'hex'));
+INSERT INTO examprep_test.target (enabled) VALUES (true);
 ```
 
 ## Local database acceptance
@@ -255,15 +253,15 @@ Use a separate branch if CI may be running against its configured database.
 Prepare it as described in [Test database setup](#test-database-setup), then run
 `npm exec -- playwright install chromium`.
 
-Put the pooled runtime URL in `TEST_DATABASE_URL`, the direct owner URL in
-`TEST_DATABASE_URL_UNPOOLED`, and the marker token in `TEST_DATABASE_TOKEN`.
+Put the pooled runtime URL in `TEST_DATABASE_URL` and the direct owner URL in
+`TEST_DATABASE_URL_UNPOOLED`.
 Add dedicated `BETTER_AUTH_SECRET` and `PASSWORD_PEPPER` values to an ignored
 `.env.test` and run `node --env-file=.env.test --import tsx scripts/acceptance.ts`.
 For a standalone Node test server, also set its runtime `DATABASE_URL` to the
-same pooled URL and its `BETTER_AUTH_URL` to its loopback origin. For a standalone
-Worker test server, copy the development config and add `TEST_DATABASE_TOKEN` to
-`secrets.required` in that test-only copy. The wrapper handles this automatically
-and starts Node and Worker on ports 8791 and 8792.
+same pooled URL, its `BETTER_AUTH_URL` to its loopback origin, and
+`TEST_DATABASE_MODE=1`. For a standalone Worker, set the same values in the
+test-only `.dev.vars`. The wrapper configures both automatically and starts
+Node and Worker on ports 8791 and 8792.
 
 ## Review schedule preflight
 

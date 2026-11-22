@@ -47,7 +47,6 @@ jobs:
     secrets:
       TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
       TEST_DATABASE_URL_UNPOOLED: ${{ secrets.TEST_DATABASE_URL_UNPOOLED }}
-      TEST_DATABASE_TOKEN: ${{ secrets.TEST_DATABASE_TOKEN }}
 
   verified:
     name: Check the accepted commit
