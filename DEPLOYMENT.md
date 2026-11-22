@@ -86,14 +86,11 @@ not uploaded. Never enable SQL parameter logging or dump runtime environments.
   Jobs use a read-only token and run without secrets or deployment environments.
 - **Every release.** CI builds and publishes an immutable artifact containing the
   frontend, Node build, generated Node Prisma client, and production Worker bundle
-  with its WebAssembly module and source map. **Database acceptance** verifies those
-  builds on Node and Workerd against a dedicated database in the isolated Neon project.
-  It runs the live API and browser suites and smoke checks on both runtimes.
-  The mocked browser suite runs in CI.
-  GitHub serializes runs that share the database. The job verifies both connections,
-  applies pending migrations, and checks that the suites clean up their test accounts
-  before production can run.
-  The manual **Database acceptance** action on `main` builds and tests the same package.
+  with its WebAssembly module and source map. The release gate verifies both
+  test database connections, applies pending migrations and runtime grants, and
+  runs a smoke check on the packaged Worker. GitHub serializes runs that share
+  the database. The manual **Database acceptance** action on `main` runs full live
+  API and browser coverage on both Node and Workerd. Mocked browser checks run in CI.
 - **Production.** The deployment job downloads the accepted artifact by ID from the
   same run. It validates configuration and the package, checks review schedules,
   applies migrations with the direct URL, and runs the free-tier and password
@@ -220,10 +217,10 @@ For automatic releases, use the branch restriction without a required reviewer.
    `sslmode=require` or a stricter TLS mode.
 
 3. Use Actions → **Database acceptance** → Run workflow on `main` to verify
-   the environment. The workflow generates fresh auth secrets, verifies both
-   database connections, applies pending migrations and runtime grants, and runs the Node and Worker
-   suites. Each suite cleans up its own test accounts. The job checks for
-   leftover accounts before migration and after each runtime.
+   the environment with the full Node and Worker suites. Each suite cleans up
+   its own test accounts. The automatic release gate prepares the same database
+   and smoke-tests the packaged Worker. Both modes use fresh auth secrets and
+   check for leftover test accounts.
 
 If a canceled or failed run leaves accounts behind, inspect the dedicated branch
 and remove only confirmed test accounts or prepare a new dedicated branch.

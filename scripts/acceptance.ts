@@ -18,6 +18,8 @@ import {
 const target = readTestTarget();
 const productionPackage = process.argv.includes("--production-package");
 const sharedTestDatabase = process.argv.includes("--shared-test-database");
+const releaseSmoke = process.argv.includes("--release-smoke");
+const smokeOnly = releaseSmoke || process.argv.includes("--smoke-only");
 const auth = {
   BETTER_AUTH_SECRET: sharedTestDatabase
     ? randomBytes(32).toString("hex")
@@ -108,10 +110,12 @@ try {
     await verifyTestTarget(target);
     await verifyCleanDatabase();
   }
-  for (const [runtime, port] of [
+  const runtimes = [
     ["node", 8791],
     ["worker", 8792],
-  ] as const) {
+  ] as const;
+  for (const [runtime, port] of runtimes) {
+    if (releaseSmoke && runtime === "node") continue;
     const base = `http://127.0.0.1:${port}`;
     const env = {
       ...process.env,
@@ -183,7 +187,7 @@ try {
     try {
       await ready(base, server, runtime);
       await verifyTestApp(base, target.runtime);
-      if (!process.argv.includes("--smoke-only")) {
+      if (!smokeOnly) {
         console.info(`Running API acceptance on ${runtime}.`);
         await command(
           [
