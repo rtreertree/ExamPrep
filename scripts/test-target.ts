@@ -7,6 +7,7 @@ import { checkConnections } from "./deployment-config.mjs";
 import {
   isLoopbackOrigin,
   matchesTestDatabase,
+  runtimeDatabaseRole,
   testDatabaseDigest,
   testDatabaseHeader,
   testDatabasePath,
@@ -22,21 +23,18 @@ export function readTestTarget(
   const direct = env.TEST_DATABASE_URL_UNPOOLED;
   if (!runtime || !direct)
     throw new Error("Set test-only pooled and direct database URLs.");
-  try {
-    const urls = checkConnections({
-      DATABASE_URL: runtime,
-      DATABASE_URL_UNPOOLED: direct,
-    });
-    if (
-      decodeURIComponent(urls.runtime.username) ===
-      decodeURIComponent(urls.migration.username)
-    )
-      throw new Error("Live tests require separate database roles.");
-  } catch {
+  const urls = checkConnections(
+    { DATABASE_URL: runtime, DATABASE_URL_UNPOOLED: direct },
+    { runtime: "TEST_DATABASE_URL", migration: "TEST_DATABASE_URL_UNPOOLED" },
+  );
+  if (decodeURIComponent(urls.runtime.username) !== runtimeDatabaseRole)
     throw new Error(
-      "Test connections must use separate roles on the same Neon database, pooled and direct with TLS.",
+      `TEST_DATABASE_URL must sign in as ${runtimeDatabaseRole}.`,
     );
-  }
+  if (decodeURIComponent(urls.migration.username) === runtimeDatabaseRole)
+    throw new Error(
+      "Test connections require separate roles. TEST_DATABASE_URL_UNPOOLED must sign in as the owner.",
+    );
   return { runtime, direct };
 }
 
@@ -56,18 +54,39 @@ export async function verifyTestTarget(
         if (!beforeMigrations) await assertRuntimeRole(db);
       } else {
         const [row] = await db.$queryRaw<{ owner: boolean }[]>`
-          SELECT count(*) = 2 AND bool_and(relowner = current_user::regrole::oid) AS owner
-          FROM pg_class WHERE oid IN ('public."StudySet"'::regclass, 'public."CloneConversion"'::regclass)
+          SELECT count(*) >= CASE WHEN ${beforeMigrations} THEN 1 ELSE 3 END
+            AND bool_and(relowner = current_user::regrole::oid) AS owner
+          FROM pg_class WHERE oid IN (
+            to_regclass('examprep_test.target'),
+            to_regclass('public."StudySet"'),
+            to_regclass('public."CloneConversion"')
+          )
         `;
         if (!row?.owner)
           throw new Error(
-            "The direct test connection must own the test schema tables.",
+            "The direct test connection must own the marker and application tables. Verify the test database schema and migration history.",
           );
       }
     } finally {
       await db.$disconnect();
     }
   }
+}
+
+export async function verifyNoTestAccounts(
+  db: Pick<ReturnType<typeof connectDatabase>, "$queryRaw" | "user">,
+  { beforeMigrations = false } = {},
+) {
+  if (beforeMigrations) {
+    const [row] = await db.$queryRaw<{ initialized: boolean }[]>`
+      SELECT to_regclass('public."user"') IS NOT NULL AS initialized
+    `;
+    if (row?.initialized === false) return;
+  }
+  if ((await db.user.count()) !== 0)
+    throw new Error(
+      "The test database contains accounts. Remove verified leftover test accounts or use a fresh dedicated test branch.",
+    );
 }
 
 export async function verifyTestApp(base: string, runtime: string) {

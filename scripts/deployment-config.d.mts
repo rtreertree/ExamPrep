@@ -1,8 +1,12 @@
 export function databaseConnection(
   value: string | undefined,
   pooled: boolean,
+  name?: string,
 ): URL;
-export function checkConnections(env: Record<string, string | undefined>): {
+export function checkConnections(
+  env: Record<string, string | undefined>,
+  names?: { runtime?: string; migration?: string },
+): {
   runtime: URL;
   migration: URL;
 };

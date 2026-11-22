@@ -201,8 +201,9 @@ Create a protected `database-acceptance` environment restricted to `main`.
 For automatic releases, use the branch restriction without a required reviewer.
 
 1. Pick a dedicated branch in a Neon test project independent of production.
-   Apply the initial schema, create the restricted runtime role, and install
-   the test marker using [Test database setup](#test-database-setup).
+   Create the restricted runtime role and install the test marker using
+   [Test database setup](#test-database-setup). GitHub can apply the initial schema
+   to a marked database.
 2. Add these **environment secrets** to `database-acceptance`.
 
    | Secret | Value |
@@ -210,24 +211,36 @@ For automatic releases, use the branch restriction without a required reviewer.
    | `TEST_DATABASE_URL` | Pooled TLS URL for `examprep_runtime` on the test branch |
    | `TEST_DATABASE_URL_UNPOOLED` | Direct TLS URL for the owner of the same test database |
 
+   Paste the raw `postgresql://...` URLs. The runtime host has `-pooler` and
+   uses the password set for `examprep_runtime`. The direct host has the same
+   endpoint without `-pooler` and uses the owner's credentials, typically
+   `neondb_owner`. Both URLs use the same database name and include
+   `sslmode=require` or a stricter TLS mode.
+
 3. Use Actions → **Database acceptance** → Run workflow on `main` to verify
    the environment. The workflow generates fresh auth secrets, verifies both
-   database connections, applies pending migrations, and runs the Node and Worker
+   database connections, applies pending migrations and runtime grants, and runs the Node and Worker
    suites. Each suite cleans up its own test accounts. The job checks for
    leftover accounts before migration and after each runtime.
 
 If a canceled or failed run leaves accounts behind, inspect the dedicated branch
 and remove only confirmed test accounts or prepare a new dedicated branch.
-If a schema change requires new runtime grants, apply the migration and rerun
-`scripts/provision-runtime-role.ts` against the verified test branch before
-retrying. Keep the pooled and direct secrets pointed at the same branch.
+Keep the pooled and direct secrets pointed at the same branch.
 
 ## Test database setup
 
-Use an empty Neon branch in the isolated test project. Verify its
-endpoint in Neon and set `DATABASE_URL_UNPOOLED` to that branch's direct owner
-connection. Set `RUNTIME_DATABASE_PASSWORD` to a random 64-digit hex value and
-keep it for the pooled connection. Apply migrations and provision the pooled role.
+Use an empty Neon branch in the isolated test project. Verify its endpoint in
+Neon. For GitHub acceptance, connect as owner and create the runtime role if it
+doesn't already exist. Replace the placeholder with a randomly generated password
+and use that password in the pooled URL.
+
+```sql
+CREATE ROLE examprep_runtime NOINHERIT LOGIN PASSWORD '<random 64-digit hex password>';
+```
+
+For local acceptance, set `DATABASE_URL_UNPOOLED` to the branch's direct owner
+connection and `RUNTIME_DATABASE_PASSWORD` to a random 64-digit hex password.
+Apply migrations and provision the runtime role.
 
 ```sh
 npm ci

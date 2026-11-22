@@ -1,9 +1,15 @@
-export function databaseConnection(value, pooled) {
+export function databaseConnection(
+  value,
+  pooled,
+  name = pooled ? "DATABASE_URL" : "DATABASE_URL_UNPOOLED",
+) {
   let url;
   try {
     url = new URL(value);
   } catch {
-    throw new Error("Set valid Neon database connection URLs.");
+    throw new Error(
+      `${name} must contain only a Neon PostgreSQL connection URL.`,
+    );
   }
   if (
     !["postgres:", "postgresql:"].includes(url.protocol) ||
@@ -23,25 +29,36 @@ export function databaseConnection(value, pooled) {
         "password",
         "ssl",
       ].includes(key.toLowerCase()),
-    ) ||
+    )
+  )
+    throw new Error(
+      `${name} must use a Neon hostname, database, username and password with no query overrides for connection settings or TLS.`,
+    );
+  if (url.hostname.includes("-pooler.") !== pooled)
+    throw new Error(
+      pooled
+        ? `${name} must use the pooled Neon hostname containing -pooler.`
+        : `${name} must use the direct Neon hostname without -pooler.`,
+    );
+  if (
     url.searchParams.getAll("sslmode").length !== 1 ||
     !["require", "verify-ca", "verify-full"].includes(
       url.searchParams.get("sslmode"),
-    ) ||
-    url.hostname.includes("-pooler.") !== pooled
-  ) {
+    )
+  )
     throw new Error(
-      pooled
-        ? "DATABASE_URL must be a pooled Neon connection with TLS enabled."
-        : "DATABASE_URL_UNPOOLED must be a direct Neon connection with TLS enabled.",
+      `${name} needs one TLS sslmode of require, verify-ca, or verify-full.`,
     );
-  }
   return url;
 }
 
-export function checkConnections(env) {
-  const runtime = databaseConnection(env.DATABASE_URL, true);
-  const migration = databaseConnection(env.DATABASE_URL_UNPOOLED, false);
+export function checkConnections(env, names = {}) {
+  const runtime = databaseConnection(env.DATABASE_URL, true, names.runtime);
+  const migration = databaseConnection(
+    env.DATABASE_URL_UNPOOLED,
+    false,
+    names.migration,
+  );
   if (
     runtime.hostname.replace("-pooler.", ".") !== migration.hostname ||
     (runtime.port || "5432") !== (migration.port || "5432") ||

@@ -5,9 +5,9 @@ import { runtimeDatabaseRole } from "../server/testDatabase";
 import { databaseConnection } from "./deployment-config.mjs";
 import { runtimeGrants } from "./runtime-role";
 
-export async function provisionRuntimeRole(direct: string, password: string) {
+export async function provisionRuntimeRole(direct: string, password?: string) {
   databaseConnection(direct, false);
-  if (!/^[\da-f]{64}$/.test(password))
+  if (password !== undefined && !/^[\da-f]{64}$/.test(password))
     throw new Error(
       "Set an explicit direct Neon URL and a random 64-digit hex runtime password.",
     );
@@ -25,10 +25,13 @@ export async function provisionRuntimeRole(direct: string, password: string) {
         [runtimeDatabaseRole],
       );
       // The password is hex-only and is never passed through a shell or printed.
-      if (!result.rowCount)
+      if (!result.rowCount) {
+        if (password === undefined)
+          throw new Error("The restricted runtime role must already exist.");
         await db.query(
           `CREATE ROLE ${runtimeDatabaseRole} NOINHERIT LOGIN PASSWORD '${password}'`,
         );
+      }
       await db.query(runtimeGrants);
       await db.query("COMMIT");
     } finally {
