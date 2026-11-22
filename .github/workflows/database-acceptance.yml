@@ -74,7 +74,7 @@ jobs:
           npm run build
           npm run worker:package
       - run: npm exec -- playwright install --with-deps chromium
-      - name: Verify and migrate the test database, then run Node and Worker acceptance
+      - name: Prepare the test database and run live acceptance on Node and Worker
         env:
           TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
           TEST_DATABASE_URL_UNPOOLED: ${{ secrets.TEST_DATABASE_URL_UNPOOLED }}
