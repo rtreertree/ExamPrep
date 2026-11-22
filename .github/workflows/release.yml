@@ -44,6 +44,8 @@ jobs:
     uses: ./.github/workflows/database-acceptance.yml
     with:
       artifact_id: ${{ needs.checks.outputs.artifact_id }}
+    secrets:
+      NEON_TEST_API_KEY: ${{ secrets.NEON_TEST_API_KEY }}
 
   verified:
     name: Check the accepted commit
