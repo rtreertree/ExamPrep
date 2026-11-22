@@ -7,7 +7,7 @@ if (!bases.length)
   throw new Error("Supply the local acceptance app origin(s).");
 const target = readTestTarget();
 await verifyTestTarget(target);
-for (const base of bases) await verifyTestApp(base, target.token);
+for (const base of bases) await verifyTestApp(base, target.runtime);
 const db = connectDatabase(target.direct);
 const password = randomUUID() + "aB9!";
 try {

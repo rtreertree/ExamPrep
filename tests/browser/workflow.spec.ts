@@ -40,7 +40,7 @@ async function apiRequest(
 test.beforeAll(async ({ baseURL }) => {
   const target = readTestTarget();
   await verifyTestTarget(target);
-  await verifyTestApp(baseURL ?? "", target.token);
+  await verifyTestApp(baseURL ?? "", target.runtime);
   db = connectDatabase(target.direct);
 });
 test.afterAll(async () => {

@@ -65,7 +65,7 @@ describe.skipIf(!enabled)(
     let userId: string;
     beforeAll(async () => {
       await verifyTestTarget(target!);
-      await verifyTestApp(base, target!.token);
+      await verifyTestApp(base, target!.runtime);
       db = connectDatabase(target!.direct);
       for (const c of [a, b]) {
         const email = `acceptance-${randomUUID()}@example.test`;

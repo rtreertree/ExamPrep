@@ -11,7 +11,7 @@ import { assertRuntimeRole } from "../scripts/runtime-role";
 import { readTestTarget, verifyTestApp } from "../scripts/test-target";
 
 const origin = "http://127.0.0.1:8791";
-const token = "a".repeat(64);
+const challenge = "a".repeat(64);
 const runtime =
   "postgres://examprep_runtime:fake@ep-test-pooler.us-east-2.aws.neon.tech/test?sslmode=require";
 const direct =
@@ -19,7 +19,6 @@ const direct =
 const env = {
   TEST_DATABASE_URL: runtime,
   TEST_DATABASE_URL_UNPOOLED: direct,
-  TEST_DATABASE_TOKEN: token,
 };
 
 afterEach(() => vi.restoreAllMocks());
@@ -44,7 +43,7 @@ describe("live database guards", () => {
         ),
       }),
     ).toThrow(/separate roles/);
-    expect(readTestTarget(env)).toEqual({ runtime, direct, token });
+    expect(readTestTarget(env)).toEqual({ runtime, direct });
   });
 
   it("accepts the proof only on the configured test runtime and blocks sign-up when the marker fails", async () => {
@@ -61,7 +60,7 @@ describe("live database guards", () => {
       PASSWORD_PEPPER: "c".repeat(32),
     };
     const marker = new Request(origin + testDatabasePath, {
-      headers: { [testDatabaseHeader]: token },
+      headers: { [testDatabaseHeader]: challenge },
     });
     const signUp = new Request(origin + "/api/auth/sign-up/email", {
       method: "POST",
@@ -70,11 +69,11 @@ describe("live database guards", () => {
     });
     expect((await createApp(config, () => db).fetch(marker)).status).toBe(404);
     expect(query).not.toHaveBeenCalled();
-    const app = createApp({ ...config, TEST_DATABASE_TOKEN: token }, () => db);
+    const app = createApp({ ...config, TEST_DATABASE_MODE: true }, () => db);
     const proof = await app.fetch(marker);
     expect(proof.status).toBe(204);
     expect(proof.headers.get(testDatabaseProofHeader)).toBe(
-      await testDatabaseDigest(token),
+      await testDatabaseDigest(`${challenge}\n${runtime}`),
     );
     query.mockRejectedValueOnce(new Error("Missing marker table"));
     expect((await app.fetch(signUp)).status).toBe(503);
@@ -85,17 +84,32 @@ describe("live database guards", () => {
     const fetch = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response(null, { status: 404 }));
-    await expect(verifyTestApp("https://example.test", token)).rejects.toThrow(
-      /loopback/,
-    );
+    await expect(
+      verifyTestApp("https://example.test", runtime),
+    ).rejects.toThrow(/loopback/);
     expect(fetch).not.toHaveBeenCalled();
-    await expect(verifyTestApp(origin, token)).rejects.toThrow(/marker/);
+    await expect(verifyTestApp(origin, runtime)).rejects.toThrow(/marker/);
     expect(fetch).toHaveBeenCalledWith(
       origin + testDatabasePath,
       expect.objectContaining({ redirect: "error" }),
     );
     fetch.mockResolvedValue(new Response(null, { status: 204 }));
-    await expect(verifyTestApp(origin, token)).rejects.toThrow(/marker/);
+    await expect(verifyTestApp(origin, runtime)).rejects.toThrow(/marker/);
+    fetch.mockImplementation(async (_url, options) => {
+      const challenge = new Headers(options?.headers).get(testDatabaseHeader);
+      return new Response(null, {
+        status: 204,
+        headers: {
+          [testDatabaseProofHeader]: await testDatabaseDigest(
+            `${challenge}\n${runtime}`,
+          ),
+        },
+      });
+    });
+    await expect(verifyTestApp(origin, runtime)).resolves.toBeUndefined();
+    await expect(
+      verifyTestApp(origin, runtime.replace("ep-test", "ep-other")),
+    ).rejects.toThrow(/marker/);
     await expect(
       assertRuntimeRole({
         $queryRaw: vi.fn().mockResolvedValue([{ safe: false }]),

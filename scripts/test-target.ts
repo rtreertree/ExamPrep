@@ -1,4 +1,5 @@
 import { neonConfig } from "@neondatabase/serverless";
+import { randomBytes } from "node:crypto";
 import ws from "ws";
 import { connectDatabase } from "../server/db";
 import { assertRuntimeRole } from "./runtime-role";
@@ -12,18 +13,15 @@ import {
   testDatabaseProofHeader,
 } from "../server/testDatabase";
 
-type Target = { runtime: string; direct: string; token: string };
+type Target = { runtime: string; direct: string };
 
 export function readTestTarget(
   env: { [key: string]: string | undefined } = process.env,
 ): Target {
   const runtime = env.TEST_DATABASE_URL;
   const direct = env.TEST_DATABASE_URL_UNPOOLED;
-  const token = env.TEST_DATABASE_TOKEN;
-  if (!runtime || !direct || !token || !/^[\da-f]{64}$/.test(token))
-    throw new Error(
-      "Set test-only pooled and direct URLs and a 64-digit hex TEST_DATABASE_TOKEN.",
-    );
+  if (!runtime || !direct)
+    throw new Error("Set test-only pooled and direct database URLs.");
   try {
     const urls = checkConnections({
       DATABASE_URL: runtime,
@@ -39,20 +37,23 @@ export function readTestTarget(
       "Test connections must use separate roles on the same Neon database, pooled and direct with TLS.",
     );
   }
-  return { runtime, direct, token };
+  return { runtime, direct };
 }
 
-export async function verifyTestTarget({ runtime, direct, token }: Target) {
+export async function verifyTestTarget(
+  { runtime, direct }: Target,
+  { beforeMigrations = false } = {},
+) {
   neonConfig.webSocketConstructor = ws;
   for (const url of [runtime, direct]) {
     const db = connectDatabase(url);
     try {
-      if (!(await matchesTestDatabase(db, token, url === runtime)))
+      if (!(await matchesTestDatabase(db, url === runtime)))
         throw new Error(
           "The dedicated database marker could not be verified. Live tests were blocked.",
         );
       if (url === runtime) {
-        await assertRuntimeRole(db);
+        if (!beforeMigrations) await assertRuntimeRole(db);
       } else {
         const [row] = await db.$queryRaw<{ owner: boolean }[]>`
           SELECT count(*) = 2 AND bool_and(relowner = current_user::regrole::oid) AS owner
@@ -69,18 +70,19 @@ export async function verifyTestTarget({ runtime, direct, token }: Target) {
   }
 }
 
-export async function verifyTestApp(base: string, token: string) {
+export async function verifyTestApp(base: string, runtime: string) {
   if (!isLoopbackOrigin(base))
     throw new Error("Live tests require an explicit loopback HTTP origin.");
+  const challenge = randomBytes(32).toString("hex");
   const response = await fetch(base + testDatabasePath, {
-    headers: { [testDatabaseHeader]: token },
+    headers: { [testDatabaseHeader]: challenge },
     redirect: "error",
     signal: AbortSignal.timeout(5000),
   });
   if (
     response.status !== 204 ||
     response.headers.get(testDatabaseProofHeader) !==
-      (await testDatabaseDigest(token))
+      (await testDatabaseDigest(`${challenge}\n${runtime}`))
   )
     throw new Error(
       "The local app did not verify the dedicated database marker. Live tests were blocked.",

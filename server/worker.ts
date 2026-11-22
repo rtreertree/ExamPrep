@@ -4,7 +4,7 @@ import { PrismaNeon } from "@prisma/adapter-neon";
 type WorkerEnv = Cloudflare.Env & {
   RESEND_API_KEY?: string;
   RESET_EMAIL_FROM?: string;
-  TEST_DATABASE_TOKEN?: string;
+  TEST_DATABASE_MODE?: string;
 };
 export default {
   async fetch(
@@ -19,6 +19,7 @@ export default {
       {
         ...env,
         RUNTIME: "worker",
+        TEST_DATABASE_MODE: env.TEST_DATABASE_MODE === "1",
         RELEASE_TAG: env.CF_VERSION_METADATA?.tag,
         waitUntil: (task) => ctx.waitUntil(task),
       },

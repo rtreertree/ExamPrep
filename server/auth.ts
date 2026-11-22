@@ -14,7 +14,7 @@ export type Config = {
   waitUntil?: (task: Promise<unknown>) => void;
   RUNTIME?: "worker" | "node";
   RELEASE_TAG?: string;
-  TEST_DATABASE_TOKEN?: string;
+  TEST_DATABASE_MODE?: boolean;
 };
 export function createAuth(db: Database, config: Config, atomicReset: boolean) {
   return betterAuth({
