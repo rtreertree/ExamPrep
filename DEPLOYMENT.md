@@ -87,8 +87,10 @@ not uploaded. Never enable SQL parameter logging or dump runtime environments.
 - **Every release.** CI builds and publishes an immutable artifact containing the
   frontend, Node build, generated Node Prisma client, and production Worker bundle
   with its WebAssembly module and source map. **Database acceptance** verifies those
-  builds on Node and Workerd against a disposable branch in the isolated Neon project.
-  Provisioning, tests, and branch cleanup must all succeed before production can run.
+  builds on Node and Workerd against a dedicated database in the isolated Neon project.
+  GitHub serializes runs that share the database. The job verifies both connections,
+  applies pending migrations, and checks that the suites clean up their test accounts
+  before production can run.
   The manual **Database acceptance** action on `main` builds and tests the same package.
 - **Production.** The deployment job downloads the accepted artifact by ID from the
   same run. It validates configuration and the package, checks review schedules,
@@ -145,8 +147,8 @@ Use expand → migrate/backfill → contract across separate releases: additive 
 first, code supporting both shapes next, remove old fields only after old code and
 rollback needs are retired. A deploy failure can leave new schema in place; it is
 not undone automatically. Review lock duration and take/verify a Neon recovery
-point before risky changes. The manual Database acceptance workflow applies the
-full chain on an empty branch. Rehearse upgrades and backfills against the
+point before risky changes. Database acceptance applies pending migrations to the
+dedicated test database. Rehearse upgrades and backfills against the
 preceding schema in a dedicated test database before release.
 
 After the live-set cutover, the minimum compatible code revision is `7e0fcae`.
@@ -197,33 +199,42 @@ Production can adopt a restricted runtime login as a separate rollout. Live data
 
 Create a protected `database-acceptance` environment restricted to `main`.
 For automatic releases, use the branch restriction without a required reviewer.
-Provide `NEON_TEST_PROJECT_ID`, `NEON_TEST_PARENT_ID`, `NEON_TEST_DATABASE` and
-`NEON_TEST_OWNER` as environment variables. The project must be independent
-of production and the parent must contain an empty application database. Add
-`NEON_TEST_API_KEY` as a project-scoped key for that project. Each run verifies
-the newly created branch and database before migration, creates disposable auth
-and runtime credentials, and deletes that run's branch on exit. If the runner is
-terminated before cleanup, inspect the separate project for the exact
-`examprep-ci-<run-id>-<attempt>` branch and delete it after verifying its parent.
-Use Actions → **Database acceptance** → Run workflow on `main` to verify the
-environment before the first automatic release. Inspect its provision, acceptance,
-and cleanup steps. On the first release, confirm that production follows the
-successful acceptance job and that smoke verifies the attempt tag.
 
-## Local database acceptance
+1. Pick a dedicated branch in a Neon test project independent of production.
+   Apply the initial schema, create the restricted runtime role, and install
+   the test marker using [Test database setup](#test-database-setup).
+2. Add these **environment secrets** to `database-acceptance`.
 
-Use an empty, disposable Neon branch in the isolated test project. Verify its
+   | Secret | Value |
+   | --- | --- |
+   | `TEST_DATABASE_URL` | Pooled TLS URL for `examprep_runtime` on the test branch |
+   | `TEST_DATABASE_URL_UNPOOLED` | Direct TLS URL for the owner of the same test database |
+   | `TEST_DATABASE_TOKEN` | The 64-digit hex token used to create the test marker |
+
+3. Use Actions → **Database acceptance** → Run workflow on `main` to verify
+   the environment. The workflow generates fresh auth secrets, verifies both
+   database connections, applies pending migrations, and runs the Node and Worker
+   suites. Each suite cleans up its own test accounts. The job checks for
+   leftover accounts before migration and after each runtime.
+
+If a canceled or failed run leaves accounts behind, inspect the dedicated branch
+and remove only confirmed test accounts or prepare a new dedicated branch.
+If a schema change requires new runtime grants, apply the migration and rerun
+`scripts/provision-runtime-role.ts` against the verified test branch before
+retrying. Keep the pooled and direct secrets pointed at the same branch.
+
+## Test database setup
+
+Use an empty Neon branch in the isolated test project. Verify its
 endpoint in Neon and set `DATABASE_URL_UNPOOLED` to that branch's direct owner
-connection. Apply migrations and provision the pooled role:
+connection. Set `RUNTIME_DATABASE_PASSWORD` to a random 64-digit hex value and
+keep it for the pooled connection. Apply migrations and provision the pooled role.
 
 ```sh
 npm ci
 npm run build
-npm test
-npm run worker:check
 npm run db:migrate
 node --import tsx scripts/provision-runtime-role.ts
-npm exec -- playwright install chromium
 ```
 
 Use a separate random 64-digit hex value for `TEST_DATABASE_TOKEN`. In the
@@ -237,6 +248,12 @@ GRANT SELECT ON examprep_test.target TO examprep_runtime;
 INSERT INTO examprep_test.target (digest)
 VALUES (encode(public.digest('<TEST_DATABASE_TOKEN>', 'sha256'), 'hex'));
 ```
+
+## Local database acceptance
+
+Use a separate branch if CI may be running against its configured database.
+Prepare it as described in [Test database setup](#test-database-setup), then run
+`npm exec -- playwright install chromium`.
 
 Put the pooled runtime URL in `TEST_DATABASE_URL`, the direct owner URL in
 `TEST_DATABASE_URL_UNPOOLED`, and the marker token in `TEST_DATABASE_TOKEN`.

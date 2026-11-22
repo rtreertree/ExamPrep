@@ -42,7 +42,10 @@ export function readTestTarget(
   return { runtime, direct, token };
 }
 
-export async function verifyTestTarget({ runtime, direct, token }: Target) {
+export async function verifyTestTarget(
+  { runtime, direct, token }: Target,
+  { beforeMigrations = false } = {},
+) {
   neonConfig.webSocketConstructor = ws;
   for (const url of [runtime, direct]) {
     const db = connectDatabase(url);
@@ -52,7 +55,7 @@ export async function verifyTestTarget({ runtime, direct, token }: Target) {
           "The dedicated database marker could not be verified. Live tests were blocked.",
         );
       if (url === runtime) {
-        await assertRuntimeRole(db);
+        if (!beforeMigrations) await assertRuntimeRole(db);
       } else {
         const [row] = await db.$queryRaw<{ owner: boolean }[]>`
           SELECT count(*) = 2 AND bool_and(relowner = current_user::regrole::oid) AS owner

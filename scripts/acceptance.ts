@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -10,10 +11,22 @@ import { readTestTarget, verifyTestApp, verifyTestTarget } from "./test-target";
 
 const target = readTestTarget();
 const productionPackage = process.argv.includes("--production-package");
-for (const key of ["PASSWORD_PEPPER", "BETTER_AUTH_SECRET"])
-  if ((process.env[key]?.length ?? 0) < 32)
+const sharedTestDatabase = process.argv.includes("--shared-test-database");
+const auth = {
+  BETTER_AUTH_SECRET: sharedTestDatabase
+    ? randomBytes(32).toString("hex")
+    : (process.env.BETTER_AUTH_SECRET ?? ""),
+  PASSWORD_PEPPER: sharedTestDatabase
+    ? randomBytes(32).toString("hex")
+    : (process.env.PASSWORD_PEPPER ?? ""),
+};
+for (const [key, value] of Object.entries(auth)) {
+  if (value.length < 32)
     throw new Error(`Set a test ${key} of at least 32 characters.`);
-await verifyTestTarget(target);
+  if (sharedTestDatabase && process.env.GITHUB_ACTIONS === "true")
+    console.log(`::add-mask::${value}`);
+}
+await verifyTestTarget(target, { beforeMigrations: sharedTestDatabase });
 const directory = await mkdtemp(join(tmpdir(), "examprep-acceptance-"));
 const children = new Set<ChildProcess>();
 async function stop(child: ChildProcess) {
@@ -59,16 +72,26 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
     for (const child of children) child.kill("SIGTERM");
     process.exitCode = 1;
   });
-try {
+async function verifyNoTestAccounts() {
   const db = connectDatabase(target.direct);
   try {
-    // CI requires a pristine branch: this also catches an accidentally populated parent.
-    if (process.env.CI && (await db.user.count()) !== 0)
+    if ((await db.user.count()) !== 0)
       throw new Error(
-        "CI branch contains accounts. Use an empty ci-empty parent, never production.",
+        "The test database contains accounts. Remove verified leftover test accounts or use a fresh dedicated test branch.",
       );
   } finally {
     await db.$disconnect();
+  }
+}
+
+try {
+  if (sharedTestDatabase || process.env.CI) await verifyNoTestAccounts();
+  if (sharedTestDatabase) {
+    await command(["scripts/migrate.mjs"], {
+      ...process.env,
+      DATABASE_URL_UNPOOLED: target.direct,
+    });
+    await verifyTestTarget(target);
   }
   for (const [runtime, port] of [
     ["node", 8791],
@@ -77,6 +100,7 @@ try {
     const base = `http://127.0.0.1:${port}`;
     const env = {
       ...process.env,
+      ...auth,
       DATABASE_URL: target.runtime,
       DATABASE_URL_UNPOOLED: target.direct,
       BETTER_AUTH_URL: base,
@@ -163,6 +187,7 @@ try {
       await stop(server);
       children.delete(server);
     }
+    if (sharedTestDatabase) await verifyNoTestAccounts();
   }
 } finally {
   await Promise.all([...children].map(stop));

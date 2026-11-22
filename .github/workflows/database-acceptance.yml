@@ -11,7 +11,11 @@ on:
         type: boolean
         default: true
     secrets:
-      NEON_TEST_API_KEY:
+      TEST_DATABASE_URL:
+        required: true
+      TEST_DATABASE_URL_UNPOOLED:
+        required: true
+      TEST_DATABASE_TOKEN:
         required: true
 
 permissions:
@@ -23,20 +27,23 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     environment: database-acceptance
-    env:
-      NEON_TEST_PROJECT_ID: ${{ vars.NEON_TEST_PROJECT_ID }}
-      NEON_TEST_PARENT_ID: ${{ vars.NEON_TEST_PARENT_ID }}
-      NEON_TEST_DATABASE: ${{ vars.NEON_TEST_DATABASE }}
-      NEON_TEST_OWNER: ${{ vars.NEON_TEST_OWNER }}
+    concurrency:
+      group: exam-prep-database-acceptance
+      queue: max
+      cancel-in-progress: false
     steps:
-      - name: Verify the Neon environment secret is available
+      - name: Verify the test database secrets are available
         env:
-          NEON_TEST_API_KEY: ${{ secrets.NEON_TEST_API_KEY }}
+          TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+          TEST_DATABASE_URL_UNPOOLED: ${{ secrets.TEST_DATABASE_URL_UNPOOLED }}
+          TEST_DATABASE_TOKEN: ${{ secrets.TEST_DATABASE_TOKEN }}
         run: |
-          if [[ -z "$NEON_TEST_API_KEY" ]]; then
-            echo "::error::Set the NEON_TEST_API_KEY secret in the database-acceptance environment."
-            exit 1
-          fi
+          for name in TEST_DATABASE_URL TEST_DATABASE_URL_UNPOOLED TEST_DATABASE_TOKEN; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Set the $name secret in the database-acceptance environment."
+              exit 1
+            fi
+          done
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
@@ -70,16 +77,10 @@ jobs:
           npm run build
           npm run worker:package
       - run: npm exec -- playwright install --with-deps chromium
-      - name: Provision and verify a disposable test branch
-        id: provision
+      - name: Verify and migrate the test database, then run Node and Worker acceptance
         env:
-          NEON_TEST_API_KEY: ${{ secrets.NEON_TEST_API_KEY }}
-        run: node --import tsx scripts/neon-test-branch.ts prepare
-      - name: Run Node and Worker acceptance
-        run: npm run test:acceptance -- --production-package
-        timeout-minutes: 30
-      - name: Delete this run's disposable branch
-        if: ${{ always() && contains(fromJSON('["success", "failure", "cancelled"]'), steps.provision.outcome) }}
-        env:
-          NEON_TEST_API_KEY: ${{ secrets.NEON_TEST_API_KEY }}
-        run: node --import tsx scripts/neon-test-branch.ts cleanup
+          TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+          TEST_DATABASE_URL_UNPOOLED: ${{ secrets.TEST_DATABASE_URL_UNPOOLED }}
+          TEST_DATABASE_TOKEN: ${{ secrets.TEST_DATABASE_TOKEN }}
+        run: npm run test:acceptance -- --production-package --shared-test-database
+        timeout-minutes: 35
