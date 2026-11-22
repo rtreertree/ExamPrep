@@ -32,6 +32,7 @@ for (const [key, value] of Object.entries(auth)) {
   if (sharedTestDatabase && process.env.GITHUB_ACTIONS === "true")
     console.log(`::add-mask::${value}`);
 }
+if (sharedTestDatabase) console.info("Verifying the dedicated test database.");
 await verifyTestTarget(target, { beforeMigrations: sharedTestDatabase });
 const directory = await mkdtemp(join(tmpdir(), "examprep-acceptance-"));
 const children = new Set<ChildProcess>();
@@ -91,10 +92,12 @@ try {
   if (sharedTestDatabase || process.env.CI)
     await verifyCleanDatabase(sharedTestDatabase);
   if (sharedTestDatabase) {
+    console.info("Applying pending test database migrations.");
     await command(["scripts/migrate.mjs"], {
       ...process.env,
       DATABASE_URL_UNPOOLED: target.direct,
     });
+    console.info("Applying and verifying runtime grants.");
     try {
       await provisionRuntimeRole(target.direct);
     } catch {
@@ -180,8 +183,8 @@ try {
     try {
       await ready(base, server, runtime);
       await verifyTestApp(base, target.runtime);
-      console.info(`Running API and browser acceptance on ${runtime}.`);
       if (!process.argv.includes("--smoke-only")) {
+        console.info(`Running API acceptance on ${runtime}.`);
         await command(
           [
             "node_modules/vitest/vitest.mjs",
@@ -190,8 +193,12 @@ try {
           ],
           env,
         );
-        await command(["node_modules/@playwright/test/cli.js", "test"], env);
+        console.info(`Running browser acceptance on ${runtime}.`);
+        const browser = ["node_modules/@playwright/test/cli.js", "test"];
+        if (sharedTestDatabase) browser.push("--project=live");
+        await command(browser, env);
       }
+      console.info(`Running smoke checks on ${runtime}.`);
       await command(
         ["scripts/smoke.mjs", base, ...(runtime === "node" ? ["--node"] : [])],
         env,

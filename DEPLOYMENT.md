@@ -88,6 +88,8 @@ not uploaded. Never enable SQL parameter logging or dump runtime environments.
   frontend, Node build, generated Node Prisma client, and production Worker bundle
   with its WebAssembly module and source map. **Database acceptance** verifies those
   builds on Node and Workerd against a dedicated database in the isolated Neon project.
+  It runs the live API and browser suites and smoke checks on both runtimes.
+  The mocked browser suite runs in CI.
   GitHub serializes runs that share the database. The job verifies both connections,
   applies pending migrations, and checks that the suites clean up their test accounts
   before production can run.
