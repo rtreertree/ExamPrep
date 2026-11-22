@@ -1,16 +1,11 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
+import { parseArgs } from "node:util";
 
-const base = new URL(process.argv[2] ?? "https://exam.phonet.app");
-if (
-  base.protocol !== "https:" &&
-  !["127.0.0.1", "localhost"].includes(base.hostname)
-)
-  throw new Error("Smoke checks require HTTPS outside localhost.");
-const worker = !process.argv.includes("--node");
 function assert(ok, message) {
   if (!ok) throw new Error(message);
 }
-async function check() {
+export async function checkSmoke(base, { worker, releaseTag }) {
   const request = (path) =>
     fetch(new URL(path, base), {
       redirect: "manual",
@@ -63,6 +58,10 @@ async function check() {
     "Health response reports the wrong runtime.",
   );
   assert(
+    releaseTag === undefined || data.releaseTag === releaseTag,
+    "The expected release attempt is not serving traffic.",
+  );
+  assert(
     health.headers.get("cache-control")?.includes("no-store"),
     "API must never enter shared cache.",
   );
@@ -90,20 +89,41 @@ async function check() {
       "HTTPS frontend HSTS is missing.",
     );
 }
-for (let attempt = 1; attempt <= 6; attempt++) {
-  try {
-    await check();
-    console.info(
-      `Smoke passed: frontend, assets, client routing, ${worker ? "Worker" : "Node"} health and private API policy.`,
-    );
-    break;
-  } catch (error) {
-    // Never emit server bodies, cookies, connection strings or raw fetch errors.
-    if (attempt === 6) {
-      console.error(
-        `Smoke failed: ${error instanceof TypeError ? "Network/TLS connection failed." : error.message} Check Cloudflare deployment logs, DNS/TLS, ASSETS binding and runtime secrets. Smoke performs no writes.`,
+async function main() {
+  const { values, positionals } = parseArgs({
+    options: { node: { type: "boolean" }, "release-tag": { type: "string" } },
+    allowPositionals: true,
+  });
+  const base = new URL(positionals[0] ?? "https://exam.phonet.app");
+  const worker = !values.node;
+  const releaseTag = values["release-tag"];
+  assert(
+    base.protocol === "https:" ||
+      ["127.0.0.1", "localhost"].includes(base.hostname),
+    "Smoke checks require HTTPS outside localhost.",
+  );
+  assert(
+    releaseTag === undefined || (worker && /^gha-\d+-\d+$/.test(releaseTag)),
+    "Supply a valid GitHub attempt tag for Worker release smoke.",
+  );
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    try {
+      await checkSmoke(base, { worker, releaseTag });
+      console.info(
+        `Smoke passed: frontend, assets, client routing, ${worker ? "Worker" : "Node"} health and private API policy.`,
       );
-      process.exitCode = 1;
-    } else await delay(5000);
+      return;
+    } catch (error) {
+      // Never emit server bodies, cookies, connection strings or raw fetch errors.
+      if (attempt === 6) {
+        console.error(
+          `Smoke failed: ${error instanceof TypeError ? "Network/TLS connection failed." : error.message} Check Cloudflare deployment logs, DNS/TLS, ASSETS binding and runtime secrets. Smoke performs no writes.`,
+        );
+        process.exitCode = 1;
+      } else await delay(5000);
+    }
   }
 }
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+  await main();

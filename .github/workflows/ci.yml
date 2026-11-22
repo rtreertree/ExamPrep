@@ -3,13 +3,59 @@ name: CI
 on:
   pull_request:
   workflow_call:
+    inputs:
+      publish_release:
+        type: boolean
+        default: false
+    outputs:
+      artifact_id:
+        value: ${{ jobs.package.outputs.artifact_id }}
 
 permissions:
   contents: read
 
+concurrency:
+  group: exam-prep-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  checks:
-    name: Typecheck, unit tests, builds and Worker package
+  package:
+    name: Unit tests and application packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24.14.0
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm run worker:check
+      - run: npm run worker:package
+      - name: Check the production package budget without credentials
+        run: npm run cloudflare:check -- --production-package --package-only
+      - name: Archive the release package
+        if: inputs.publish_release && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        run: tar -czf "$RUNNER_TEMP/release.tar.gz" dist/client dist/server.js dist/worker-production generated/prisma
+      - name: Upload the release package
+        id: upload
+        if: inputs.publish_release && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: exam-prep-release-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
+
+  browser:
+    name: Mocked Chromium regressions
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -21,15 +67,40 @@ jobs:
           node-version: 24.14.0
           package-manager-cache: false
       - run: npm ci
-      - run: npm run generate
-      - run: npm run typecheck
-      - run: npm test
-      - run: npx playwright install --with-deps chromium
-      - name: Browser regressions without live accounts
-        run: npm run test:e2e:mock
-      - run: npm run build
-      - run: npm run worker:check
-      - name: Validate production package without credentials
-        run: npm exec -- wrangler deploy --env production --dry-run --outdir dist/worker-production
+      - run: npm exec -- playwright install --with-deps chromium
+      - run: npm run test:e2e:mock
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
       - name: Build portable Node image
         run: docker build --tag exam-prep:ci .
+
+  checks:
+    name: Typecheck, unit tests, builds and Worker package
+    needs: [package, browser, docker]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every CI job to pass
+        env:
+          PACKAGE_RESULT: ${{ needs.package.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
+          DOCKER_RESULT: ${{ needs.docker.result }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
+          ARTIFACT_ID: ${{ needs.package.outputs.artifact_id }}
+        run: |
+          if [[ "$PACKAGE_RESULT" != success || "$BROWSER_RESULT" != success || "$DOCKER_RESULT" != success ]]; then
+            echo "::error::CI results: package=$PACKAGE_RESULT browser=$BROWSER_RESULT docker=$DOCKER_RESULT"
+            exit 1
+          fi
+          if [[ "$PUBLISH_RELEASE" == true && ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::The release package was not published."
+            exit 1
+          fi

@@ -2,6 +2,14 @@ name: Database acceptance
 
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      artifact_id:
+        type: string
+        required: true
+      use_release_package:
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -26,7 +34,30 @@ jobs:
           node-version: 24.14.0
           package-manager-cache: false
       - run: npm ci
-      - run: npm run build
+      - name: Require the CI artifact ID
+        if: inputs.use_release_package
+        env:
+          ARTIFACT_ID: ${{ inputs.artifact_id }}
+        run: |
+          if [[ ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Database acceptance requires the CI release artifact ID."
+            exit 1
+          fi
+      - name: Download the verified release package
+        if: inputs.use_release_package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ inputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/release-package
+      - name: Extract the release package
+        if: inputs.use_release_package
+        run: tar -xzf "$RUNNER_TEMP/release-package/release.tar.gz"
+      - name: Build the package for standalone acceptance
+        if: ${{ !inputs.use_release_package }}
+        run: |
+          npm run build
+          npm run worker:package
       - run: npm exec -- playwright install --with-deps chromium
       - name: Provision and verify a disposable test branch
         id: provision
@@ -34,10 +65,10 @@ jobs:
           NEON_TEST_API_KEY: ${{ secrets.NEON_TEST_API_KEY }}
         run: node --import tsx scripts/neon-test-branch.ts prepare
       - name: Run Node and Worker acceptance
-        run: npm run test:acceptance
+        run: npm run test:acceptance -- --production-package
         timeout-minutes: 30
       - name: Delete this run's disposable branch
-        if: ${{ always() && steps.provision.outcome != 'skipped' }}
+        if: ${{ always() && contains(fromJSON('["success", "failure", "cancelled"]'), steps.provision.outcome) }}
         env:
           NEON_TEST_API_KEY: ${{ secrets.NEON_TEST_API_KEY }}
         run: node --import tsx scripts/neon-test-branch.ts cleanup

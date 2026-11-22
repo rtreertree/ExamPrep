@@ -27,7 +27,7 @@ npm run worker:check
 npm run dev:worker
 ```
 
-GitHub CI/CD, secrets, domain setup, migrations and rollback are documented in [DEPLOYMENT.md](DEPLOYMENT.md). PR checks use simulated data and run without credentials. The manual **Database acceptance** workflow runs on `main` against a disposable branch in a separate Neon test project. The **Release** workflow deploys the Worker and assets through the production environment after the regular CI checks pass.
+PR checks use simulated data and run without credentials. On `main`, **Release** builds a package in CI, runs **Database acceptance** against a disposable branch in a separate Neon test project, and deploys the accepted package if the commit is still current. Database acceptance can also run manually. See the CI/CD, secrets, migrations, and rollback instructions in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 The release runs `cloudflare:check` against the deployment database. It verifies the runtime connection, probes password hashing, and rejects old-format credentials. Use `npm run cloudflare:check -- --local` for local development checks. `/api` and `/api/*` reach Hono. Public version previews are disabled to keep production resources private.
 

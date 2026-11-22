@@ -11,21 +11,70 @@ permissions:
 # Never cancel an active production migration on a newer push.
 concurrency:
   group: exam-prep-production
+  queue: max
   cancel-in-progress: false
 
 jobs:
-  checks:
+  candidate:
+    name: Check the queued commit
     if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      current: ${{ steps.head.outputs.current }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Compare the candidate with main
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-head.mjs
+
+  checks:
+    needs: candidate
+    if: needs.candidate.outputs.current == 'true'
     uses: ./.github/workflows/ci.yml
+    with:
+      publish_release: true
+
+  acceptance:
+    needs: checks
+    uses: ./.github/workflows/database-acceptance.yml
+    with:
+      artifact_id: ${{ needs.checks.outputs.artifact_id }}
+
+  verified:
+    name: Check the accepted commit
+    needs: acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      current: ${{ steps.head.outputs.current }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Compare the accepted commit with main
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-head.mjs
 
   production:
     name: Migrate, deploy and smoke test production
-    needs: checks
+    needs: [checks, verified]
+    if: needs.verified.outputs.current == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment:
       name: production
       url: https://exam.phonet.app
+    outputs:
+      failed_phase: ${{ steps.deploy.outputs.failed_phase || (steps.head.outcome == 'failure' && 'Check the main branch before preflight') || (steps.smoke.outcome == 'failure' && 'Production smoke') || (steps.convert.outcome == 'failure' && 'Historical clone conversion') || 'Production job setup' }}
+    env:
+      RELEASE_TAG: gha-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -35,9 +84,21 @@ jobs:
           node-version: 24.14.0
           package-manager-cache: false
       - run: npm ci
-      - run: npm run build
-      - run: npm run worker:check
+      - name: Download the accepted release package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.checks.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/release-package
+      - name: Extract the release package
+        run: tar -xzf "$RUNNER_TEMP/release-package/release.tar.gz"
+      - name: Verify main immediately before production preflight
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-head.mjs --require-current
       - name: Apply production migrations, verify readiness, deploy code and secrets together
+        id: deploy
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DATABASE_URL_UNPOOLED: ${{ secrets.DATABASE_URL_UNPOOLED }}
@@ -50,14 +111,42 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npm run deploy:production
       - name: Check public frontend, routing, cache policy and safe API
-        run: npm run smoke -- https://exam.phonet.app
+        id: smoke
+        run: npm run smoke -- https://exam.phonet.app --release-tag "$RELEASE_TAG"
       - name: Convert verified historical clones after the live app passes smoke checks
+        id: convert
+        if: steps.smoke.outcome == 'success'
         env:
           DATABASE_URL_UNPOOLED: ${{ secrets.DATABASE_URL_UNPOOLED }}
         run: npm run db:convert-clones -- --release
-      - name: Publish deployment result
-        if: always()
+
+  summary:
+    name: Summarize the release
+    needs: [candidate, checks, acceptance, verified, production]
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Publish release result
         env:
-          JOB_STATUS: ${{ job.status }}
+          CANDIDATE: ${{ needs.candidate.result }}
+          CANDIDATE_CURRENT: ${{ needs.candidate.outputs.current }}
+          CHECKS: ${{ needs.checks.result }}
+          ACCEPTANCE: ${{ needs.acceptance.result }}
+          VERIFIED: ${{ needs.verified.result }}
+          VERIFIED_CURRENT: ${{ needs.verified.outputs.current }}
+          PRODUCTION: ${{ needs.production.result }}
+          PRODUCTION_PHASE: ${{ needs.production.outputs.failed_phase }}
+          RELEASE_TAG: gha-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          printf '### Production deployment: %s\n\nCommit: `%s`\n\n[Exam Prep](https://exam.phonet.app)\n\nSee the migration, deploy and smoke steps for failures.\n' "$JOB_STATUS" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$CANDIDATE" != success ]]; then result="Queued commit check: $CANDIDATE"
+          elif [[ "$CANDIDATE_CURRENT" == false ]]; then result="Skipped: main advanced before CI"
+          elif [[ "$CHECKS" != success ]]; then result="CI: $CHECKS"
+          elif [[ "$ACCEPTANCE" != success ]]; then result="Database acceptance or cleanup: $ACCEPTANCE"
+          elif [[ "$VERIFIED" != success ]]; then result="Accepted commit check: $VERIFIED"
+          elif [[ "$VERIFIED_CURRENT" == false ]]; then result="Skipped: main advanced during verification"
+          elif [[ "$PRODUCTION" == success ]]; then result="Production smoke and clone conversion passed"
+          else result="${PRODUCTION_PHASE:-Production}: $PRODUCTION"
+          fi
+          printf '### Release result\n\n%s\n\nCommit: `%s`\n\nAttempt tag: `%s`\n\n[Exam Prep](https://exam.phonet.app)\n' \
+            "$result" "$GITHUB_SHA" "$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"

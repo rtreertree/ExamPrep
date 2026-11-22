@@ -9,6 +9,7 @@ import { connectDatabase } from "../server/db";
 import { readTestTarget, verifyTestApp, verifyTestTarget } from "./test-target";
 
 const target = readTestTarget();
+const productionPackage = process.argv.includes("--production-package");
 for (const key of ["PASSWORD_PEPPER", "BETTER_AUTH_SECRET"])
   if ((process.env[key]?.length ?? 0) < 32)
     throw new Error(`Set a test ${key} of at least 32 characters.`);
@@ -97,7 +98,9 @@ try {
       };
       Object.assign(config, {
         name: "exam-prep-acceptance",
-        main: resolve(config.main),
+        main: resolve(
+          productionPackage ? "dist/worker-production/worker.js" : config.main,
+        ),
         workers_dev: false,
         routes: [],
         assets: {
@@ -133,6 +136,7 @@ try {
         "127.0.0.1",
         "--infer-origin-from-routes=false",
       ];
+      if (productionPackage) args.push("--no-bundle", "--minify=false");
     } else args = ["dist/server.js"];
     const server = spawn(process.execPath, args, { env, stdio: "ignore" });
     children.add(server);

@@ -57,7 +57,12 @@ export function createApp(
   });
   app.all("/api", (c) => c.json({ error: "API route not found." }, 404));
   app.get("/api/health", (c) =>
-    c.json({ status: "ok", runtime: config.RUNTIME ?? "node" }),
+    c.json({
+      status: "ok",
+      runtime: config.RUNTIME ?? "node",
+      releaseTag:
+        config.RUNTIME === "worker" ? config.RELEASE_TAG || undefined : undefined,
+    }),
   );
   app.get("/api/account/recovery", (c) =>
     c.json({ enabled: passwordRecoveryEnabled(config) }),
