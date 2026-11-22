@@ -16,7 +16,12 @@ export default {
     if (pathname !== "/api" && !pathname.startsWith("/api/"))
       return env.ASSETS.fetch(request);
     const app = createApp(
-      { ...env, RUNTIME: "worker", waitUntil: (task) => ctx.waitUntil(task) },
+      {
+        ...env,
+        RUNTIME: "worker",
+        RELEASE_TAG: env.CF_VERSION_METADATA?.tag,
+        waitUntil: (task) => ctx.waitUntil(task),
+      },
       (url) =>
         new PrismaClient({
           adapter: new PrismaNeon({ connectionString: url }),

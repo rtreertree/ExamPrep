@@ -9,8 +9,11 @@ import { connectDatabase } from "../server/db";
 import { PASSWORD_PATTERN, PASSWORD_PREFIX } from "../server/passwords";
 import { readinessError } from "./readiness-error";
 
-neonConfig.webSocketConstructor = ws;
 const local = process.argv.includes("--local");
+const packageOnly = process.argv.includes("--package-only");
+const workerDirectory = process.argv.includes("--production-package")
+  ? "dist/worker-production"
+  : "dist/worker";
 const failures: string[] = [];
 function check(condition: unknown, message: string) {
   if (!condition) failures.push(message);
@@ -51,7 +54,7 @@ check(
 try {
   // This conservative project budget also fits accounts with the older 3-MiB
   // compressed-script allowance. Source maps are not uploaded runtime modules.
-  const modules = (await files("dist/worker")).filter((path) =>
+  const modules = (await files(workerDirectory)).filter((path) =>
     /\.(js|mjs|wasm)$/.test(path),
   );
   check(
@@ -86,63 +89,75 @@ try {
   );
 }
 
-check(
-  (process.env.BETTER_AUTH_SECRET?.length ?? 0) >= 32,
-  "Set a strong BETTER_AUTH_SECRET of at least 32 characters.",
-);
-check(
-  (process.env.PASSWORD_PEPPER?.length ?? 0) >= 32,
-  "Set a separate stable PASSWORD_PEPPER of at least 32 characters.",
-);
-try {
-  const origin = new URL(process.env.BETTER_AUTH_URL ?? "");
+async function checkRuntime() {
+  neonConfig.webSocketConstructor = ws;
   check(
-    origin.protocol === "https:" ||
-      (local && ["127.0.0.1", "localhost", "[::1]"].includes(origin.hostname)),
-    "Set BETTER_AUTH_URL to the exact public HTTPS origin (or use --local for local checks).",
+    (process.env.BETTER_AUTH_SECRET?.length ?? 0) >= 32,
+    "Set a strong BETTER_AUTH_SECRET of at least 32 characters.",
   );
-  const url = new URL(process.env.DATABASE_URL ?? "");
   check(
-    ["require", "verify-ca", "verify-full"].includes(
-      url.searchParams.get("sslmode") ?? "",
-    ),
-    "Use a TLS-protected database connection.",
+    (process.env.PASSWORD_PEPPER?.length ?? 0) >= 32,
+    "Set a separate stable PASSWORD_PEPPER of at least 32 characters.",
   );
-} catch {
-  failures.push("Set valid DATABASE_URL and BETTER_AUTH_URL values.");
-}
+  try {
+    const origin = new URL(process.env.BETTER_AUTH_URL ?? "");
+    check(
+      origin.protocol === "https:" ||
+        (local &&
+          ["127.0.0.1", "localhost", "[::1]"].includes(origin.hostname)),
+      "Set BETTER_AUTH_URL to the exact public HTTPS origin (or use --local for local checks).",
+    );
+    const url = new URL(process.env.DATABASE_URL ?? "");
+    check(
+      ["require", "verify-ca", "verify-full"].includes(
+        url.searchParams.get("sslmode") ?? "",
+      ),
+      "Use a TLS-protected database connection.",
+    );
+  } catch {
+    failures.push("Set valid DATABASE_URL and BETTER_AUTH_URL values.");
+  }
 
-let db: ReturnType<typeof connectDatabase> | undefined;
-let databaseStage = "runtime connection";
-try {
-  db = connectDatabase(process.env.DATABASE_URL ?? "");
-  databaseStage = "runtime connection/password-hashing probe";
-  const probe = await db.$queryRaw<{ supported: boolean }[]>`
+  let db: ReturnType<typeof connectDatabase> | undefined;
+  let databaseStage = "runtime connection";
+  try {
+    db = connectDatabase(process.env.DATABASE_URL ?? "");
+    databaseStage = "runtime connection/password-hashing probe";
+    const probe = await db.$queryRaw<{ supported: boolean }[]>`
     SELECT length(public.crypt('Exam Prep readiness probe', public.gen_salt('bf', 12))) = 60 AS supported
   `;
-  check(probe[0]?.supported, "Apply the pgcrypto password-hashing migration.");
-  databaseStage = "credential-table query";
-  const rows = await db.$queryRaw<{ count: number }[]>`
+    check(
+      probe[0]?.supported,
+      "Apply the pgcrypto password-hashing migration.",
+    );
+    databaseStage = "credential-table query";
+    const rows = await db.$queryRaw<{ count: number }[]>`
     SELECT count(*)::int AS count FROM account WHERE "providerId" = 'credential'
       AND (password IS NULL OR length(password) <> ${PASSWORD_PREFIX.length + 60} OR password !~ ${PASSWORD_PATTERN.source})
   `;
-  check(
-    rows[0]?.count === 0,
-    `${rows[0]?.count ?? "Unknown"} credential account(s) still need migration. Each owner must sign in successfully on the Node app before deploying this database to Workers Free.`,
-  );
-} catch (error) {
-  failures.push(readinessError(error, databaseStage));
-} finally {
-  await db?.$disconnect();
+    check(
+      rows[0]?.count === 0,
+      `${rows[0]?.count ?? "Unknown"} credential account(s) still need migration. Each owner must sign in successfully on the Node app before deploying this database to Workers Free.`,
+    );
+  } catch (error) {
+    failures.push(readinessError(error, databaseStage));
+  } finally {
+    await db?.$disconnect();
+  }
 }
+
+if (!packageOnly) await checkRuntime();
 if (failures.length) {
   failures.forEach((failure) => console.error(failure));
   process.exitCode = 1;
 } else {
   console.info(
-    "Free-tier configuration, package, and password readiness checks passed.",
+    packageOnly
+      ? "Free-tier configuration and package checks passed."
+      : "Free-tier configuration, package, and password readiness checks passed.",
   );
 }
-console.info(
-  "Local checks do not measure Cloudflare's production CPU accounting. Validate real request CPU and quotas on the target account before relying on the free tier.",
-);
+if (!packageOnly)
+  console.info(
+    "Local checks do not measure Cloudflare's production CPU accounting. Validate real request CPU and quotas on the target account before relying on the free tier.",
+  );

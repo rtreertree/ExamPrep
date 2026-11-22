@@ -13,6 +13,7 @@ export type Config = {
   RESET_EMAIL_FROM?: string;
   waitUntil?: (task: Promise<unknown>) => void;
   RUNTIME?: "worker" | "node";
+  RELEASE_TAG?: string;
   TEST_DATABASE_TOKEN?: string;
 };
 export function createAuth(db: Database, config: Config, atomicReset: boolean) {

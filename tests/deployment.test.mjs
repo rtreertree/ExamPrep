@@ -1,8 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   checkConnections,
   productionConfig,
 } from "../scripts/deployment-config.mjs";
+import { isCurrentMain } from "../scripts/release-head.mjs";
+import { checkSmoke } from "../scripts/smoke.mjs";
+import { createApp } from "../server/app";
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("production deployment configuration", () => {
   const env = {
@@ -58,5 +63,100 @@ describe("production deployment configuration", () => {
     expect(() =>
       productionConfig({ ...env, BETTER_AUTH_URL: "http://exam.phonet.app" }),
     ).toThrow(/https/);
+  });
+});
+
+describe("release freshness", () => {
+  const env = {
+    GITHUB_API_URL: "https://api.github.test",
+    GITHUB_REPOSITORY: "test/ExamPrep",
+    GITHUB_SHA: "a".repeat(40),
+    GH_TOKEN: "test-token",
+  };
+
+  it.each([
+    [env.GITHUB_SHA, true],
+    ["b".repeat(40), false],
+  ])("compares the candidate with the live main ref", async (sha, current) => {
+    const fetch = vi.fn(async () =>
+      Response.json({ ref: "refs/heads/main", object: { sha } }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    await expect(isCurrentMain(env)).resolves.toBe(current);
+    expect(fetch).toHaveBeenCalledWith(
+      "https://api.github.test/repos/test/ExamPrep/git/ref/heads/main",
+      expect.objectContaining({ redirect: "error" }),
+    );
+  });
+
+  it("fails closed when GitHub cannot verify main", async () => {
+    vi.stubGlobal("fetch", async () => new Response(null, { status: 503 }));
+    await expect(isCurrentMain(env)).rejects.toThrow(/could not verify/);
+    vi.stubGlobal("fetch", async () =>
+      Response.json({
+        ref: "refs/heads/other",
+        object: { sha: env.GITHUB_SHA },
+      }),
+    );
+    await expect(isCurrentMain(env)).rejects.toThrow(/could not verify/);
+  });
+});
+
+describe("release smoke", () => {
+  const releaseTag = "gha-123-2";
+  const base = new URL("https://exam.example");
+
+  it.each([
+    ["gha-123-1", false],
+    [undefined, false],
+    [releaseTag, true],
+  ])("requires the expected release tag", async (servingTag, matches) => {
+    const connect = vi.fn();
+    const app = createApp(
+      { RUNTIME: "worker", RELEASE_TAG: servingTag },
+      connect,
+    );
+    vi.stubGlobal("fetch", (url) => {
+      switch (url.pathname) {
+        case "/":
+        case "/history":
+          return new Response(
+            '<title>Exam Prep</title><div id="root"></div><script src="/assets/abc.js"></script>',
+            {
+              headers: {
+                "content-type": "text/html",
+                "content-security-policy": "frame-ancestors 'none'",
+                "strict-transport-security": "max-age=31536000",
+              },
+            },
+          );
+        case "/assets/abc.js":
+          return new Response("", {
+            headers: {
+              "content-type": "application/javascript",
+              "cache-control": "public, immutable",
+            },
+          });
+        case "/api/health":
+          return app.request(url);
+        case "/api/sets":
+          return Response.json(
+            {},
+            { status: 401, headers: { "cache-control": "no-store, private" } },
+          );
+        default:
+          return Response.json({}, { status: 404 });
+      }
+    });
+    const result = checkSmoke(base, { worker: true, releaseTag });
+    if (matches) await expect(result).resolves.toBeUndefined();
+    else await expect(result).rejects.toThrow(/expected release attempt/);
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("preserves the Node health response", async () => {
+    const app = createApp({ RELEASE_TAG: releaseTag }, vi.fn());
+    const response = await app.request("/api/health");
+    expect(await response.json()).toEqual({ status: "ok", runtime: "node" });
   });
 });

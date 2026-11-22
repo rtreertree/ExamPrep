@@ -13,7 +13,9 @@ entry point uses the same application and migrations.
 2. In GitHub Settings → Environments, use **production**, restricted to the branch
    `main` (no tag rules). This restriction and the verified account variable were
    configured during setup. Add the configuration below through that environment,
-   never through chat or source. No integration environment or Neon API key is needed.
+   never through chat or source. Configure the separate
+   [database-acceptance environment](#database-acceptance-in-github) and verify
+   a manual acceptance run before enabling the first automatic release with this flow.
 3. Choose a production Neon database separate from local development/test data.
    Copy its pooled and direct URLs into the production environment. Enable TLS
    (`sslmode=require` or a stricter verification mode) on both.
@@ -76,27 +78,37 @@ not uploaded. Never enable SQL parameter logging or dump runtime environments.
 
 ## Checks and release ordering
 
-- **All PRs, including forks:** read-only GitHub token; no environments or secrets;
-  `npm ci`, generated clients/assets, TypeScript, focused unit tests, production
-  frontend/Node builds, default and production Wrangler dry runs, Docker image build.
-  Actions are pinned to verified release commits; Node is 24.14.0 and the existing
-  dependency lockfile is retained. Checkout does not persist Git credentials;
-  package-manager caches are disabled between trust boundaries.
-- **Production:** after the CI checks succeed, rebuild/dry-run, validate configuration,
-  preflight schedules, apply migrations with the direct URL, run the free-tier
-  and password readiness checks, then deploy a matching code/secrets version. A failed readiness
-  check prevents deployment, including when legacy scrypt credentials remain.
-  Preserve the Node sign-in migration path documented in README; never delete or
-  reset users to bypass this guard.
-- Deployment concurrency serializes the entire release and never cancels an active
-  migration. GitHub environment status, commit-labelled Cloudflare versions and the
-  workflow summary identify the release. Post-deploy smoke retries check HTML,
-  JavaScript, `/history` SPA fallback, `/api/health`, JSON API errors and unauthenticated
-  private-response cache policy. Smoke creates no accounts and makes no writes.
+- **All PRs, including forks.** The package job typechecks, runs database-free unit
+  tests, builds the frontend and Node app, and checks both Worker configurations
+  and the production package budget. Mocked Chromium and Docker build jobs run in
+  parallel. The required **Typecheck, unit tests, builds and Worker package** check
+  aggregates all three results. New commits cancel superseded runs on the same PR.
+  Jobs use a read-only token and run without secrets or deployment environments.
+- **Every release.** CI builds and publishes an immutable artifact containing the
+  frontend, Node build, generated Node Prisma client, and production Worker bundle
+  with its WebAssembly module and source map. **Database acceptance** verifies those
+  builds on Node and Workerd against a disposable branch in the isolated Neon project.
+  Provisioning, tests, and branch cleanup must all succeed before production can run.
+  The manual **Database acceptance** action on `main` builds and tests the same package.
+- **Production.** The deployment job downloads the accepted artifact by ID from the
+  same run. It validates configuration and the package, checks review schedules,
+  applies migrations with the direct URL, and runs the free-tier and password
+  readiness checks. Wrangler deploys the prebuilt Worker, assets, and matching
+  secrets together. A readiness failure blocks deployment, including when legacy
+  scrypt credentials remain. Use the Node sign-in migration path documented in README
+  to upgrade those credentials.
+- **Queue and smoke.** Release runs are serialized. GitHub checks the current `main`
+  SHA when a queued run starts, after acceptance, and immediately before production
+  preflight. A superseded run exits before production changes. Once preflight starts,
+  the release runs through completion. Smoke checks HTML, JavaScript, `/history` SPA
+  fallback, JSON API errors, private-response cache policy, and the exact Cloudflare
+  release tag on `/api/health`. Historical clone conversion starts only after smoke
+  succeeds. The Actions summary records the commit, attempt tag, and failed phase.
 
-PR CI runs simulated-data Chromium checks. For auth, ownership, persistence,
-grading, or migration changes, run **Database acceptance** from `main` or use the
-guarded local workflow. This acceptance workflow is separate from Release.
+Retry a failed current release through **Release** on `main`. Rerunning failed jobs
+can use an artifact from an earlier attempt of the same run. Start a fresh run if
+the artifact expired. After a newer commit reaches `main`, use that commit for the
+next release. Use the explicit rollback procedure below for recovery to an older version.
 
 Never use `pull_request_target` to execute PR code. Production credentials are
 available only to the production deployment job on trusted `main`; do not weaken
@@ -184,6 +196,7 @@ Production can adopt a restricted runtime login as a separate rollout. Live data
 ## Database acceptance in GitHub
 
 Create a protected `database-acceptance` environment restricted to `main`.
+For automatic releases, use the branch restriction without a required reviewer.
 Provide `NEON_TEST_PROJECT_ID`, `NEON_TEST_PARENT_ID`, `NEON_TEST_DATABASE` and
 `NEON_TEST_OWNER` as environment variables. The project must be independent
 of production and the parent must contain an empty application database. Add
@@ -192,6 +205,10 @@ the newly created branch and database before migration, creates disposable auth
 and runtime credentials, and deletes that run's branch on exit. If the runner is
 terminated before cleanup, inspect the separate project for the exact
 `examprep-ci-<run-id>-<attempt>` branch and delete it after verifying its parent.
+Use Actions → **Database acceptance** → Run workflow on `main` to verify the
+environment before the first automatic release. Inspect its provision, acceptance,
+and cleanup steps. On the first release, confirm that production follows the
+successful acceptance job and that smoke verifies the attempt tag.
 
 ## Local database acceptance
 

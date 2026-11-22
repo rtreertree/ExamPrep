@@ -23,6 +23,7 @@ Paths start at the repository root. Open the first file for the behavior you're 
 | Backup and restore | `client/features/AccountBackup.tsx` | `server/backup.ts`, `server/backup-reviews.ts`, `shared/backup.ts` | `tests/backup.test.ts`, `tests/api.integration.test.ts`, `tests/browser/account.spec.ts` |
 | API and runtime entry points | `server/app.ts` | `client/lib/api.ts`, `server/node.ts`, `server/worker.ts`, `vite.config.ts` | `npm run typecheck`, `npm run worker:check` |
 | Database migrations and deployment | `prisma/schema.prisma` | `prisma/migrations/`, `wrangler.jsonc`, `.github/workflows/release.yml` | `tests/deployment.test.mjs`, `npm run worker:check` |
+| CI and production release | `.github/workflows/ci.yml` | `.github/workflows/release.yml`, `scripts/release-head.mjs`, `scripts/deploy-production.mjs`, `scripts/smoke.mjs` | `tests/deployment.test.mjs`, `npm run worker:package` |
 | Live database acceptance | `scripts/acceptance.ts` | `scripts/test-target.ts`, `.github/workflows/database-acceptance.yml` | `tests/test-database.test.ts`, `tests/api.integration.test.ts`, `tests/browser/workflow.spec.ts` |
 
 Append the mapped test path to `npm test --` for Vitest or `npm run test:e2e:mock --` for Playwright.
