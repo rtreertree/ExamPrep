@@ -4,10 +4,26 @@ import {
   productionConfig,
 } from "../scripts/deployment-config.mjs";
 import { isCurrentMain } from "../scripts/release-head.mjs";
+import { describeMigrationFailure } from "../scripts/migrate.mjs";
 import { checkSmoke } from "../scripts/smoke.mjs";
 import { createApp } from "../server/app";
 
 afterEach(() => vi.unstubAllGlobals());
+
+it("reports Prisma migration codes without exposing raw errors or credentials", () => {
+  const output = describeMigrationFailure({
+    stderr:
+      "\x1b[31mError: P3018\x1b[0m\nMigration name: 202611210001_live_sets\nDatabase error code: 42501\nDatabase error: private SQL and postgresql://owner:password@test",
+  });
+  expect(output).toContain("P3018, SQLSTATE 42501, 202611210001_live_sets");
+  expect(output).not.toMatch(/private SQL|password|postgresql:/);
+  expect(describeMigrationFailure({ stderr: "Error: P3009" })).toMatch(
+    /previously failed migration/,
+  );
+  expect(describeMigrationFailure({ stderr: "Error: P1001" })).toMatch(
+    /could not be reached/,
+  );
+});
 
 describe("production deployment configuration", () => {
   const env = {
