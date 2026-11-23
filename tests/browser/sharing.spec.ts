@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { StudySet } from "../../client/lib/api";
+import type { DirectorySet } from "../../shared/directory";
 import type { ShareSettings } from "../../shared/sharing";
 
 const token = "example-signed-token";
@@ -22,6 +23,105 @@ const source: StudySet = {
   lastStudiedAt: null,
   count: 1,
 };
+
+test("browses Discover by title and format across result pages", async ({
+  page,
+}) => {
+  const entries: DirectorySet[] = [
+    {
+      id: "exam",
+      kind: "exam",
+      title: "Vocabulary practice exam",
+      ownerName: "Course tutor",
+      count: 12,
+    },
+    {
+      id: source.id,
+      kind: source.kind,
+      title: source.title,
+      ownerName: "Original owner",
+      count: 1,
+    },
+  ];
+  let failRequest = true;
+  await page.route("**/api/**", async (route) => {
+    const { pathname, searchParams } = new URL(route.request().url());
+    if (pathname === "/api/auth/get-session") {
+      return route.fulfill({
+        json: { user: { id: "reader", email: "reader@example.test" } },
+      });
+    }
+    if (pathname === "/api/discover") {
+      if (failRequest) {
+        failRequest = false;
+        return route.fulfill({
+          status: 503,
+          json: { error: "Directory temporarily unavailable" },
+        });
+      }
+      const title = searchParams.get("q")?.toLowerCase() ?? "";
+      const kind = searchParams.get("kind");
+      const matches = entries.filter(
+        (set) =>
+          (!kind || kind === set.kind) &&
+          set.title.toLowerCase().includes(title),
+      );
+      const start = searchParams.get("after") ? 1 : 0;
+      return route.fulfill({
+        json: {
+          items: matches.slice(start, start + 1),
+          next: matches[start + 1] ? matches[start].id : null,
+        },
+      });
+    }
+    if (pathname === "/api/discover/" + source.id) {
+      return route.fulfill({
+        json: { content: source.content, ownerName: "Original owner" },
+      });
+    }
+    return route.fulfill({ status: 404, json: { error: "Unexpected path" } });
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/discover");
+  await page.getByRole("button", { name: "Retry" }).click();
+  const exam = page.getByRole("link", { name: entries[0].title });
+  const deck = page.getByRole("link", { name: source.title });
+  await expect(exam).toBeVisible();
+  await page.getByRole("button", { name: "Next" }).click();
+  await expect(deck).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Published sets" }),
+  ).toBeFocused();
+  await page.getByRole("button", { name: "Previous" }).click();
+  await expect(exam).toBeVisible();
+
+  await page.getByRole("radio", { name: "All sets" }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("radio", { name: "Exams" })).toBeChecked();
+  await expect(exam).toBeVisible();
+  const search = page.getByRole("searchbox", { name: "Search published sets" });
+  await search.fill("shared");
+  await expect(
+    page.getByRole("heading", { name: "No matching sets" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(search).toBeFocused();
+  await expect(search).toHaveValue("");
+  await expect(page.getByRole("radio", { name: "All sets" })).toBeChecked();
+
+  const formats = page.getByRole("group", { name: "Browse by format" });
+  await formats.getByText("Flashcards", { exact: true }).click();
+  await search.fill("vocabulary");
+  await expect(deck).toHaveAccessibleDescription(
+    "Owned by Original owner Flashcards 1 card",
+  );
+  await page.getByRole("button", { name: "Clear search" }).click();
+  await expect(search).toHaveValue("");
+  await expect(page.getByRole("radio", { name: "Flashcards" })).toBeChecked();
+  await deck.click();
+  await expect(page.getByRole("heading", { name: source.title })).toBeVisible();
+});
 
 test("manages a view-only link and pending co-owners from the library and editor", async ({
   page,

@@ -1,0 +1,349 @@
+.discover-catalog {
+  margin-inline: auto;
+  max-width: 76rem;
+}
+
+.discover-masthead {
+  --catalog-edge: color-mix(in srgb, var(--ambient) 52%, var(--divider));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(12.5rem, 27%);
+  gap: 2.5rem;
+  align-items: center;
+  padding: 2.5rem;
+  border: 1px solid var(--catalog-edge);
+  border-radius: var(--radius-study);
+  background: color-mix(in srgb, var(--surface) 64%, var(--ambient));
+}
+
+.discover-intro h1 {
+  font-size: 4rem;
+  line-height: 1.03;
+  letter-spacing: -0.04em;
+}
+
+.discover-intro p {
+  margin-block: 0.75rem 1.75rem;
+  color: var(--secondary);
+}
+
+.discover-search-label,
+.discover-formats legend {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.discover-search-label {
+  display: block;
+  margin-block-end: 0.375rem;
+}
+
+.discover-search {
+  position: relative;
+  max-width: 34rem;
+}
+
+.discover-search > svg {
+  position: absolute;
+  inset-inline-start: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--secondary);
+  pointer-events: none;
+}
+
+.discover-search input {
+  min-height: 3.5rem;
+  padding-inline: 2.875rem 3rem;
+  background: var(--canvas);
+  caret-color: var(--accent);
+}
+
+.discover-search input::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.discover-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.discover-search > .button {
+  position: absolute;
+  inset-inline-end: 0.375rem;
+  inset-block: 0;
+  width: 2.75rem;
+  height: 2.75rem;
+  margin-block: auto;
+  padding: 0;
+  color: var(--secondary);
+}
+
+.discover-formats {
+  min-width: 0;
+  margin: 0;
+  padding: 0 0 0 1.5rem;
+  border: 0;
+  border-inline-start: 1px solid var(--catalog-edge);
+}
+
+.discover-formats legend {
+  float: left;
+  width: 100%;
+  margin-block-end: 0.5rem;
+  padding: 0;
+}
+
+.discover-format-options {
+  display: grid;
+  clear: both;
+  gap: 0.25rem;
+}
+
+.discover-format-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--secondary);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--quick),
+    color var(--quick);
+}
+
+.discover-format-choice:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.discover-format-options input:checked + .discover-format-choice {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.discover-format-options input:focus-visible + .discover-format-choice {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.discover-results {
+  margin-block-start: 2rem;
+}
+
+.discover-results .directory-results-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+  padding-block-end: 0.75rem;
+  border-bottom: 1px solid var(--divider);
+  margin-block-end: 0.125rem;
+}
+
+.discover-results .directory-results-heading h2 {
+  scroll-margin-block-start: 5rem;
+}
+
+.discover-results .directory-list li {
+  padding: 0;
+}
+
+.discover-set {
+  display: grid;
+  grid-template:
+    "icon title format arrow" auto
+    "icon owner format arrow" auto
+    / 2.75rem minmax(0, 1fr) 8rem 1.25rem;
+  align-items: center;
+  gap: 0.25rem 1.125rem;
+  padding: 1rem 0.75rem;
+  text-decoration: none;
+  transition: background var(--quick);
+}
+
+.discover-set:is(:hover, :focus-visible) {
+  background: var(--surface);
+}
+
+.discover-set:focus-visible {
+  outline-offset: -2px;
+}
+
+.discover-set-icon {
+  grid-area: icon;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--accent);
+}
+
+.discover-set-title {
+  grid-area: title;
+  font-size: 1.125rem;
+  line-height: 1.35;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.discover-set-owner {
+  grid-area: owner;
+  color: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.discover-set-format {
+  grid-area: format;
+  display: flex;
+  flex-direction: column;
+  color: var(--secondary);
+  font-size: 0.875rem;
+}
+
+.discover-set-format small {
+  font-variant-numeric: tabular-nums;
+}
+
+.discover-set-arrow {
+  grid-area: arrow;
+  color: var(--muted);
+  transition:
+    transform var(--quick),
+    color var(--quick);
+}
+
+.discover-set:is(:hover, :focus-visible) .discover-set-arrow {
+  transform: translateX(3px);
+  color: var(--accent);
+}
+
+.discover-results > .actions {
+  justify-content: flex-end;
+  margin-block-start: 1rem;
+}
+
+.discover-results .loading-rows > div {
+  height: 4.9rem;
+  margin: 0;
+}
+
+.discover-empty {
+  border-bottom: 1px solid var(--divider);
+  padding: 2rem 0;
+}
+
+.discover-empty p {
+  margin-block: 0.375rem 0.875rem;
+  color: var(--secondary);
+}
+
+@media (max-width: 960px) {
+  .discover-masthead {
+    gap: 1.5rem;
+    padding: 1.5rem;
+  }
+
+  .discover-intro h1 {
+    font-size: 3.25rem;
+  }
+}
+
+@media (max-width: 650px) {
+  .discover-masthead {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+    padding: 1.125rem;
+  }
+
+  .discover-intro h1 {
+    font-size: 2.75rem;
+  }
+
+  .discover-intro p {
+    margin-block: 0.5rem 1rem;
+  }
+
+  .discover-search input {
+    min-height: 3.125rem;
+  }
+
+  .discover-formats {
+    padding: 0.875rem 0 0;
+    border-inline-start: 0;
+    border-top: 1px solid var(--catalog-edge);
+  }
+
+  .discover-format-options {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .discover-format-choice {
+    justify-content: center;
+    padding-inline: 0.125rem;
+  }
+
+  .discover-format-choice svg {
+    display: none;
+  }
+
+  .discover-results {
+    margin-block-start: 1.25rem;
+  }
+
+  .discover-set {
+    grid-template:
+      "icon title arrow"
+      "icon owner arrow"
+      "icon format arrow"
+      / 2.5rem minmax(0, 1fr) 1.25rem;
+    column-gap: 0.75rem;
+    padding-inline: 0.25rem;
+  }
+
+  .discover-set-format {
+    flex-flow: row wrap;
+    align-items: baseline;
+    gap: 0 0.5rem;
+  }
+
+  .discover-set-format small::before {
+    content: "";
+    display: inline-block;
+    width: 0.1875rem;
+    height: 0.1875rem;
+    margin-inline-end: 0.5rem;
+    border-radius: 50%;
+    background: currentColor;
+    vertical-align: middle;
+  }
+
+  .discover-results .loading-rows > div {
+    height: 6.75rem;
+  }
+}
+
+@media (forced-colors: active) {
+  .discover-format-options input:checked + .discover-format-choice {
+    forced-color-adjust: none;
+    border-color: Highlight;
+    background: Highlight;
+    color: HighlightText;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .discover-set:is(:hover, :focus-visible) .discover-set-arrow {
+    transform: none;
+  }
+}

@@ -788,10 +788,11 @@ test("Admin and Discover on desktop and mobile use the live owner and independen
     await mobile
       .getByRole("searchbox", { name: "Search published sets" })
       .fill("ecology");
-    await chooseOption(
-      mobile.getByLabel("Type", { exact: true }),
-      "Flashcards",
-    );
+    await mobile
+      .getByRole("group", { name: "Browse by format" })
+      .getByText("Flashcards", { exact: true })
+      .click();
+    await expect(mobile.getByRole("radio", { name: "Flashcards" })).toBeChecked();
     await expect(mobile.getByText("Owned by Tutor")).toBeVisible();
     await mobile.screenshot({ path: "/tmp/examprep-discover-mobile.png" });
     for (const screen of [page, mobile])
