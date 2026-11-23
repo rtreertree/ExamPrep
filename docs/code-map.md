@@ -6,7 +6,7 @@ Paths start at the repository root. Open the first file for the behavior you're 
 | --- | --- | --- | --- |
 | Public landing (`/`) and signed-in library (`/library`) | `client/App.tsx` | `client/features/Landing.tsx`, `client/features/AuthPage.tsx`, `client/lib/auth.tsx` | `tests/browser/landing.spec.ts` |
 | AI import validation and repair | `client/lib/aiImport.ts` | `client/features/ImportPanel.tsx`, `client/lib/aiPrompt.ts`, `shared/content.ts` | `tests/ai-import.test.ts` |
-| AI authoring prompt and guide | `client/lib/aiPrompt.ts` | `client/features/AIHandoffPanel.tsx`, `skills/exam-prep-author/SKILL.md`, `scripts/assets.ts` | `tests/ai-authoring.test.ts` |
+| AI authoring controls, prompt, and guide | `client/components/AIPromptGenerator.tsx`, `client/lib/aiPrompt.ts` | `client/features/AIHandoffPanel.tsx`, `skills/exam-prep-author/SKILL.md`, `scripts/assets.ts` | `tests/ai-authoring.test.ts`, `tests/browser/landing.spec.ts`, `tests/browser/reliability.spec.ts` |
 | Editor, file import and export | `client/features/Editor.tsx` | `client/features/ImportPanel.tsx`, `client/lib/exportContent.ts`, `shared/content.ts` | `tests/content.test.ts`, `tests/browser/reliability.spec.ts` |
 | Math and chemistry notation | `client/components/NotationEditor.tsx` | `client/components/StudyContent.tsx`, `client/lib/notation.ts` | `tests/notation.test.ts`, `tests/browser/notation.spec.ts` |
 | Library, folders, ordering and library context | `client/features/Library.tsx` | `client/features/LibraryOrganization.tsx`, `client/lib/useLibraryContext.ts`, `server/setRoutes.ts`, `server/libraryOrder.ts`, `shared/listing.ts` | `tests/browser/reliability.spec.ts` |

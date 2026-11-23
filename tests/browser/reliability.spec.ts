@@ -703,9 +703,10 @@ test("AI settings survive closing, remain account scoped, and search filters rea
   await page
     .getByLabel("Topic or source material")
     .fill("Private student A notes");
-  await page.getByText("Customize", { exact: true }).click();
   await page.getByLabel("Set exact counts by question type").check();
   await page.getByLabel("True/false questions").fill("3");
+  const extreme = page.getByRole("radio", { name: "Extremely hard" });
+  await extreme.check();
   await page.getByRole("button", { name: "Close dialog", exact: true }).click();
   await page.getByText("Create", { exact: true }).click();
   await page
@@ -715,8 +716,8 @@ test("AI settings survive closing, remain account scoped, and search filters rea
     "Private student A notes",
   );
   await expect(page.getByLabel("Total questions")).toHaveText("13 questions");
-  await page.getByText("Customize", { exact: true }).click();
   await expect(page.getByLabel("True/false questions")).toHaveValue("3");
+  await expect(extreme).toBeChecked();
   api.userId = "student-b";
   await page.reload();
   await page.getByText("Create", { exact: true }).click();
@@ -724,7 +725,10 @@ test("AI settings survive closing, remain account scoped, and search filters rea
     .getByRole("button", { name: "Create with your AI", exact: true })
     .click();
   await expect(page.getByLabel("Topic or source material")).toHaveValue("");
-  await expect(page.getByLabel("Item count")).toHaveValue("10");
+  await expect(page.getByLabel("Number of questions")).toHaveValue("10");
+  await expect(
+    page.getByRole("radio", { name: "Match the level" }),
+  ).toBeChecked();
   await page.getByRole("button", { name: "Close dialog", exact: true }).click();
   let release!: () => void;
   api.listDelay = new Promise<void>((resolve) => {
@@ -786,14 +790,13 @@ test("AI helper copies a custom exam and imports its result for editing", async 
   const copy = helper.getByRole("button", { name: "Copy prompt" });
   await expect(copy).toBeDisabled();
   await helper.getByLabel("Topic or source material").fill("Photosynthesis");
-  const count = helper.getByLabel("Item count");
+  const count = helper.getByLabel("Number of questions");
   await count.fill("501");
   await expect(copy).toBeDisabled();
   await count.fill("4.5");
   await expect(copy).toBeDisabled();
   await count.fill("3");
   await expect(copy).toBeEnabled();
-  await helper.getByText("Customize", { exact: true }).click();
   const exact = helper.getByLabel("Set exact counts by question type");
   await exact.check();
   const choice = helper.getByLabel("Multiple-choice questions");
@@ -801,6 +804,7 @@ test("AI helper copies a custom exam and imports its result for editing", async 
   const writtenCount = helper.getByLabel("Written questions");
   await expect(choice).toHaveValue("2");
   await expect(writtenCount).toHaveValue("1");
+  await helper.getByText("More options", { exact: true }).click();
   await writtenCount.fill("0");
   await expect(helper.getByLabel("Written-question rubrics")).toHaveCount(0);
   await choice.fill("0");
@@ -823,12 +827,31 @@ test("AI helper copies a custom exam and imports its result for editing", async 
   await exact.uncheck();
   await expect(count).toHaveValue("3");
   await exact.check();
-  const kind = helper.getByLabel("Content type");
-  await chooseOption(kind, "Flashcards");
-  await expect(count).toHaveValue("3");
-  await chooseOption(kind, "Exam");
+  const kind = helper.getByRole("group", { name: "Content type" });
+  await kind.getByRole("radio", { name: "Flashcards" }).check();
+  await expect(helper.getByLabel("Number of flashcards")).toHaveValue("3");
+  await expect(exact).toBeHidden();
+  await kind.getByRole("radio", { name: "Exam", exact: true }).check();
   await expect(trueFalse).toHaveValue("2");
   await expect(helper.getByLabel("Total questions")).toHaveText("3 questions");
+  const difficulty = helper.getByRole("group", { name: "Difficulty" });
+  const mixedDifficulty = difficulty.getByRole("radio", {
+    name: "Mixed difficulty",
+  });
+  await mixedDifficulty.check();
+  await expect(
+    difficulty.getByRole("radio", { name: "Match the level" }),
+  ).not.toBeChecked();
+  const challenging = difficulty.getByRole("radio", { name: "Challenging" });
+  const extreme = difficulty.getByRole("radio", { name: "Extremely hard" });
+  await challenging.check();
+  await challenging.press("ArrowRight");
+  await expect(extreme).toBeFocused();
+  await expect(extreme).toBeChecked();
+  await expect(mixedDifficulty).not.toBeChecked();
+  await helper.getByText("Preview prompt", { exact: true }).click();
+  const preview = helper.getByLabel("Prompt to copy");
+  await expect(preview).toHaveValue(/Make every question extremely hard/);
   await helper.screenshot({
     path: "/tmp/examprep-ai-library-desktop.png",
     animations: "disabled",
@@ -841,6 +864,8 @@ test("AI helper copies a custom exam and imports its result for editing", async 
   expect(prompt).toContain("exactly two options for true and false");
   expect(prompt).toContain("detailed explanation for each answer");
   expect(prompt).toContain("marking rubric for every written question");
+  expect(prompt).toContain("Make every question extremely hard");
+  await expect(preview).toHaveValue(prompt);
   await helper.getByRole("button", { name: "Import AI result" }).click();
 
   const importer = page.getByRole("dialog", { name: "Import a study set" });
@@ -982,8 +1007,8 @@ test("mobile AI helper offers manual copying and file upload", async ({
     .click();
   const helper = page.getByRole("dialog", { name: "Create with your AI" });
   await helper.getByLabel("Topic or source material").fill("Calculus");
-  await expect(helper.getByLabel("Item count")).toHaveValue("10");
-  await helper.getByLabel("Item count").fill("3");
+  await expect(helper.getByLabel("Number of questions")).toHaveValue("10");
+  await helper.getByLabel("Number of questions").fill("3");
   await helper.getByRole("button", { name: "Copy prompt" }).press("Enter");
   const preview = helper.getByLabel("Prompt to copy");
   await expect(preview).toBeFocused();
@@ -1477,7 +1502,7 @@ test("AI helper warns before losing notes when device storage is blocked", async
   await page
     .getByRole("button", { name: "Create with your AI", exact: true })
     .click();
-  await page.getByText("Customize", { exact: true }).click();
+  await page.getByText("More options", { exact: true }).click();
   await page.getByLabel("Extra instructions (optional)").fill("Keep my work");
   await page.getByRole("button", { name: "Close dialog", exact: true }).click();
   await expect(

@@ -36,7 +36,10 @@ const flashcardFormat = [
   "Each card contains only id, front, and back. Test one concept per card with a focused cue and a clear answer.",
 ];
 
-const difficultyGuidance: Record<AISettings["difficulty"], string> = {
+const difficultyGuidance: Record<
+  Exclude<AISettings["difficulty"], "extreme">,
+  string
+> = {
   level: "Match the reasoning and vocabulary to the stated level.",
   easy: "Use core concepts, familiar examples, and recall or one-step application.",
   moderate:
@@ -165,6 +168,8 @@ const returnFile =
 
 export function buildAIPrompt(settings: AISettings) {
   const exam = settings.kind === "exam";
+  const { difficulty } = settings;
+  const extreme = difficulty === "extreme";
   return [
     `Create an Exam Prep ${exam ? "exam" : "flashcard deck"}. ${returnFile}`,
     "",
@@ -175,7 +180,11 @@ export function buildAIPrompt(settings: AISettings) {
     "If detailed source material is supplied, use it to define the scope and support the answers. If given only a topic, use well-established facts at the requested level. Avoid inventing quotes, citations, data, or facts that depend on missing context. If a point is uncertain or the material contradicts itself, use a different item.",
     "Cover the main ideas across the source or topic. Prioritize any focus areas in the extra instructions. Apply the requested settings and file rules if an extra instruction conflicts with them.",
     "Write all learner-facing text in the requested language. Keep JSON keys, type values, and reserved IDs exactly as specified.",
-    difficultyGuidance[settings.difficulty],
+    extreme
+      ? exam
+        ? "Make every question extremely hard within the requested topic and study level. Require several non-obvious reasoning steps, synthesis, or close evaluation of plausible alternatives. Keep each question clear and solvable with the information given."
+        : "Make every flashcard cue extremely hard within the requested topic and study level. Test advanced recall, a subtle distinction, or a demanding inference with one focused concept per card."
+      : difficultyGuidance[difficulty],
     ...(exam ? examWriting : flashcardWriting),
     "",
     "Exam Prep v1 file rules:",
@@ -185,7 +194,7 @@ export function buildAIPrompt(settings: AISettings) {
     "IDs must match ^[A-Za-z0-9_-]{1,64}$. Use unique item IDs. Verify answers, calculations, and units before returning the result.",
     String.raw`Use Markdown for content text, KaTeX with $...$ or display $$ delimiters for math, and mhchem for chemistry. Escape backslashes in JSON (for example, "$\\frac{1}{2}$"). Use only http or https links. Do not include HTML, embedded media, custom LaTeX macros, or commands that load resources.`,
     "",
-    "JSON example. Use it to see the file structure. Generate fresh content using the requested topic, language, count, and fields.",
+    "JSON example for file structure. Generate fresh content using the requested topic, difficulty, language, count, and fields.",
     formatExample[settings.kind],
     "",
     "Final checks before returning the file:",
@@ -199,6 +208,11 @@ export function buildAIPrompt(settings: AISettings) {
       : [
           "2. Answer each front independently and check that the back answers that exact cue. Check for repeated fronts, answers leaked in the cue, and factual or numerical mistakes.",
         ]),
+    ...(extreme
+      ? [
+          `${exam ? 5 : 3}. Check that every ${exam ? "question" : "flashcard cue"} is extremely hard within the requested topic and study level. Revise any item below that difficulty.`,
+        ]
+      : []),
     "Finally, parse the final JSON with a strict parser if one is available. Check field names, string escaping, and unique IDs. Return only the file or code block, without the checks or commentary.",
   ].join("\n");
 }

@@ -1,12 +1,18 @@
 import { z } from "zod";
 
-export const difficultyOptions = [
+export const difficultyPresets = [
   ["level", "Match the level"],
+  ["mixed", "Mixed difficulty"],
+] as const;
+
+export const hardnessLevels = [
   ["easy", "Easy"],
   ["moderate", "Moderate"],
   ["challenging", "Challenging"],
-  ["mixed", "Mixed difficulty"],
+  ["extreme", "Extremely hard"],
 ] as const;
+
+export const difficultyOptions = [...difficultyPresets, ...hardnessLevels];
 
 export const explanationOptions = [
   ["brief", "Brief explanations"],

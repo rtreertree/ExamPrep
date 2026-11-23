@@ -6,6 +6,7 @@ import {
   aiSettingsKey,
   defaultAISettings,
   defaultQuestionMix,
+  difficultyOptions,
   readAISettings,
   validAIItemTotal,
 } from "../client/lib/aiSettings";
@@ -31,6 +32,16 @@ describe("AI authoring", () => {
     });
     expect(getItem).toHaveBeenCalledWith(aiSettingsKey("student"));
   });
+
+  it.each(difficultyOptions)(
+    "restores the saved %s difficulty",
+    (difficulty) => {
+      vi.stubGlobal("localStorage", {
+        getItem: () => JSON.stringify({ difficulty }),
+      });
+      expect(readAISettings("student")?.difficulty).toBe(difficulty);
+    },
+  );
 
   it("writes a self-contained mixed exam prompt with brief explanations and optional rubrics", () => {
     const prompt = buildAIPrompt({
@@ -79,6 +90,48 @@ describe("AI authoring", () => {
       /Question mix|explanation|rubric|single_choice/,
     );
   });
+
+  it.each([
+    ["exam", "question", "several non-obvious reasoning steps"],
+    ["flashcards", "flashcard cue", "advanced recall"],
+  ] as const)(
+    "requires extreme difficulty for every %s item only at maximum",
+    (kind, item, reasoning) => {
+      const settings = {
+        ...defaultAISettings,
+        kind,
+        level: "Secondary school",
+        language: "Thai",
+        count: 6,
+        exactMix: true,
+        mix: { choice: 2, trueFalse: 2, written: 2 },
+        explanations: "detailed" as const,
+        rubrics: "always" as const,
+      };
+      const prompt = buildAIPrompt({ ...settings, difficulty: "extreme" });
+      expect(prompt).toContain(
+        "Level: Secondary school\nLanguage: Thai\nItems: exactly 6\nDifficulty: Extremely hard",
+      );
+      expect(prompt).toContain(
+        `Make every ${item} extremely hard within the requested topic and study level.`,
+      );
+      expect(prompt).toContain(reasoning);
+      expect(prompt).toContain(`Check that every ${item} is extremely hard`);
+      if (kind === "exam") {
+        expect(prompt).toContain(
+          "exactly 2 multiple-choice, 2 true/false, and 2 written questions",
+        );
+        expect(prompt).toContain("detailed explanation for each answer");
+        expect(prompt).toContain("marking rubric for every written question");
+      }
+      for (const [difficulty] of difficultyOptions) {
+        if (difficulty === "extreme") continue;
+        expect(buildAIPrompt({ ...settings, difficulty })).not.toMatch(
+          /extremely hard/i,
+        );
+      }
+    },
+  );
 
   it.each(["exam", "flashcards"] as const)(
     "includes an importable %s example and a final validation checklist",
