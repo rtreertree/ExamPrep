@@ -80,18 +80,14 @@ export async function folderForLegacyName(
 }
 
 const setLocations = (userId: string) => sql`
-  SELECT id, "folderId", archived, "manualRank", false AS "coOwned"
-  FROM "StudySet" WHERE "userId" = ${userId}
-  UNION ALL
-  SELECT "studySetId" AS id, "folderId", archived, "manualRank", true AS "coOwned"
-  FROM "LibraryMembership" WHERE "userId" = ${userId}
+  SELECT "studySetId" AS id, "folderId", archived, "manualRank" FROM "LibraryEntry" WHERE "userId" = ${userId}
 `;
 
 const folderRanks = (userId: string) => sql`
-  SELECT id, "manualRank", false AS "coOwned" FROM "LibraryFolder" WHERE "userId" = ${userId}
+  SELECT id, "manualRank" FROM "LibraryFolder" WHERE "userId" = ${userId}
 `;
 const setRanks = (userId: string, { folderId, archived }: Location) => sql`
-  SELECT id, "manualRank", "coOwned" FROM (${setLocations(userId)}) locations
+  SELECT id, "manualRank" FROM (${setLocations(userId)}) locations
   WHERE "folderId" IS NOT DISTINCT FROM ${folderId}::text AND archived = ${archived}
 `;
 const orderSummary = (ranks: Prisma.Sql) => sql`
@@ -197,7 +193,7 @@ async function reorder(
       ), origin AS (
         SELECT position FROM ranked WHERE id = ${change.id}
       ), moves AS MATERIALIZED (
-        SELECT item.id, item."coOwned", destination."manualRank"
+        SELECT item.id, destination."manualRank"
         FROM ranked item CROSS JOIN origin
         JOIN ranked destination ON destination.position = CASE
           WHEN item.position = origin.position THEN ${change.position}::bigint
@@ -227,16 +223,10 @@ async function reorder(
       `);
     } else {
       await tx.$queryRaw(sql`
-        ${changes}, primary_sets AS (
-          UPDATE "StudySet" s SET "manualRank" = moves."manualRank"
-          FROM moves WHERE NOT moves."coOwned" AND s.id = moves.id AND s."userId" = ${userId}
-        ), viewers AS (
-          UPDATE "StudySetViewer" v SET "manualRank" = moves."manualRank"
-          FROM moves WHERE moves."coOwned" AND v."studySetId" = moves.id AND v."userId" = ${userId}
-        )
-        UPDATE "StudySetCoOwner" co SET "manualRank" = moves."manualRank"
-        FROM moves WHERE moves."coOwned" AND co."studySetId" = moves.id AND co."userId" = ${userId}
-        RETURNING co."studySetId"
+        ${changes}
+        UPDATE "LibraryEntry" e SET "manualRank" = moves."manualRank"
+        FROM moves WHERE e."studySetId" = moves.id AND e."userId" = ${userId}
+        RETURNING e."studySetId"
       `);
     }
     return { position: change.position };
@@ -306,18 +296,12 @@ export function registerFolders(app: Hono<Context>) {
       `);
       await tx.$queryRaw(sql`
         WITH moved AS MATERIALIZED (
-          SELECT id, "coOwned", nextval('library_manual_rank_seq'::regclass) AS rank
+          SELECT id, nextval('library_manual_rank_seq'::regclass) AS rank
           FROM (${setLocations(userId)}) locations WHERE "folderId" = ${id} ORDER BY "manualRank", id
-        ), primary_sets AS (
-          UPDATE "StudySet" s SET "folderId" = NULL, course = '', "manualRank" = moved.rank
-          FROM moved WHERE NOT moved."coOwned" AND s.id = moved.id AND s."userId" = ${userId}
-        ), viewers AS (
-          UPDATE "StudySetViewer" v SET "folderId" = NULL, course = '', "manualRank" = moved.rank
-          FROM moved WHERE moved."coOwned" AND v."studySetId" = moved.id AND v."userId" = ${userId}
         )
-        UPDATE "StudySetCoOwner" co SET "folderId" = NULL, course = '', "manualRank" = moved.rank
-        FROM moved WHERE moved."coOwned" AND co."studySetId" = moved.id AND co."userId" = ${userId}
-        RETURNING co."studySetId"
+        UPDATE "LibraryEntry" e SET "folderId" = NULL, "manualRank" = moved.rank
+        FROM moved WHERE e."studySetId" = moved.id AND e."userId" = ${userId}
+        RETURNING e."studySetId"
       `);
       await tx.$executeRaw`DELETE FROM "LibraryFolder" WHERE id = ${id} AND "userId" = ${userId}`;
     });

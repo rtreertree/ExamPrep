@@ -30,53 +30,53 @@ export async function planBackupReviews(
     }),
     ...backup.viewerReviews.map((review) => ({ ...review, viewer: true })),
   ];
-  const owned = candidates.filter(({ viewer }) => !viewer);
-  const viewers = candidates.filter(({ viewer }) => viewer);
-  if (!candidates.length) return { owned, viewers, reviewSkips };
+  if (!candidates.length) return { eligible: [], reviewSkips };
   const ownedIds = JSON.stringify([
-    ...new Set(owned.map(({ studySetId }) => studySetId)),
+    ...new Set(candidates.filter((r) => !r.viewer).map((r) => r.studySetId)),
   ]);
   const viewerIds = JSON.stringify([
-    ...new Set(viewers.map(({ studySetId }) => studySetId)),
+    ...new Set(backup.viewerReviews.map((r) => r.studySetId)),
   ]);
-
   const decks = await db.$queryRaw<
-    { id: string; content: StudyContent | null; viewer: boolean }[]
+    { id: string; content: StudyContent; viewer: boolean }[]
   >`
-    SELECT s.id, CASE WHEN s."userId" = ${userId} THEN s.content END AS content, false AS viewer
-      FROM "StudySet" s WHERE s.id IN (SELECT jsonb_array_elements_text(${ownedIds}::jsonb))
-    UNION ALL
-    SELECT s.id, s.content, true AS viewer FROM "StudySetViewer" v JOIN "StudySet" s ON s.id = v."studySetId"
-      WHERE v."userId" = ${userId} AND s.kind = 'flashcards'
-        AND s.id IN (SELECT jsonb_array_elements_text(${viewerIds}::jsonb))`;
-  const deckCards = new Map<string, Map<string, Card> | null>();
+    SELECT s.id, s.content, s."userId" <> ${userId} AS viewer
+    FROM "LibraryEntry" e JOIN "StudySet" s ON s.id = e."studySetId"
+    WHERE e."userId" = ${userId}
+      AND ((s."userId" = ${userId} AND s.id IN (SELECT jsonb_array_elements_text(${ownedIds}::jsonb)))
+        OR (s."userId" <> ${userId} AND NOT e."coOwner"
+          AND s.id IN (SELECT jsonb_array_elements_text(${viewerIds}::jsonb))))
+  `;
+  const deckKey = (viewer: boolean, id: string) => JSON.stringify([viewer, id]);
+  const cardsByDeck = new Map<string, Map<string, Card> | null>();
   for (const { id, content, viewer } of decks) {
     const deck = decodeStorage(content);
-    deckCards.set(
-      JSON.stringify([viewer, id]),
-      deck?.kind === "flashcards" && Array.isArray(deck.cards)
+    cardsByDeck.set(
+      deckKey(viewer, id),
+      deck.kind === "flashcards"
         ? new Map(deck.cards.map((card) => [card.id, card]))
         : null,
     );
   }
   if (!restore) {
-    for (const set of backup.sets) {
-      const id = setIds.get(set.id);
-      if (!id || set.content.kind !== "flashcards") continue;
-      const key = JSON.stringify([false, id]);
-      if (!deckCards.has(key))
-        deckCards.set(
+    const scheduled = new Set(
+      backup.reviews.map(({ studySetId }) => studySetId),
+    );
+    for (const { id, content } of backup.sets) {
+      const destination = setIds.get(id);
+      if (!destination || !scheduled.has(id) || content.kind !== "flashcards")
+        continue;
+      const key = deckKey(false, destination);
+      if (!cardsByDeck.has(key))
+        cardsByDeck.set(
           key,
-          new Map(set.content.cards.map((card) => [card.id, card])),
+          new Map(content.cards.map((card) => [card.id, card])),
         );
     }
   }
-
   const outcomes = await Promise.all(
     candidates.map(async (review) => {
-      const cards = deckCards.get(
-        JSON.stringify([review.viewer, review.studySetId]),
-      );
+      const cards = cardsByDeck.get(deckKey(review.viewer, review.studySetId));
       if (!cards) return "inaccessible";
       const card = cards.get(review.cardId);
       return card && (await cardFingerprint(card)) === review.fingerprint
@@ -90,24 +90,17 @@ export async function planBackupReviews(
     reviewSkips[outcome]++;
     return false;
   });
-  const primary = eligible.filter(({ viewer }) => !viewer);
-  const viewer = eligible.filter(({ viewer }) => viewer);
 
   if (!restore && eligible.length) {
     const [existing] = await db.$queryRaw<{ count: number }[]>`
-      WITH input AS (
-        SELECT * FROM jsonb_to_recordset(${JSON.stringify(eligible)}::jsonb) AS r(
-          "studySetId" text, "cardId" text, viewer bool, "attemptStartedAt" timestamp)
-      )
-      SELECT count(*)::int AS count FROM input i WHERE
-        (NOT i.viewer AND EXISTS (SELECT 1 FROM "CardReview" r
-          WHERE r."studySetId" = i."studySetId" AND r."cardId" = i."cardId"))
-        OR (i.viewer AND EXISTS (SELECT 1 FROM "ViewerCardReview" r
-          WHERE r."studySetId" = i."studySetId" AND r."userId" = ${userId}
-            AND r."cardId" = i."cardId" AND r."attemptStartedAt" >= i."attemptStartedAt"))`;
+      SELECT count(*)::int AS count
+      FROM jsonb_to_recordset(${JSON.stringify(eligible)}::jsonb) AS i(
+        "studySetId" text, "cardId" text, viewer bool, "attemptStartedAt" timestamp)
+      JOIN "CardReview" r USING ("studySetId", "cardId")
+      WHERE r."userId" = ${userId} AND (NOT i.viewer OR r."attemptStartedAt" >= i."attemptStartedAt")`;
     reviewSkips.unchanged = existing.count;
   }
-  return { owned: primary, viewers: viewer, reviewSkips };
+  return { eligible, reviewSkips };
 }
 
 export async function restoreBackupReviews(
@@ -116,35 +109,26 @@ export async function restoreBackupReviews(
   backup: Backup,
   setIds: Map<string, string>,
 ) {
-  const { owned, viewers, reviewSkips } = await planBackupReviews(
+  const { eligible, reviewSkips } = await planBackupReviews(
     db,
     userId,
     backup,
     setIds,
     true,
   );
-  const primaryCount = owned.length
+  const reviewCount = eligible.length
     ? await db.$executeRaw`
-    INSERT INTO "CardReview" ("studySetId", "cardId", fingerprint, streak, "dueAt", "attemptStartedAt")
-    SELECT "studySetId", "cardId", fingerprint, streak, "dueAt", "attemptStartedAt"
-    FROM jsonb_to_recordset(${JSON.stringify(owned)}::jsonb) AS r(
-      "studySetId" text, "cardId" text, fingerprint text, streak int, "dueAt" timestamp, "attemptStartedAt" timestamp)
-    ORDER BY "studySetId", "cardId"
-    ON CONFLICT ("studySetId", "cardId") DO NOTHING`
+      INSERT INTO "CardReview" ("userId", "studySetId", "cardId", fingerprint, streak, "dueAt", "attemptStartedAt")
+      SELECT ${userId}, "studySetId", "cardId", fingerprint, streak, "dueAt", "attemptStartedAt"
+      FROM jsonb_to_recordset(${JSON.stringify(eligible)}::jsonb) AS r(
+        "studySetId" text, "cardId" text, fingerprint text, streak int, "dueAt" timestamp, "attemptStartedAt" timestamp)
+      ORDER BY "studySetId", "cardId"
+      ON CONFLICT ("userId", "studySetId", "cardId") DO UPDATE SET
+        fingerprint = EXCLUDED.fingerprint, streak = EXCLUDED.streak,
+        "dueAt" = EXCLUDED."dueAt", "attemptStartedAt" = EXCLUDED."attemptStartedAt"
+      WHERE "CardReview"."attemptStartedAt" < EXCLUDED."attemptStartedAt"
+        AND EXISTS (SELECT 1 FROM "StudySet" s WHERE s.id = EXCLUDED."studySetId" AND s."userId" <> ${userId})`
     : 0;
-  const viewerCount = viewers.length
-    ? await db.$executeRaw`
-    INSERT INTO "ViewerCardReview" ("studySetId", "userId", "cardId", fingerprint, streak, "dueAt", "attemptStartedAt")
-    SELECT "studySetId", ${userId}, "cardId", fingerprint, streak, "dueAt", "attemptStartedAt"
-    FROM jsonb_to_recordset(${JSON.stringify(viewers)}::jsonb) AS r(
-      "studySetId" text, "cardId" text, fingerprint text, streak int, "dueAt" timestamp, "attemptStartedAt" timestamp)
-    ORDER BY "studySetId", "cardId"
-    ON CONFLICT ("studySetId", "userId", "cardId") DO UPDATE SET
-      fingerprint = EXCLUDED.fingerprint, streak = EXCLUDED.streak,
-      "dueAt" = EXCLUDED."dueAt", "attemptStartedAt" = EXCLUDED."attemptStartedAt"
-    WHERE "ViewerCardReview"."attemptStartedAt" < EXCLUDED."attemptStartedAt"`
-    : 0;
-  const reviewCount = primaryCount + viewerCount;
-  reviewSkips.unchanged = owned.length + viewers.length - reviewCount;
+  reviewSkips.unchanged = eligible.length - reviewCount;
   return { reviewCount, reviewSkips };
 }

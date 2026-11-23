@@ -1,4 +1,3 @@
-import { sqltag as sql } from "@prisma/client/runtime/wasm-compiler-edge";
 import { HTTPException } from "hono/http-exception";
 import type { Attempt, Prisma } from "../generated/prisma/client";
 import { own, type Response, type Responses } from "../shared/attempts";
@@ -13,8 +12,6 @@ import {
 } from "./setAccess";
 import { progressContent, SNAPSHOT_VERSION } from "./snapshots";
 import { decodeStorage, encodeStorage } from "./storage";
-
-import type { OwnershipRole } from "../shared/sharing";
 
 type ReviewDb = Pick<Database, "$queryRaw">;
 type ReviewSchedule = {
@@ -52,36 +49,11 @@ export function nextCardReview(
   return { streak, dueAt: new Date(at.getTime() + interval * day) };
 }
 
-function reviewStorage(userId: string, role: OwnershipRole) {
-  return role === "primary"
-    ? {
-        table: sql`"CardReview"`,
-        ownerColumn: sql``,
-        ownerValue: sql``,
-        ownerFilter: sql``,
-      }
-    : {
-        table:
-          role === "viewer"
-            ? sql`"ViewerCardReview"`
-            : sql`"CoOwnerCardReview"`,
-        ownerColumn: sql`, "userId"`,
-        ownerValue: sql`, ${userId}`,
-        ownerFilter: sql`AND "userId" = ${userId}`,
-      };
-}
-
-function readSchedules(
-  db: Pick<ReviewDb, "$queryRaw">,
-  setId: string,
-  userId: string,
-  role: OwnershipRole,
-) {
-  const { table, ownerFilter } = reviewStorage(userId, role);
-  return db.$queryRaw<ReviewSchedule[]>(sql`
-    SELECT "cardId", fingerprint, streak, "dueAt" FROM ${table}
-    WHERE "studySetId" = ${setId} ${ownerFilter}
-  `);
+function readSchedules(db: ReviewDb, setId: string, userId: string) {
+  return db.$queryRaw<ReviewSchedule[]>`
+    SELECT "cardId", fingerprint, streak, "dueAt" FROM "CardReview"
+    WHERE "studySetId" = ${setId} AND "userId" = ${userId}
+  `;
 }
 
 async function activeReview(
@@ -100,7 +72,6 @@ export async function recordSpacedReview(
   db: ReviewDb,
   attempt: Attempt,
   completedAt: Date,
-  role: OwnershipRole,
 ) {
   const { userId, studySetId, startedAt } = attempt;
   if (!attempt.reviewMode || !studySetId) return;
@@ -113,7 +84,7 @@ export async function recordSpacedReview(
   });
   if (!rated.length) return;
   const existing = new Map(
-    (await readSchedules(db, studySetId, userId, role)).map((row) => [
+    (await readSchedules(db, studySetId, userId)).map((row) => [
       row.cardId,
       row,
     ]),
@@ -133,16 +104,15 @@ export async function recordSpacedReview(
       };
     }),
   );
-  const { table, ownerColumn, ownerValue } = reviewStorage(userId, role);
-  await db.$queryRaw(sql`
-    INSERT INTO ${table} ("studySetId" ${ownerColumn}, "cardId", fingerprint, streak, "dueAt", "attemptStartedAt")
-    SELECT ${studySetId} ${ownerValue}, u."cardId", u.fingerprint, u.streak, u."dueAt", ${startedAt}
+  await db.$queryRaw`
+    INSERT INTO "CardReview" ("studySetId", "userId", "cardId", fingerprint, streak, "dueAt", "attemptStartedAt")
+    SELECT ${studySetId}, ${userId}, u."cardId", u.fingerprint, u.streak, u."dueAt", ${startedAt}
     FROM jsonb_to_recordset(${JSON.stringify(updates)}::jsonb) AS u("cardId" text, fingerprint text, streak int, "dueAt" timestamp)
-    ON CONFLICT ("studySetId" ${ownerColumn}, "cardId") DO UPDATE SET fingerprint = EXCLUDED.fingerprint,
+    ON CONFLICT ("userId", "studySetId", "cardId") DO UPDATE SET fingerprint = EXCLUDED.fingerprint,
       streak = EXCLUDED.streak, "dueAt" = EXCLUDED."dueAt", "attemptStartedAt" = EXCLUDED."attemptStartedAt"
-    WHERE ${table}."attemptStartedAt" < EXCLUDED."attemptStartedAt"
+    WHERE "CardReview"."attemptStartedAt" < EXCLUDED."attemptStartedAt"
     RETURNING "cardId"
-  `);
+  `;
 }
 
 async function planReview(
@@ -160,7 +130,7 @@ async function planReview(
   const today = new Date(Math.floor(now.getTime() / day) * day);
   const tomorrow = new Date(today.getTime() + day);
   const [schedules, counted, activeAttemptId] = await Promise.all([
-    readSchedules(db, setId, userId, set.ownershipRole),
+    readSchedules(db, setId, userId),
     db.$queryRaw<{ count: number }[]>`
       SELECT COALESCE(SUM(COALESCE((result->>'known')::int, 0)
         + COALESCE((result->>'reviewAgain')::int, 0)), 0)::int AS count FROM "Attempt"
@@ -247,15 +217,10 @@ export async function changeReviewLimit(
           "Finish the open review session before changing its daily limit.",
       });
     if (set.kind !== "flashcards") throw unavailable();
-    if (set.ownershipRole === "primary")
-      await tx.$executeRaw`UPDATE "StudySet" SET "reviewLimit" = ${limit} WHERE id = ${setId}`;
-    else if (set.ownershipRole === "viewer")
-      await tx.$executeRaw`UPDATE "StudySetViewer" SET "reviewLimit" = ${limit} WHERE "studySetId" = ${setId} AND "userId" = ${userId}`;
-    else
-      await tx.$executeRaw`
-        UPDATE "StudySetCoOwner" SET "reviewLimit" = ${limit}
-        WHERE "studySetId" = ${setId} AND "userId" = ${userId}
-      `;
+    await tx.$executeRaw`
+      UPDATE "LibraryEntry" SET "reviewLimit" = ${limit}
+      WHERE "studySetId" = ${setId} AND "userId" = ${userId}
+    `;
     return (
       await planReview(
         tx,

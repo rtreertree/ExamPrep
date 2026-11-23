@@ -26,24 +26,18 @@ import {
   sortField,
 } from "./libraryOrder";
 import { read, schema } from "./request";
-import { conflict, json, unavailable } from "./routeHelpers";
+import { conflict, unavailable } from "./routeHelpers";
 import {
-  joinMembership,
-  joinOwnerFolder,
-  readLockedLibrarySet,
-  lockOwnerLibrary,
+  joinEntry,
+  joinEntryFolder,
   organizeSets,
-  librarySetIds,
-  ownerPreferences,
-  ownerFolderId,
-  ownerLastStudiedAt,
-  ownerRank,
-  ownershipRole,
+  entryPreferences,
+  entryRole,
   readLibrarySet,
   type LibrarySet,
 } from "./setAccess";
 import { encodeStorage, decodeStorage } from "./storage";
-import { createStudySet } from "./setCreation";
+import { createStudySet, editStudySet } from "./setCreation";
 
 const courseSchema = z.string().trim().max(100);
 const organizationFields = {
@@ -110,9 +104,9 @@ export function registerSetRoutes(app: Hono<Context>) {
     const direction = order === "asc" ? sql`ASC` : sql`DESC`;
     const sortSql = {
       updated: sql`s."updatedAt" ${direction}`,
-      studied: sql`${ownerLastStudiedAt} ${direction} NULLS LAST, s."updatedAt" DESC`,
+      studied: sql`e."lastStudiedAt" ${direction} NULLS LAST, s."updatedAt" DESC`,
       title: sql`lower(s.title) ${direction}, s.title ${direction}`,
-      manual: sql`${ownerRank}`,
+      manual: sql`e."manualRank"`,
     }[sort];
     const db = c.get("db");
     const userId = c.get("userId");
@@ -134,7 +128,7 @@ export function registerSetRoutes(app: Hono<Context>) {
         })[]
       >(sql`
         SELECT s.id, s."userId", s.title, s.kind, s.revision, s."createdAt",
-          s."updatedAt", ${ownershipRole}, ${ownerPreferences},
+          s."updatedAt", ${entryRole} AS "ownershipRole", ${entryPreferences},
           COALESCE(jsonb_array_length(s.content->'questions'), jsonb_array_length(s.content->'cards')) AS count,
           ${manual} AS manual,
           (SELECT jsonb_build_object(
@@ -144,12 +138,11 @@ export function registerSetRoutes(app: Hono<Context>) {
           )
           FROM "Attempt" a WHERE a."studySetId" = s.id AND a."userId" = ${userId}
           AND a.status IN ('in_progress', 'reviewing') ORDER BY a."updatedAt" DESC, a.id ASC LIMIT 1) AS continuation
-        FROM "StudySet" s ${joinMembership(userId)} ${joinOwnerFolder}
-        WHERE s.id IN ${librarySetIds(userId)}
-          AND COALESCE(co.archived, s.archived) = ${archived}
+        FROM "StudySet" s ${joinEntry(userId)} ${joinEntryFolder}
+        WHERE e.archived = ${archived}
           AND (${kind ?? null}::text IS NULL OR s.kind = ${kind ?? null}::text)
           AND (${storedCourse}::text IS NULL OR COALESCE(f.name, '') = ${storedCourse}::text)
-          AND (NOT ${folder !== undefined} OR (${ownerFolderId}) IS NOT DISTINCT FROM ${folderId}::text)
+          AND (NOT ${folder !== undefined} OR (e."folderId") IS NOT DISTINCT FROM ${folderId}::text)
           AND strpos(lower(s.title), lower(${search})) > 0
         ORDER BY ${sort === "manual" ? sql`` : sql`pinned DESC,`} ${sortSql},
           s.id ASC LIMIT ${LIST_PAGE_SIZE + 1} OFFSET ${page * LIST_PAGE_SIZE}
@@ -175,8 +168,8 @@ export function registerSetRoutes(app: Hono<Context>) {
     const rows = await c.get("db").$queryRaw<CourseSummary[]>(sql`
       SELECT course, COUNT(*)::int AS count FROM (
         SELECT COALESCE(f.name, '') AS course
-        FROM "StudySet" s ${joinMembership(userId)} ${joinOwnerFolder}
-        WHERE s.id IN ${librarySetIds(userId)} AND COALESCE(co.archived, s.archived) = ${archived}
+        FROM "StudySet" s ${joinEntry(userId)} ${joinEntryFolder}
+        WHERE e.archived = ${archived}
       ) courses
       GROUP BY course ORDER BY (course = ''), lower(course), course
       LIMIT ${LIST_PAGE_SIZE + 1} OFFSET ${page * LIST_PAGE_SIZE}
@@ -255,33 +248,15 @@ export function registerSetRoutes(app: Hono<Context>) {
       z.strictObject({ revision: revisionSchema, content: z.unknown() }),
       await read(c.req.raw),
     );
-    const content = validateContent(input.content);
-    const db = c.get("db");
-    const userId = c.get("userId");
-    const id = c.req.param("id");
-    const storedContent = json(content);
-    const set = await db.$transaction(async (tx) => {
-      await lockOwnerLibrary(tx, id);
-      const membership = await readLockedLibrarySet(tx, id, userId);
-      if (membership.ownershipRole === "viewer") throw unavailable();
-      const changed = await tx.studySet.updateMany({
-        where: {
-          id,
-          OR: [{ userId }, { coOwners: { some: { userId } } }],
-          revision: input.revision,
-          NOT: { content: { equals: storedContent } },
-        },
-        data: {
-          content: storedContent,
-          title: encodeStorage(content.title),
-          kind: content.kind,
-          revision: { increment: 1 },
-        },
-      });
-      const saved = await readLibrarySet(tx, id, userId);
-      if (!changed.count && saved.revision !== input.revision) throw conflict();
-      return saved;
-    });
+    const requestId = schema(z.uuid().optional(), c.req.query("requestId"));
+    const set = await editStudySet(
+      c.get("db"),
+      c.get("userId"),
+      c.req.param("id"),
+      validateContent(input.content),
+      input.revision,
+      requestId,
+    );
     return c.json(ownedSetResponse(set));
   });
   app.patch("/api/sets/:id/organization", async (c) => {

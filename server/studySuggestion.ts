@@ -1,7 +1,7 @@
 import { sqltag as sql } from "@prisma/client/runtime/wasm-compiler-edge";
 import type { StudySuggestion } from "../shared/studySuggestion";
 import type { Database } from "./db";
-import { joinMembership, librarySetIds, ownerLastStudiedAt } from "./setAccess";
+import { joinEntry } from "./setAccess";
 import { decodeStorage } from "./storage";
 
 export async function readStudySuggestion(
@@ -12,10 +12,10 @@ export async function readStudySuggestion(
     { suggestion: StudySuggestion | null }[]
   >(sql`
     WITH active_sets AS (
-      SELECT s.id, s."updatedAt", ${ownerLastStudiedAt} AS studied,
-        COALESCE(co.pinned, s.pinned) AS pinned
-      FROM "StudySet" s ${joinMembership(userId)}
-      WHERE s.id IN ${librarySetIds(userId)} AND NOT COALESCE(co.archived, s.archived)
+      SELECT s.id, s."updatedAt", e."lastStudiedAt" AS studied,
+        e.pinned AS pinned
+      FROM "StudySet" s ${joinEntry(userId)}
+      WHERE NOT e.archived
     ),
     unfinished AS (
       SELECT a.id FROM "Attempt" a JOIN active_sets s ON s.id = a."studySetId"

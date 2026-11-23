@@ -29,11 +29,10 @@ model User {
   studySets     StudySet[]
   attempts      Attempt[]
   conversions   CloneConversion[]
-  viewerSets    StudySetViewer[]
-  coOwnedSets   StudySetCoOwner[]
   invitations   StudySetInvitation[]
   copyImports   StudySetCopyImport[]
   libraryFolders LibraryFolder[]
+  libraryEntries LibraryEntry[]
   setOperations StudySetOperation[]
   backupRestores BackupSetRestore[]
 
@@ -107,9 +106,7 @@ model LibraryFolder {
   user       User @relation(fields: [userId], references: [id], onDelete: Cascade)
   name       String
   manualRank BigInt @default(dbgenerated("nextval('library_manual_rank_seq'::regclass)"))
-  sets       StudySet[]
-  viewerSets StudySetViewer[]
-  coOwnedSets StudySetCoOwner[]
+  entries    LibraryEntry[]
 
   @@unique([userId, id])
   @@unique([userId, name])
@@ -119,26 +116,25 @@ model StudySet {
   id            String       @id @default(uuid())
   userId        String
   user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  title         String
-  kind          String
+  title         String @default(dbgenerated())
+  kind          String @default(dbgenerated())
   published     Boolean      @default(false)
   content       Json
   contentFingerprint String @default(dbgenerated())
   revision      Int          @default(1)
-  course        String       @default("")
-  folderId      String?
-  folder        LibraryFolder? @relation(fields: [userId, folderId], references: [userId, id], onDelete: NoAction)
-  manualRank    BigInt @default(dbgenerated("nextval('library_manual_rank_seq'::regclass)"))
-  pinned        Boolean      @default(false)
-  archived      Boolean      @default(false)
-  lastStudiedAt DateTime?
-  reviewLimit   Int          @default(20)
+  // The cutover keeps these columns for reconciliation until the legacy cleanup migration.
+  course        String @default("") @ignore
+  folderId      String? @ignore
+  manualRank    BigInt @default(dbgenerated("nextval('library_manual_rank_seq'::regclass)")) @ignore
+  pinned        Boolean @default(false) @ignore
+  archived      Boolean @default(false) @ignore
+  lastStudiedAt DateTime? @ignore
+  reviewLimit   Int @default(20) @ignore
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
   attempts      Attempt[]
-  cardReviews   CardReview[]
-  viewers       StudySetViewer[]
-  coOwners      StudySetCoOwner[]
+  entries       LibraryEntry[]
+  ownerEntry    LibraryEntry @relation("PrimaryEntry", fields: [userId, id], references: [userId, studySetId], onDelete: NoAction, onUpdate: NoAction, map: "StudySet_owner_entry_fkey")
   invitations   StudySetInvitation[]
   copyLink      StudySetCopyLink?
   copyImport    StudySetCopyImport?
@@ -146,45 +142,35 @@ model StudySet {
   @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "study_set_title_search")
   @@index([published, kind, id])
   @@index([published, id])
-  @@index([userId, id])
   @@index([userId, updatedAt])
   @@index([userId, contentFingerprint])
   @@index([userId, archived, pinned, lastStudiedAt])
   @@index([userId, folderId, archived, manualRank])
+  @@unique([userId, id])
 }
 
-model StudySetCoOwner {
+model LibraryEntry {
+  userId        String
+  user          User @relation(fields: [userId], references: [id], onDelete: Cascade)
   studySetId    String
   studySet      StudySet @relation(fields: [studySetId], references: [id], onDelete: Cascade)
-  userId        String
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  course        String   @default("")
+  primarySet    StudySet? @relation("PrimaryEntry")
   folderId      String?
   folder        LibraryFolder? @relation(fields: [userId, folderId], references: [userId, id], onDelete: NoAction)
   manualRank    BigInt @default(dbgenerated("nextval('library_manual_rank_seq'::regclass)"))
-  pinned        Boolean  @default(false)
-  archived      Boolean  @default(false)
+  pinned        Boolean @default(false)
+  archived      Boolean @default(false)
   lastStudiedAt DateTime?
-  reviewLimit   Int      @default(20)
-  cardReviews   CoOwnerCardReview[]
+  reviewLimit   Int @default(20)
+  coOwner       Boolean @default(false)
+  discovered    Boolean @default(false)
+  linkNonce     String?
+  cardReviews   CardReview[]
 
-  @@id([studySetId, userId])
-  @@index([userId, studySetId])
+  @@id([userId, studySetId])
+  @@index([studySetId, userId])
   @@index([userId, archived, pinned, lastStudiedAt])
   @@index([userId, folderId, archived, manualRank])
-}
-
-model CoOwnerCardReview {
-  studySetId       String
-  userId           String
-  owner            StudySetCoOwner @relation(fields: [studySetId, userId], references: [studySetId, userId], onDelete: Cascade)
-  cardId           String
-  fingerprint      String
-  streak           Int
-  dueAt            DateTime
-  attemptStartedAt DateTime
-
-  @@id([studySetId, userId, cardId])
 }
 
 model StudySetInvitation {
@@ -218,15 +204,16 @@ model StudySetCopyImport {
 }
 
 model CardReview {
+  userId           String
   studySetId       String
-  studySet         StudySet @relation(fields: [studySetId], references: [id], onDelete: Cascade)
+  entry            LibraryEntry @relation(fields: [userId, studySetId], references: [userId, studySetId], onDelete: Cascade, map: "CardReview_entry_fkey")
   cardId           String
   fingerprint      String
   streak           Int
   dueAt            DateTime
   attemptStartedAt DateTime
 
-  @@id([studySetId, cardId])
+  @@id([userId, studySetId, cardId], map: "CardReview_entry_pkey")
 }
 
 model Attempt {
@@ -260,43 +247,6 @@ model Attempt {
   @@index([studySetId, reviewMode, completedAt])
 }
 
-model StudySetViewer {
-  studySetId    String
-  studySet      StudySet @relation(fields: [studySetId], references: [id], onDelete: Cascade)
-  userId        String
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  course        String   @default("")
-  folderId      String?
-  folder        LibraryFolder? @relation(fields: [userId, folderId], references: [userId, id], onDelete: NoAction)
-  manualRank    BigInt @default(dbgenerated("nextval('library_manual_rank_seq'::regclass)"))
-  pinned        Boolean  @default(false)
-  archived      Boolean  @default(false)
-  lastStudiedAt DateTime?
-  reviewLimit   Int      @default(20)
-  linkNonce     String?
-  discovered    Boolean @default(false)
-  cardReviews   ViewerCardReview[]
-
-  @@id([studySetId, userId])
-  @@index([userId, studySetId])
-  @@index([userId, archived, pinned, lastStudiedAt])
-  @@index([userId, folderId, archived, manualRank])
-}
-
-model ViewerCardReview {
-  studySetId       String
-  userId           String
-  owner            StudySetViewer @relation(fields: [studySetId, userId], references: [studySetId, userId], onDelete: Cascade)
-  cardId           String
-  fingerprint      String
-  streak           Int
-  dueAt            DateTime
-  attemptStartedAt DateTime
-
-  @@id([studySetId, userId, cardId])
-}
-
-
 // Historical inventory and recovery records are retained independently of the live set.
 model CloneConversion {
   copyId String @id
@@ -322,6 +272,7 @@ model StudySetOperation {
   inputIdentity String
   setId String?
   reused Boolean @default(false)
+  resultRevision Int?
 
   @@id([userId, requestId])
 }

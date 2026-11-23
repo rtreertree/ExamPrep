@@ -86,8 +86,8 @@ async function readShareSettings(
     SELECT l.nonce, COALESCE(l."guestAccess", false) AS "guestAccess",
       COALESCE((
         SELECT jsonb_agg(jsonb_build_object('id', u.id, 'email', u.email) ORDER BY u.email, u.id)
-        FROM "StudySetCoOwner" co JOIN "user" u ON u.id = co."userId"
-        WHERE co."studySetId" = s.id
+        FROM "LibraryEntry" co JOIN "user" u ON u.id = co."userId"
+        WHERE co."studySetId" = s.id AND co."coOwner"
       ), '[]'::jsonb) AS "coOwners",
       COALESCE((
         SELECT jsonb_agg(jsonb_build_object('id', i.id, 'email', u.email) ORDER BY i."createdAt", i.id)
@@ -152,18 +152,22 @@ async function saveLiveSet(
       SELECT "studySetId" AS id FROM "StudySetCopyLink" WHERE nonce=${nonce}`
           )[0]?.id;
     if (!id || !(await lockSet(tx, id))) throw unavailableSet();
-    const [set] = await tx.$queryRaw<{ member: boolean }[]>`
-      SELECT s."userId"=${userId} OR EXISTS(SELECT 1 FROM "StudySetCoOwner" co WHERE co."studySetId"=s.id AND co."userId"=${userId}) AS member
-      FROM "StudySet" s WHERE s.id=${id} AND
-      ((${nonce}::text IS NULL AND s.published) OR EXISTS(SELECT 1 FROM "StudySetCopyLink" l WHERE l."studySetId"=s.id AND l.nonce=${nonce}))
+    const [set] = await tx.$queryRaw<{ primary: boolean }[]>`
+      SELECT s."userId" = ${userId} AS "primary"
+      FROM "StudySet" s WHERE s.id = ${id} AND
+      ((${nonce}::text IS NULL AND s.published) OR EXISTS (
+        SELECT 1 FROM "StudySetCopyLink" l WHERE l."studySetId" = s.id AND l.nonce = ${nonce}
+      ))
     `;
     if (!set) throw unavailableSet();
-    if (!set.member)
+    if (!set.primary)
       await tx.$executeRaw`
-      INSERT INTO "StudySetViewer" ("studySetId","userId",discovered,"linkNonce") VALUES (${id},${userId},${nonce === null},${nonce})
-      ON CONFLICT ("studySetId","userId") DO UPDATE SET discovered="StudySetViewer".discovered OR EXCLUDED.discovered,
-        "linkNonce"=COALESCE(EXCLUDED."linkNonce","StudySetViewer"."linkNonce")
-    `;
+        INSERT INTO "LibraryEntry" ("studySetId", "userId", discovered, "linkNonce")
+        VALUES (${id}, ${userId}, ${nonce === null}, ${nonce})
+        ON CONFLICT ("userId", "studySetId") DO UPDATE
+        SET discovered = "LibraryEntry".discovered OR EXCLUDED.discovered,
+          "linkNonce" = COALESCE(EXCLUDED."linkNonce", "LibraryEntry"."linkNonce")
+      `;
     return { id };
   });
 }
@@ -220,7 +224,11 @@ export function registerSharing(app: Hono<Context>, secret: string) {
     await c.get("db").$transaction(async (tx) => {
       await lockLibrary(tx, userId);
       await lockSet(tx, id);
-      await tx.$executeRaw`DELETE FROM "StudySetViewer" WHERE "studySetId"=${id} AND "userId"=${userId}`;
+      await tx.$executeRaw`
+        DELETE FROM "LibraryEntry" e USING "StudySet" s WHERE s.id = ${id}
+          AND e."studySetId" = s.id AND e."userId" = ${userId}
+          AND s."userId" <> e."userId" AND NOT e."coOwner"
+      `;
     });
     return c.body(null, 204);
   });
@@ -245,7 +253,7 @@ export function registerSharing(app: Hono<Context>, secret: string) {
             message: "No Exam Prep account uses that email.",
           });
         const [coOwner] = await tx.$queryRaw<{ userId: string }[]>`
-        SELECT "userId" FROM "StudySetCoOwner" WHERE "studySetId" = ${setId} AND "userId" = ${recipient.id}
+        SELECT "userId" FROM "LibraryEntry" WHERE "studySetId" = ${setId} AND "userId" = ${recipient.id} AND "coOwner"
       `;
         if (recipient.id === userId || coOwner)
           throw new HTTPException(409, {
@@ -293,11 +301,7 @@ export function registerSharing(app: Hono<Context>, secret: string) {
         DELETE FROM "StudySetInvitation" WHERE id = ${id} AND "userId" = ${userId}
       `;
         if (!consumed) throw invalidInvitation();
-        if (accept)
-          await tx.$executeRaw`
-          INSERT INTO "StudySetCoOwner" ("studySetId", "userId") VALUES (${studySetId}, ${userId})
-          ON CONFLICT ("studySetId", "userId") DO NOTHING
-        `;
+        if (accept) await grantCoOwnership(tx, studySetId, userId);
         return { studySetId, accepted: accept };
       }),
     );
@@ -327,16 +331,30 @@ export async function setLink(tx: WriteDb, setId: string, enabled: boolean) {
     await tx.$executeRaw`DELETE FROM "StudySetCopyLink" WHERE "studySetId" = ${setId}`;
 }
 
+export async function grantCoOwnership(
+  tx: WriteDb,
+  setId: string,
+  userId: string,
+) {
+  await tx.$executeRaw`
+    INSERT INTO "LibraryEntry" ("studySetId", "userId", "coOwner")
+    VALUES (${setId}, ${userId}, true)
+    ON CONFLICT ("userId", "studySetId") DO UPDATE SET "coOwner" = true
+  `;
+}
+
 export async function revokeCoOwner(
   tx: WriteDb,
   setId: string,
   userId: string,
 ) {
-  const removed = await tx.$executeRaw`
-        DELETE FROM "StudySetCoOwner" WHERE "studySetId" = ${setId} AND "userId" = ${userId}
-      `;
-  if (removed)
-    await tx.$executeRaw`
-          UPDATE "Attempt" SET "studySetId" = NULL WHERE "studySetId" = ${setId} AND "userId" = ${userId}
-        `;
+  await tx.$executeRaw`
+    DELETE FROM "LibraryEntry" e USING "StudySet" s
+    WHERE s.id = ${setId} AND e."studySetId" = s.id AND e."userId" = ${userId}
+      AND s."userId" <> e."userId" AND e."coOwner" AND NOT e.discovered AND e."linkNonce" IS NULL
+  `;
+  await tx.$executeRaw`
+    UPDATE "LibraryEntry" SET "coOwner" = false
+    WHERE "studySetId" = ${setId} AND "userId" = ${userId} AND "coOwner"
+  `;
 }

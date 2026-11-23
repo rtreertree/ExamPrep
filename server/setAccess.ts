@@ -8,51 +8,41 @@ import { encodeStorage } from "./storage";
 import { folderForLegacyName, lockLibrary, readFolder } from "./libraryOrder";
 
 type QueryDb = Pick<Database, "$queryRaw">;
-export type LibrarySet = Omit<StudySet, "manualRank" | "contentFingerprint"> & {
+export type LibrarySet = Omit<StudySet, "contentFingerprint"> & {
   ownershipRole: OwnershipRole;
+  folderId: string | null;
   folderName: string | null;
+  course: string;
+  pinned: boolean;
+  archived: boolean;
+  lastStudiedAt: Date | null;
+  reviewLimit: number;
   ownerName: string;
 };
 
 export const unavailableSet = () =>
   new HTTPException(404, { message: "This study set is unavailable." });
 
-// These projections use s for the set and co for the requesting user's membership.
-export const joinMembership = (userId: string) => sql`
-  LEFT JOIN "LibraryMembership" co ON co."studySetId" = s.id AND co."userId" = ${userId}
+export const joinEntry = (userId: string) => sql`
+  JOIN "LibraryEntry" e ON e."studySetId" = s.id AND e."userId" = ${userId}
 `;
-export const libraryAccess = (userId: string) =>
-  sql`(s."userId" = ${userId} OR co."userId" IS NOT NULL)`;
-export const librarySetIds = (userId: string) => sql`(
-  SELECT id FROM "StudySet" WHERE "userId" = ${userId}
-  UNION
-  SELECT "studySetId" FROM "LibraryMembership" WHERE "userId" = ${userId}
-)`;
-export const ownershipRole = sql`
-  COALESCE(co.role, 'primary') AS "ownershipRole"
+export const entryRole = sql`
+  CASE WHEN e."userId" = s."userId" THEN 'primary' WHEN e."coOwner" THEN 'co_owner' ELSE 'viewer' END
 `;
-export const ownerFolderId = sql`CASE WHEN co."userId" IS NULL THEN s."folderId" ELSE co."folderId" END`;
-export const ownerRank = sql`COALESCE(co."manualRank", s."manualRank")`;
-export const ownerLastStudiedAt = sql`CASE WHEN co."userId" IS NULL THEN s."lastStudiedAt" ELSE co."lastStudiedAt" END`;
-export const ownerPreferences = sql`
-  f.name AS "folderName",
-  COALESCE(f.name, '') AS course,
-  ${ownerFolderId} AS "folderId",
-  COALESCE(co.pinned, s.pinned) AS pinned,
-  COALESCE(co.archived, s.archived) AS archived,
-  ${ownerLastStudiedAt} AS "lastStudiedAt",
-  COALESCE(co."reviewLimit", s."reviewLimit") AS "reviewLimit"
+export const entryPreferences = sql`
+  f.name AS "folderName", COALESCE(f.name, '') AS course, e."folderId",
+  e.pinned, e.archived, e."lastStudiedAt", e."reviewLimit"
 `;
-export const joinOwnerFolder = sql`
-  LEFT JOIN "LibraryFolder" f ON f.id = (${ownerFolderId})
+export const joinEntryFolder = sql`
+  LEFT JOIN "LibraryFolder" f ON (f."userId", f.id) = (e."userId", e."folderId")
 `;
 
 export async function readLibrarySet(db: QueryDb, id: string, userId: string) {
   const [set] = await db.$queryRaw<LibrarySet[]>(sql`
     SELECT s.id, s."userId", s.title, s.kind, s.content, s.revision, s.published, s."createdAt",
-      u.name AS "ownerName", s."updatedAt", ${ownershipRole}, ${ownerPreferences}
-    FROM "StudySet" s JOIN "user" u ON u.id = s."userId" ${joinMembership(userId)} ${joinOwnerFolder}
-    WHERE s.id = ${id} AND ${libraryAccess(userId)}
+      u.name AS "ownerName", s."updatedAt", ${entryRole} AS "ownershipRole", ${entryPreferences}
+    FROM "StudySet" s JOIN "user" u ON u.id = s."userId" ${joinEntry(userId)} ${joinEntryFolder}
+    WHERE s.id = ${id}
   `);
   if (!set) throw unavailableSet();
   return set;
@@ -84,8 +74,8 @@ export async function lockSet(db: QueryDb, id: string) {
 
 export async function lockLibrarySet(db: QueryDb, id: string, userId: string) {
   const [locked] = await db.$queryRaw<{ id: string }[]>(sql`
-    SELECT s.id FROM "StudySet" s ${joinMembership(userId)}
-    WHERE s.id = ${id} AND ${libraryAccess(userId)} FOR NO KEY UPDATE OF s
+    SELECT s.id FROM "StudySet" s ${joinEntry(userId)}
+    WHERE s.id = ${id} FOR NO KEY UPDATE OF s
   `);
   if (!locked) throw unavailableSet();
 }
@@ -113,21 +103,19 @@ export async function organizeSets(
   return db.$transaction(async (tx) => {
     await lockLibrary(tx, userId);
     const locked = await tx.$queryRaw<{ id: string }[]>(sql`
-      SELECT s.id FROM "StudySet" s ${joinMembership(userId)}
-      WHERE s.id IN ${target} AND ${libraryAccess(userId)}
+      SELECT s.id FROM "StudySet" s ${joinEntry(userId)}
+      WHERE s.id IN ${target}
       ORDER BY s.id FOR NO KEY UPDATE OF s
     `);
     if (locked.length !== ids.length) throw unavailableSet();
     const owned = await tx.$queryRaw<{ id: string }[]>(sql`
-      SELECT s.id FROM "StudySet" s ${joinMembership(userId)}
-      WHERE s.id IN ${target} AND ${libraryAccess(userId)}
+      SELECT s.id FROM "StudySet" s ${joinEntry(userId)}
+      WHERE s.id IN ${target}
     `);
     if (owned.length !== ids.length) throw unavailableSet();
     const movesFolder =
       changes.folderId !== undefined || changes.course !== undefined;
-    const folder = changes.folderId
-      ? await readFolder(tx, userId, changes.folderId)
-      : undefined;
+    if (changes.folderId) await readFolder(tx, userId, changes.folderId);
     const course =
       changes.course === undefined ? null : encodeStorage(changes.course);
     const folderId =
@@ -139,25 +127,16 @@ export async function organizeSets(
       OR archived <> COALESCE(${archived}::boolean, archived)
     )`;
     const fields = sql`
-      course = CASE WHEN ${movesFolder} THEN ${folder?.name ?? course ?? ""} ELSE course END,
       "folderId" = CASE WHEN ${movesFolder} THEN ${folderId}::text ELSE "folderId" END,
       "manualRank" = CASE WHEN ${locationChanges} THEN nextval('library_manual_rank_seq'::regclass) ELSE "manualRank" END,
       pinned = COALESCE(${pinned}::boolean, pinned),
       archived = COALESCE(${archived}::boolean, archived)
     `;
     const filter = sql`AND (NOT ${changedOnly} OR ${locationChanges} OR pinned <> ${pinned}::boolean)`;
-    const primary = await tx.$queryRaw<{ id: string }[]>(sql`
-      UPDATE "StudySet" SET ${fields}
-      WHERE id IN ${target} AND "userId" = ${userId} ${filter} RETURNING id
-    `);
-    const coOwned = await tx.$queryRaw<{ id: string }[]>(sql`
-      UPDATE "StudySetCoOwner" SET ${fields}
+    const updated = await tx.$queryRaw<{ id: string }[]>(sql`
+      UPDATE "LibraryEntry" SET ${fields}
       WHERE "studySetId" IN ${target} AND "userId" = ${userId} ${filter} RETURNING "studySetId" AS id
     `);
-    const viewers = await tx.$queryRaw<{ id: string }[]>(sql`
-      UPDATE "StudySetViewer" SET ${fields}
-      WHERE "studySetId" IN ${target} AND "userId" = ${userId} ${filter} RETURNING "studySetId" AS id
-    `);
-    return primary.length + coOwned.length + viewers.length;
+    return updated.length;
   });
 }

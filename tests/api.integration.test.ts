@@ -137,6 +137,23 @@ describe.skipIf(!enabled)(
       await b(`/sets/${other.value.id}`, "DELETE", { revision: 1 });
     });
 
+    it("replays a keyed edit at its original revision and detects a changed edit request", async () => {
+      const content = { ...exam, title: "Editable " + randomUUID() };
+      const { value: first } = await a("/sets", "POST", content);
+      const url = `/sets/${first.id}`;
+      const edit = url + `?requestId=${randomUUID()}`;
+      const updated = { ...content, title: "Saved " + randomUUID() };
+      const payload = { revision: first.revision, content: updated };
+      expect((await a(edit, "PUT", payload)).value).toMatchObject({ id: first.id, revision: 2, content: updated });
+      expect((await a(edit, "PUT", payload)).value).toMatchObject({ id: first.id, revision: 2, content: updated });
+      expect((await a(edit, "PUT", { ...payload, content })).status).toBe(409);
+      await a(url, "PUT", { revision: 2, content });
+      expect((await a(edit, "PUT", payload)).value).toMatchObject({ revision: 2, content: updated });
+      expect((await a(url, "PUT", { revision: 2, content: updated })).status).toBe(409);
+      await a(url, "DELETE", { revision: 3 });
+      expect((await a(edit, "PUT", payload)).status).toBe(404);
+    });
+
     it("maps intentional copies one to one across backup exports and remembers restore outcomes after edits", async () => {
       const content = { ...exam, title: "Backup matching " + randomUUID() };
       const original = await a("/sets", "POST", content);
@@ -355,6 +372,44 @@ describe.skipIf(!enabled)(
       expect((await b("/attempts/" + old.id)).value.studySetId).toBeNull();
       expect((await b(path + "/attempts", "POST", {})).status).toBe(404);
     });
+    it("keeps viewer grants, placement, schedules and History when co-ownership is removed", async () => {
+      const learner = await newLearner();
+      const learnerId = (await learner("/auth/get-session")).value.user.id;
+      const content = { ...deck, title: "Grant transitions " + randomUUID() };
+      const { value: set } = await a("/sets", "POST", content);
+      const path = `/sets/${set.id}`;
+      await db!.studySet.update({ where: { id: set.id }, data: { published: true } });
+      const { value: { link } } = await a(path + "/sharing/link", "PUT", { enabled: true });
+      expect((await learner(`/discover/${set.id}/save`, "POST", {})).status).toBe(200);
+      await learner(path + "/organization", "PATCH", { pinned: true, course: "Personal study" });
+      await learner(path + "/review", "PATCH", { limit: 5 });
+      const { cardFingerprint } = await import("../server/spacedReview");
+      const started = new Date();
+      const card = content.cards[0];
+      await db!.cardReview.create({ data: {
+        userId: learnerId, studySetId: set.id, cardId: card.id, streak: 1,
+        fingerprint: await cardFingerprint(card), attemptStartedAt: started,
+        dueAt: new Date(started.getTime() + 86_400_000),
+      } });
+      const { value: attempt } = await learner(path + "/attempts", "POST", {});
+      const learnerEmail = (await learner("/auth/get-session")).value.user.email;
+      const { value: { invitations: [invite] } } = await a(path + "/sharing/invitations", "POST", { email: learnerEmail });
+      expect((await learner(`/ownership-invitations/${invite.id}/respond`, "POST", { accept: true })).status).toBe(200);
+      expect((await learner(path)).value).toMatchObject({ ownershipRole: "co_owner", pinned: true, course: "Personal study", reviewLimit: 5 });
+      expect((await learner("/shares/save", "POST", { token: link.split("#")[1] })).status).toBe(200);
+      expect((await a(path + `/sharing/co-owners/${learnerId}`, "DELETE", {})).status).toBe(200);
+      expect((await learner(path)).value).toMatchObject({ ownershipRole: "viewer", pinned: true, course: "Personal study", reviewLimit: 5 });
+      await db!.studySet.update({ where: { id: set.id }, data: { published: false } });
+      expect((await learner(path)).status).toBe(200);
+      expect((await learner(`/attempts/${attempt.id}`)).value.studySetId).toBe(set.id);
+      expect(await db!.cardReview.count({ where: { userId: learnerId, studySetId: set.id } })).toBe(1);
+      expect((await a(path + "/sharing/link", "PUT", { enabled: false })).status).toBe(200);
+      expect((await learner(path)).status).toBe(404);
+      expect(await db!.cardReview.count({ where: { userId: learnerId, studySetId: set.id } })).toBe(0);
+      expect((await learner(`/attempts/${attempt.id}`)).value).toMatchObject({ studySetId: null, snapshot: attempt.snapshot });
+      await a(path, "DELETE", { revision: 1 });
+    });
+
     it("round-trips private viewer review schedules without granting access to a deck", async () => {
       const viewer = await newLearner();
       const { value: set } = await a("/sets?copy=1", "POST", deck);
@@ -408,7 +463,8 @@ describe.skipIf(!enabled)(
       expect((await viewer("/backup/preview", "POST", backup)).value).toMatchObject({
         reviewCount: 0, reviewSkips: { unchanged: 1 },
       });
-      await db!.viewerCardReview.deleteMany({ where: { studySetId: set.id } });
+      const viewerUser = (await viewer("/auth/get-session")).value.user;
+      await db!.cardReview.deleteMany({ where: { studySetId: set.id, userId: viewerUser.id } });
       expect((await viewer("/backup/preview", "POST", backup)).value.reviewCount).toBe(1);
 
       expect((await viewer(path + "/membership", "DELETE", {})).status).toBe(
@@ -494,6 +550,7 @@ describe.skipIf(!enabled)(
         await db!.cardReview.create({
           data: {
             studySetId: copy.id,
+            userId: user.id,
             cardId: deck.cards[0].id,
             fingerprint: await cardFingerprint(deck.cards[0]),
             streak: 2,
@@ -531,7 +588,7 @@ describe.skipIf(!enabled)(
           snapshot: attempt.snapshot,
         });
         expect(
-          await db!.viewerCardReview.count({
+          await db!.cardReview.count({
             where: { studySetId: source.id, userId: user.id },
           }),
         ).toBe(1);
@@ -758,8 +815,8 @@ describe.skipIf(!enabled)(
             content: { ...deck, title: group },
           })),
         });
-        await db!.studySetCoOwner.createMany({
-          data: ids.map((id) => ({ userId: id, studySetId: setIds[0] })),
+        await db!.libraryEntry.createMany({
+          data: ids.map((id) => ({ userId: id, studySetId: setIds[0], coOwner: true })),
         });
         const q = "q=" + encodeURIComponent(group);
         const paths = [
@@ -1500,13 +1557,18 @@ describe.skipIf(!enabled)(
         return {
           id: randomUUID(),
           userId,
-          folderId: folder.id,
           content,
           title: content.title,
           kind: deck.kind,
         };
       });
-      await db!.studySet.createMany({ data: sets });
+      await db!.$transaction(async (tx) => {
+        await tx.studySet.createMany({ data: sets });
+        await tx.libraryEntry.updateMany({
+          where: { userId, studySetId: { in: sets.map(({ id }) => id) } },
+          data: { folderId: folder.id },
+        });
+      });
       try {
         const found = (
           await a(

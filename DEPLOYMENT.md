@@ -150,6 +150,42 @@ point before risky changes. Database acceptance applies pending migrations to th
 dedicated test database. Rehearse upgrades and backfills against the
 preceding schema in a dedicated test database before release.
 
+### Duplicate prevention and library entry cutover
+
+Release the duplicate-prevention commit with migration `202611230001_set_creation`
+first. Verify concurrent saves, explicit copy retries and backup restores on the
+dedicated database through Node and Worker before deploying it. Keep that
+release available while preparing `202611230002_library_entries`.
+
+For the library cutover, rehearse the upgrade from the first release with primary
+owner, co-owner, and viewer flashcard fixtures. The migration acquires bounded
+table locks, copies the final live rows while writes are stopped, and compares
+every library entry and card schedule with its source before committing. The
+legacy tables and disabled triggers remain for reconciliation. Old primary-owner
+preference columns are retained for the same reason.
+
+For the separately authorized production cutover:
+
+1. Verify a Neon recovery point and confirm that the duplicate-prevention release
+   is serving production. Record the current Worker version and database target.
+2. Pause writes at the production ingress and stop other database writers.
+   Keep the public frontend and release smoke probes available. Dispatch
+   **Release** on `main` with **Verified the recovery point and paused production
+   writes for the library cutover** checked. A normal push cannot apply this
+   cutover while it is pending.
+3. Confirm the migration reconciled and the new Worker is serving the expected
+   release tag before reopening writes. Verify sharing, grant revocation,
+   History, backup round trips, and legacy clone aliases and recovery on the
+   dedicated database using both runtimes and the restricted role.
+4. If the Worker deployment fails after the migration commits, keep writes
+   paused and deploy a compatible forward fix. Returning to the first release
+   requires recovering the pre-cutover schema on a separate branch and
+   reconciling any later writes before switching traffic.
+5. Once reconciliation and recovery have been verified, remove the legacy
+   ownership and review tables, disabled triggers, and old owner preference
+   columns in a later migration. Preserve historical copy evidence and
+   `CloneConversion` records for alias resolution and recovery.
+
 After the live-set cutover, the minimum compatible code revision is `7e0fcae`.
 Earlier builds hide live viewer memberships and lack the retired-ID route.
 Use the deployed version's commit label to verify the viewer and alias paths.

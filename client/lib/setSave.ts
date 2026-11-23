@@ -73,6 +73,18 @@ export function saveStudySet(
   );
 }
 
+export function updateStudySet(
+  userId: string,
+  setId: string,
+  revision: number | null,
+  content: StudyContent,
+) {
+  const input = { revision, content };
+  return withRequest(userId, "edit:" + setId, input, (requestId) =>
+    api<StudySet>(`/sets/${setId}?requestId=${requestId}`, "PUT", input),
+  );
+}
+
 export function copyLibrarySet(userId: string, setId: string) {
   return withRequest(userId, "copy-library-set", setId, (requestId) =>
     api<StudySet>(`/sets/${setId}/duplicate`, "POST", { requestId }),

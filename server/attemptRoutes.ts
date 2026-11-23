@@ -239,7 +239,12 @@ export function registerAttemptRoutes(app: Hono<Context>) {
         decodeStorage(current.responses) as Responses,
       );
       const now = new Date();
-      const role = await markStudied(tx, where.userId, current.studySetId, now);
+      const inLibrary = await markStudied(
+        tx,
+        where.userId,
+        current.studySetId,
+        now,
+      );
       const changed = await tx.attempt.updateMany({
         where: { ...where, status: "in_progress", revision: input.revision },
         data: {
@@ -250,7 +255,7 @@ export function registerAttemptRoutes(app: Hono<Context>) {
         },
       });
       if (
-        role &&
+        inLibrary &&
         changed.count &&
         current.reviewMode &&
         scored.status === "completed"
@@ -259,7 +264,6 @@ export function registerAttemptRoutes(app: Hono<Context>) {
           tx,
           await tx.attempt.findFirstOrThrow({ where }),
           now,
-          role,
         );
       const saved = compact
         ? await readAttemptProgress(tx, where.id, where.userId)
@@ -296,13 +300,13 @@ export function registerAttemptRoutes(app: Hono<Context>) {
       );
       if (!snapshot) return null;
       const startedAt = new Date();
-      const role = await markStudied(
+      const inLibrary = await markStudied(
         tx,
         where.userId,
         source.studySetId,
         startedAt,
       );
-      const studySetId = role
+      const studySetId = inLibrary
         ? (await tx.attempt.findFirstOrThrow({ where })).studySetId
         : null;
       return tx.attempt.create({

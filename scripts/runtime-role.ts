@@ -10,21 +10,13 @@ const tableGrants = [
       '"verification"',
       '"StudySet"',
       '"LibraryFolder"',
-      '"StudySetCoOwner"',
-      '"StudySetViewer"',
+      '"LibraryEntry"',
       '"StudySetCopyLink"',
     ],
   },
   {
     privileges: ["SELECT", "INSERT", "UPDATE"],
-    tables: [
-      '"user"',
-      '"rateLimit"',
-      '"Attempt"',
-      '"CardReview"',
-      '"CoOwnerCardReview"',
-      '"ViewerCardReview"',
-    ],
+    tables: ['"user"', '"rateLimit"', '"Attempt"', '"CardReview"'],
   },
   {
     privileges: ["SELECT", "INSERT", "DELETE"],
@@ -32,13 +24,8 @@ const tableGrants = [
   },
   {
     privileges: ["SELECT", "INSERT"],
-    tables: [
-      '"StudySetCopyImport"',
-      '"StudySetOperation"',
-      '"BackupSetRestore"',
-    ],
+    tables: ['"StudySetOperation"', '"BackupSetRestore"'],
   },
-  { privileges: ["SELECT"], tables: ['"LibraryMembership"'] },
 ];
 const requiredPrivileges = tableGrants.flatMap(({ privileges, tables }) =>
   tables.flatMap((table) =>
@@ -99,6 +86,10 @@ export async function assertRuntimeRole(db: Pick<Database, "$queryRaw">) {
       AND NOT has_column_privilege('public."CloneConversion"', 'restoredCopyId', 'SELECT, INSERT, UPDATE')
       AND NOT has_any_column_privilege('public."CloneConversion"', 'UPDATE')
       AND NOT has_table_privilege('public."CloneConversion"', 'DELETE')
+      AND NOT has_any_column_privilege('public."StudySetOperation"', 'UPDATE')
+      AND NOT has_table_privilege('public."StudySetOperation"', 'DELETE')
+      AND NOT has_any_column_privilege('public."BackupSetRestore"', 'UPDATE')
+      AND NOT has_table_privilege('public."BackupSetRestore"', 'DELETE')
       AND NOT has_sequence_privilege('public.library_manual_rank_seq', 'UPDATE')
       ) AS protected,
       (

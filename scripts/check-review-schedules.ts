@@ -3,7 +3,12 @@ import ws from "ws";
 import { databaseConnection } from "./deployment-config.mjs";
 import { maxReviewStartSkewMs } from "../shared/backup";
 
-const tables = ["CardReview", "CoOwnerCardReview", "ViewerCardReview"] as const;
+const tables = [
+  "CardReview",
+  "LegacyCardReview",
+  "CoOwnerCardReview",
+  "ViewerCardReview",
+] as const;
 neonConfig.webSocketConstructor = ws;
 let pool: Pool | undefined;
 try {
@@ -12,6 +17,28 @@ try {
   const db = await pool.connect();
   try {
     await db.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    if (process.argv.includes("--production-cutover")) {
+      const {
+        rows: [schema],
+      } = await db.query<{ receipts: boolean; entries: boolean }>(`
+        SELECT to_regclass('public."StudySetOperation"') IS NOT NULL AS receipts,
+          to_regclass('public."LibraryEntry"') IS NOT NULL AS entries
+      `);
+      if (!schema.receipts) {
+        console.error(
+          "Deploy the duplicate-prevention release before the library cutover.",
+        );
+        process.exitCode = 1;
+      } else if (
+        !schema.entries &&
+        process.env.LIBRARY_CUTOVER_PREPARED !== "true"
+      ) {
+        console.error(
+          "Dispatch Release after verifying the recovery point and pausing production writers.",
+        );
+        process.exitCode = 1;
+      }
+    }
     for (const table of tables) {
       const {
         rows: [relation],

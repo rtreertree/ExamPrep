@@ -69,7 +69,7 @@ async function inventory(db: PoolClient): Promise<Entry[]> {
   return (
     await db.query<Entry>(`
     WITH entries AS (SELECT id FROM "StudySet" UNION SELECT "copyId" FROM "CloneConversion")
-    SELECT e.id, COALESCE(c."userId",s."userId") AS "userId", s.revision,s.kind,s."createdAt",s."lastStudiedAt",
+    SELECT e.id, COALESCE(c."userId",s."userId") AS "userId", s.revision,s.kind,s."createdAt",p."lastStudiedAt",
       c."copyId" IS NOT NULL AS legacy, s.id IS NOT NULL AS present, c."convertedAt" IS NOT NULL AS converted,
       md5((s.content-'title')::text) AS signature,
       md5((SELECT jsonb_agg(i->>'id' ORDER BY i->>'id')::text FROM jsonb_array_elements(
@@ -78,9 +78,10 @@ async function inventory(db: PoolClient): Promise<Entry[]> {
         WHEN r."linkNonce" LIKE 'editable:%' THEN split_part(r."linkNonce",':',3) ELSE l."studySetId" END AS origin,
       r."linkNonce" IS NOT NULL AS "hasReceipt"
     FROM entries e LEFT JOIN "StudySet" s ON s.id=e.id LEFT JOIN "CloneConversion" c ON c."copyId"=e.id
+    LEFT JOIN "LibraryEntry" p ON p."studySetId"=s.id AND p."userId"=s."userId"
     LEFT JOIN "StudySetCopyImport" r ON r."copyId"=e.id AND r."userId"=s."userId"
     LEFT JOIN "StudySetCopyLink" l ON l.nonce=r."linkNonce"
-    ORDER BY s."lastStudiedAt" DESC NULLS LAST,s."createdAt" DESC NULLS LAST,e.id
+    ORDER BY p."lastStudiedAt" DESC NULLS LAST,s."createdAt" DESC NULLS LAST,e.id
   `)
   ).rows;
 }
@@ -90,21 +91,25 @@ async function inspect(db: PoolClient, copy: Entry, sourceId: string) {
     rows: [state],
   } = await db.query(
     `
-    SELECT s.id,s.published,s."userId"=c."userId" AS primary, m.role,
+    SELECT s.id,s.published,s."userId"=c."userId" AS primary,
+      CASE WHEN m."coOwner" THEN 'co_owner' WHEN m."userId" IS NOT NULL THEN 'viewer' END AS role,
       l.nonce AS nonce, c.revision, prev."convertedAt", r."linkNonce" AS receipt,
       s.content = c.content AS equivalent,
       c.published OR EXISTS(SELECT 1 FROM "StudySetCopyLink" WHERE "studySetId"=c.id)
-      OR EXISTS(SELECT 1 FROM "LibraryMembership" WHERE "studySetId"=c.id)
+      OR EXISTS(SELECT 1 FROM "LibraryEntry" WHERE "studySetId"=c.id AND "userId"<>c."userId")
       OR EXISTS(SELECT 1 FROM "StudySetInvitation" WHERE "studySetId"=c.id)
       OR EXISTS(SELECT 1 FROM "StudySetCopyImport" child JOIN "StudySet" cs ON cs.id=child."copyId"
         WHERE child."linkNonce" IN ('discover:'||c.id,'admin:'||c.id,'editable:discover:'||c.id,'editable:admin:'||c.id))
+      OR EXISTS(SELECT 1 FROM "StudySetOperation" child JOIN "StudySet" cs ON cs.id=child."setId"
+        WHERE child.operation='copy' AND child."inputIdentity" IN ('discover:'||c.id,'admin:'||c.id,'library:'||c.id))
       AS downstream,
       EXISTS(SELECT 1 FROM "Attempt" a WHERE a."studySetId"=s.id AND a."userId"=c."userId" AND a."reviewMode" AND a.status='in_progress')
       AND EXISTS(SELECT 1 FROM "Attempt" a WHERE a."studySetId"=c.id AND a."userId"=c."userId" AND a."reviewMode" AND a.status='in_progress') AS overlap,
-      EXISTS(SELECT 1 FROM "StudySetCopyImport" parent WHERE parent."copyId"=s.id) AS nested
+      (EXISTS(SELECT 1 FROM "StudySetCopyImport" parent WHERE parent."copyId"=s.id)
+       OR EXISTS(SELECT 1 FROM "StudySetOperation" parent WHERE parent."setId"=s.id AND parent.operation='copy')) AS nested
     FROM "CloneConversion" prev JOIN "StudySet" c ON c.id=prev."copyId" AND c."userId"=prev."userId"
     JOIN "StudySet" s ON s.id=$2 AND s.id<>c.id
-    LEFT JOIN "LibraryMembership" m ON m."studySetId"=s.id AND m."userId"=c."userId"
+    LEFT JOIN "LibraryEntry" m ON m."studySetId"=s.id AND m."userId"=c."userId"
     LEFT JOIN "StudySetCopyImport" r ON r."copyId"=c.id AND r."userId"=c."userId"
     LEFT JOIN "StudySetCopyLink" l ON l."studySetId"=s.id AND l.nonce=r."linkNonce"
     WHERE c.id=$1 AND prev."userId"=$3`,
@@ -159,18 +164,25 @@ async function convert(db: PoolClient, copy: Entry, sourceId: string) {
   if (role === "viewer" && (state.published || state.nonce)) {
     const discovered = state.published && !state.nonce;
     await db.query(
-      `INSERT INTO "StudySetViewer" ("studySetId","userId",course,"folderId","manualRank",pinned,archived,"lastStudiedAt","reviewLimit","linkNonce",discovered)
-      SELECT $2,"userId",course,"folderId","manualRank",pinned,archived,"lastStudiedAt","reviewLimit",$3,$4 FROM "StudySet" WHERE id=$1
-      ON CONFLICT ("studySetId","userId") DO UPDATE SET discovered="StudySetViewer".discovered OR EXCLUDED.discovered,
-        "linkNonce"=COALESCE(EXCLUDED."linkNonce","StudySetViewer"."linkNonce")`,
-      [copy.id, sourceId, state.nonce, discovered],
+      `INSERT INTO "LibraryEntry" ("studySetId","userId","folderId","manualRank",pinned,archived,"lastStudiedAt","reviewLimit","linkNonce",discovered)
+      SELECT $2,e."userId",e."folderId",e."manualRank",e.pinned,e.archived,e."lastStudiedAt",e."reviewLimit",$3,$4
+      FROM "LibraryEntry" e WHERE e."studySetId"=$1 AND e."userId"=$5
+      ON CONFLICT ("userId","studySetId") DO UPDATE SET discovered="LibraryEntry".discovered OR EXCLUDED.discovered,
+        "linkNonce"=COALESCE(EXCLUDED."linkNonce","LibraryEntry"."linkNonce")`,
+      [copy.id, sourceId, state.nonce, discovered, copy.userId],
     );
   }
   // Archive the exact stored set and its schedules before retiring the old ID.
   await db.query(
     `UPDATE "CloneConversion" p SET "sourceId"=$2,"convertedAt"=CURRENT_TIMESTAMP AT TIME ZONE 'UTC',
-    recovery=jsonb_build_object('set',to_jsonb(c),'reviews',COALESCE((SELECT jsonb_agg(to_jsonb(r)) FROM "CardReview" r WHERE r."studySetId"=c.id),'[]'::jsonb))
-    FROM "StudySet" c WHERE c.id=$1 AND p."copyId"=c.id`,
+    recovery=jsonb_build_object('set',to_jsonb(c) || jsonb_build_object(
+      'course',COALESCE(f.name,''),'folderId',e."folderId",'manualRank',e."manualRank",'pinned',e.pinned,
+      'archived',e.archived,'lastStudiedAt',e."lastStudiedAt",'reviewLimit',e."reviewLimit"),
+      'reviews',COALESCE((SELECT jsonb_agg(to_jsonb(r)-'userId') FROM "CardReview" r
+        WHERE r."studySetId"=c.id AND r."userId"=c."userId"),'[]'::jsonb))
+    FROM "StudySet" c JOIN "LibraryEntry" e ON e."studySetId"=c.id AND e."userId"=c."userId"
+    LEFT JOIN "LibraryFolder" f ON f.id=e."folderId" AND f."userId"=e."userId"
+    WHERE c.id=$1 AND p."copyId"=c.id`,
     [copy.id, sourceId],
   );
   const {
@@ -186,26 +198,15 @@ async function convert(db: PoolClient, copy: Entry, sourceId: string) {
         fingerprint: await cardFingerprint(card),
       })),
     );
-    const table =
-      role === "primary"
-        ? '"CardReview"'
-        : role === "co_owner"
-          ? '"CoOwnerCardReview"'
-          : '"ViewerCardReview"';
-    const personal = role !== "primary";
     await db.query(
-      `INSERT INTO ${table} ("studySetId",${personal ? '"userId",' : ""}"cardId",fingerprint,streak,"dueAt","attemptStartedAt")
-      SELECT $2,${personal ? "$4," : ""}r."cardId",r.fingerprint,r.streak,r."dueAt",r."attemptStartedAt" FROM "CardReview" r
+      `INSERT INTO "CardReview" ("studySetId","userId","cardId",fingerprint,streak,"dueAt","attemptStartedAt")
+      SELECT $2,$4,r."cardId",r.fingerprint,r.streak,r."dueAt",r."attemptStartedAt" FROM "CardReview" r
       JOIN jsonb_to_recordset($3::jsonb) f(id text,fingerprint text) ON f.id=r."cardId" AND f.fingerprint=r.fingerprint
-      WHERE r."studySetId"=$1 ON CONFLICT ("studySetId",${personal ? '"userId",' : ""}"cardId") DO UPDATE SET
+      WHERE r."studySetId"=$1 AND r."userId"=$4
+      ON CONFLICT ("userId","studySetId","cardId") DO UPDATE SET
       fingerprint=EXCLUDED.fingerprint,streak=EXCLUDED.streak,"dueAt"=EXCLUDED."dueAt","attemptStartedAt"=EXCLUDED."attemptStartedAt"
-      WHERE ${table}."attemptStartedAt"<EXCLUDED."attemptStartedAt"`,
-      [
-        copy.id,
-        sourceId,
-        JSON.stringify(fingerprints),
-        ...(personal ? [copy.userId] : []),
-      ],
+      WHERE "CardReview"."attemptStartedAt"<EXCLUDED."attemptStartedAt"`,
+      [copy.id, sourceId, JSON.stringify(fingerprints), copy.userId],
     );
   }
   // A clone revision number has no meaning in the original's revision history.
@@ -426,23 +427,29 @@ async function recover(db: PoolClient, copyId: string) {
 
   const recoveredCopyId = crypto.randomUUID();
   await db.query(
-    `INSERT INTO "StudySet" (
-      id, "userId", title, kind, content, revision, course, "folderId", pinned, archived,
-      "reviewLimit", "lastStudiedAt", "createdAt", "updatedAt"
-    ) SELECT $2, s."userId", s.title, s.kind, s.content, s.revision, s.course,
-      f.id, s.pinned, s.archived, s."reviewLimit", s."lastStudiedAt", s."createdAt", s."updatedAt"
+    `INSERT INTO "StudySet" (id, "userId", content, revision, "createdAt", "updatedAt")
+    SELECT $2, s."userId", s.content, s.revision, s."createdAt", s."updatedAt"
     FROM "CloneConversion" c
     CROSS JOIN LATERAL jsonb_populate_record(NULL::"StudySet", c.recovery->'set') s
-    LEFT JOIN "LibraryFolder" f ON f.id=s."folderId" AND f."userId"=c."userId"
     WHERE c."copyId"=$1`,
     [copyId, recoveredCopyId],
   );
   await db.query(
-    `INSERT INTO "CardReview" ("studySetId", "cardId", fingerprint, streak, "dueAt", "attemptStartedAt")
-    SELECT $1, r."cardId", r.fingerprint, r.streak, r."dueAt", r."attemptStartedAt"
+    `UPDATE "LibraryEntry" e SET "folderId"=f.id, pinned=s.pinned, archived=s.archived,
+      "reviewLimit"=s."reviewLimit", "lastStudiedAt"=s."lastStudiedAt"
+    FROM "CloneConversion" c
+    CROSS JOIN LATERAL jsonb_to_record(c.recovery->'set') s(
+      "folderId" text, pinned bool, archived bool, "reviewLimit" int, "lastStudiedAt" timestamp)
+    LEFT JOIN "LibraryFolder" f ON f.id=s."folderId" AND f."userId"=c."userId"
+    WHERE c."copyId"=$1 AND e."studySetId"=$2 AND e."userId"=c."userId"`,
+    [copyId, recoveredCopyId],
+  );
+  await db.query(
+    `INSERT INTO "CardReview" ("studySetId", "userId", "cardId", fingerprint, streak, "dueAt", "attemptStartedAt")
+    SELECT $1, $3, r."cardId", r.fingerprint, r.streak, r."dueAt", r."attemptStartedAt"
     FROM jsonb_to_recordset($2::jsonb) AS r("cardId" text, fingerprint text, streak int,
       "dueAt" timestamp, "attemptStartedAt" timestamp)`,
-    [recoveredCopyId, JSON.stringify([...reviews.values()])],
+    [recoveredCopyId, JSON.stringify([...reviews.values()]), userId],
   );
   await db.query(
     'UPDATE "CloneConversion" SET "restoredCopyId"=$2 WHERE "copyId"=$1',

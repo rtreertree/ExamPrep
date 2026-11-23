@@ -14,12 +14,9 @@ import { BACKUP_BYTES, decodeFile, parseJSON } from "../shared/json";
 import type { Context } from "./app";
 import type { Database } from "./db";
 import {
-  joinMembership,
-  joinOwnerFolder,
-  librarySetIds,
-  ownerPreferences,
-  ownerRank,
-  ownershipRole,
+  joinEntry,
+  joinEntryFolder,
+  entryPreferences,
 } from "./setAccess";
 import { progressContent, SNAPSHOT_VERSION } from "./snapshots";
 import { decodeStorage, encodeStorage } from "./storage";
@@ -78,14 +75,14 @@ async function exportBackup(
             completedAt: string | null;
           }[]
         | null;
-      reviews: CardReview[] | null;
-      viewerReviews: CardReview[] | null;
+      reviews: Omit<CardReview, "userId">[] | null;
+      viewerReviews: Omit<CardReview, "userId">[] | null;
     }[]
   >(sql`
     WITH accessible_sets AS (
       SELECT s.id, s.content, s.revision, s."createdAt", s."updatedAt",
-        ${ownerPreferences}, ${ownershipRole}, ${ownerRank} AS "manualRank"
-      FROM "StudySet" s ${joinMembership(userId)} ${joinOwnerFolder} WHERE s.id IN ${librarySetIds(userId)} AND co.role IS DISTINCT FROM 'viewer'
+        ${entryPreferences}, e."manualRank" AS "manualRank"
+      FROM "StudySet" s ${joinEntry(userId)} ${joinEntryFolder} WHERE (e."userId" = s."userId" OR e."coOwner")
     ), folders AS (
       SELECT id, name, "manualRank" FROM "LibraryFolder" WHERE "userId" = ${userId}
     ), sets AS (
@@ -97,18 +94,15 @@ async function exportBackup(
         "startedAt", "updatedAt", "completedAt" FROM "Attempt"
       WHERE ${includeHistory} AND "userId" = ${userId}
     ), reviews AS (
-      SELECT r.* FROM "CardReview" r JOIN accessible_sets s ON s.id = r."studySetId"
-      WHERE ${includeHistory} AND s.content->>'kind' = 'flashcards' AND s."ownershipRole" = 'primary'
-      UNION ALL
       SELECT r."studySetId", r."cardId", r.fingerprint, r.streak, r."dueAt", r."attemptStartedAt"
-      FROM "CoOwnerCardReview" r JOIN accessible_sets s ON s.id = r."studySetId"
-      WHERE ${includeHistory} AND s.content->>'kind' = 'flashcards' AND r."userId" = ${userId}
-        AND s."ownershipRole" = 'co_owner'
+      FROM "CardReview" r JOIN accessible_sets s ON s.id = r."studySetId"
+      WHERE ${includeHistory} AND r."userId" = ${userId} AND s.content->>'kind' = 'flashcards'
     ), viewer_reviews AS (
       SELECT r."studySetId", r."cardId", r.fingerprint, r.streak, r."dueAt", r."attemptStartedAt"
-      FROM "StudySetViewer" v JOIN "ViewerCardReview" r USING ("studySetId", "userId")
-      JOIN "StudySet" s ON s.id = v."studySetId"
-      WHERE ${includeHistory} AND s.kind = 'flashcards' AND v."userId" = ${userId}
+      FROM "LibraryEntry" e JOIN "CardReview" r USING ("studySetId", "userId")
+      JOIN "StudySet" s ON s.id = e."studySetId"
+      WHERE ${includeHistory} AND s.kind = 'flashcards' AND e."userId" = ${userId}
+        AND s."userId" <> ${userId} AND NOT e."coOwner"
     ), size AS (
       SELECT (
         COALESCE((SELECT sum(pg_column_size(f)) FROM folders f), 0) +
@@ -155,7 +149,7 @@ async function exportBackup(
           },
     };
   });
-  const reviewDates = (row: CardReview) => ({
+  const reviewDates = (row: Omit<CardReview, "userId">) => ({
     ...row,
     dueAt: utc(row.dueAt),
     attemptStartedAt: utc(row.attemptStartedAt),
@@ -221,7 +215,7 @@ async function previewBackup(
     backup,
     await previousSetIds(backup, remap),
   );
-  const { owned, viewers, reviewSkips } = await planBackupReviews(
+  const { eligible, reviewSkips } = await planBackupReviews(
     db,
     userId,
     backup,
@@ -231,7 +225,7 @@ async function previewBackup(
   return {
     ...backupSummary(backup),
     ...backupSetCounts(plan),
-    reviewCount: owned.length + viewers.length - reviewSkips.unchanged,
+    reviewCount: eligible.length - reviewSkips.unchanged,
     reviewSkips,
   };
 }
@@ -284,10 +278,9 @@ async function restoreBackup(
     // Editors, grant changes, and review starts lock the same live set rows.
     // Lock in ID order before inserting attempts or schedules.
     await tx.$queryRaw`
-      SELECT s.id FROM "StudySet" s
-      WHERE (s."userId" = ${userId} OR EXISTS (SELECT 1 FROM "StudySetViewer" v WHERE v."studySetId" = s.id AND v."userId" = ${userId})) AND s.id IN (SELECT jsonb_array_elements_text(${affected}::jsonb))
+      SELECT s.id FROM "LibraryEntry" e JOIN "StudySet" s ON s.id = e."studySetId"
+      WHERE e."userId" = ${userId} AND s.id IN (SELECT jsonb_array_elements_text(${affected}::jsonb))
       ORDER BY s.id FOR NO KEY UPDATE OF s`;
-
     const folders = JSON.stringify(
       encodeStorage(
         backup.folders.map(({ id, name }, position) => ({
@@ -349,7 +342,6 @@ async function restoreBackup(
       legacyRows.map(({ id, name }) => [decodeStorage(name), id]),
     );
     await restoreBackupSets(tx, userId, backup, plan, (set) => ({
-      course: set.course,
       folderId: set.folderId
         ? (resolvedFolders.get(folderIds.get(set.folderId)!) ?? null)
         : set.folderId === null

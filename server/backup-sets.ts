@@ -6,6 +6,7 @@ import {
   exactContent,
   exactMatchOrder,
   insertPrivateSets,
+  joinPrimaryEntry,
 } from "./setCreation";
 import { encodeStorage } from "./storage";
 
@@ -75,7 +76,7 @@ export async function planBackupSets(
         SELECT jsonb_agg(jsonb_build_object('id', c.id, 'revision', c.revision)
           ORDER BY c.archived, c."createdAt", c.id) AS candidates
         FROM (
-          SELECT s.id, s.revision, s.archived, s."createdAt" FROM "StudySet" s
+          SELECT s.id, s.revision, e.archived, s."createdAt" FROM "StudySet" s ${joinPrimaryEntry}
           WHERE s."userId" = ${userId} AND ${exactContent(sql`d.content`)}
           ORDER BY ${exactMatchOrder} LIMIT ${backup.sets.length}
         ) c
@@ -171,7 +172,6 @@ export async function restoreBackupSets(
   plan: Map<string, Destination>,
   placementFor: (set: Backup["sets"][number]) => {
     folderId: string | null;
-    course: string;
   },
 ) {
   await insertPrivateSets(

@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      library_cutover_prepared:
+        description: Verified the recovery point and paused production writes for the library cutover
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -103,6 +108,7 @@ jobs:
       - name: Apply production migrations, verify readiness, deploy code and secrets together
         id: deploy
         env:
+          LIBRARY_CUTOVER_PREPARED: ${{ inputs.library_cutover_prepared }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DATABASE_URL_UNPOOLED: ${{ secrets.DATABASE_URL_UNPOOLED }}
           BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}

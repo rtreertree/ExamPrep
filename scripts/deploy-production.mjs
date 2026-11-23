@@ -40,10 +40,11 @@ try {
     ...workerPackage,
     "--dry-run",
   ]);
-  run("Review schedule preflight", process.execPath, [
+  run("Library cutover and review schedule preflight", process.execPath, [
     "--import",
     "tsx",
     "scripts/check-review-schedules.ts",
+    "--production-cutover",
   ]);
   run("Database migrations", process.execPath, ["scripts/migrate.mjs"]);
   run("Production readiness", process.execPath, [

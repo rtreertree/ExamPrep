@@ -10,7 +10,7 @@ import { LIST_PAGE_SIZE } from "../shared/listing";
 import type { Context } from "./app";
 import type { Database } from "./db";
 import { read, schema } from "./request";
-import { unavailableSet } from "./setAccess";
+import { entryRole, joinEntry, unavailableSet } from "./setAccess";
 import { createStudySet } from "./setCreation";
 import { decodeStorage, encodeStorage } from "./storage";
 
@@ -44,7 +44,7 @@ async function listSets(
     published: sql`s.published`,
     link: sql`EXISTS (SELECT 1 FROM "StudySetCopyLink" l WHERE l."studySetId" = s.id)`,
     invitations: sql`EXISTS (SELECT 1 FROM "StudySetInvitation" i WHERE i."studySetId" = s.id)`,
-    coOwners: sql`EXISTS (SELECT 1 FROM "StudySetCoOwner" o WHERE o."studySetId" = s.id)`,
+    coOwners: sql`EXISTS (SELECT 1 FROM "LibraryEntry" o WHERE o."studySetId" = s.id AND o."coOwner")`,
   };
   const filters = sql`
     ${scope.type === "discover" ? sql`AND s.published` : sql``}
@@ -53,18 +53,9 @@ async function listSets(
     ${q ? sql`AND s.title ILIKE ${searchPattern(encodeStorage(q))}` : sql``}
   `;
   const limit = LIST_PAGE_SIZE + 1;
-  // Bound each indexed ownership scan before merging the two library lists.
   const candidates = libraryId
-    ? sql`
-    (SELECT s.id, 'primary' AS role, s.archived FROM "StudySet" s
-      WHERE s."userId" = ${libraryId} AND s.id > ${after} ${filters} ORDER BY s.id LIMIT ${limit})
-    UNION ALL
-    (SELECT co."studySetId" AS id, co.role, co.archived FROM "LibraryMembership" co
-      JOIN "StudySet" s ON s.id = co."studySetId"
-      WHERE co."userId" = ${libraryId} AND co."studySetId" > ${after} ${filters}
-      ORDER BY co."studySetId" LIMIT ${limit})
-    ORDER BY id LIMIT ${limit}
-  `
+    ? sql`SELECT s.id, ${entryRole} AS role, e.archived FROM "StudySet" s ${joinEntry(libraryId)}
+      WHERE e."studySetId" > ${after} ${filters} ORDER BY e."studySetId" LIMIT ${limit}`
     : sql`SELECT s.id FROM "StudySet" s WHERE s.id > ${after} ${filters} ORDER BY s.id LIMIT ${limit}`;
   const rows = await db.$queryRaw<DirectorySet[]>(sql`
     SELECT s.id, s.kind, s.title, u.name AS "ownerName",

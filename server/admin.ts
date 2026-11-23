@@ -15,7 +15,7 @@ import { page, pageInput, searchPattern } from "./directory";
 import { lockLibrary } from "./libraryOrder";
 import { read, schema } from "./request";
 import { lockOwnerLibrary, lockSet, unavailableSet } from "./setAccess";
-import { revokeCoOwner, setLink, signLink } from "./sharing";
+import { grantCoOwnership, revokeCoOwner, setLink, signLink } from "./sharing";
 
 type Reader = Pick<Database, "$queryRaw">;
 const roles = z.enum(["admin", "user"]);
@@ -36,8 +36,8 @@ async function access(
     (Omit<SetAccessSummary, "link"> & { nonce: string | null })[]
   >`
     SELECT s.revision, s.published, l.nonce,
-      (SELECT count(*)::int FROM "StudySetViewer" WHERE "studySetId" = s.id) AS viewers,
-      (SELECT count(*)::int FROM "StudySetCoOwner" WHERE "studySetId" = s.id) AS "coOwners",
+      (SELECT count(*)::int FROM "LibraryEntry" e WHERE e."studySetId" = s.id AND e."userId" <> s."userId" AND NOT e."coOwner") AS viewers,
+      (SELECT count(*)::int FROM "LibraryEntry" WHERE "studySetId" = s.id AND "coOwner") AS "coOwners",
       (SELECT count(*)::int FROM "StudySetInvitation" WHERE "studySetId" = s.id) AS invitations
     FROM "StudySet" s LEFT JOIN "StudySetCopyLink" l ON l."studySetId" = s.id WHERE s.id = ${id}
   `;
@@ -143,7 +143,7 @@ export function registerAdmin(app: Hono<Context>, secret: string) {
       pattern = searchPattern(q);
     const rows = await c.get("db").$queryRaw<ShareRecipient[]>(sql`
       SELECT u.id, u.name, u.email, r.invited FROM (
-        SELECT "userId", false AS invited FROM "StudySetCoOwner" WHERE "studySetId" = ${id} AND "userId" > ${after}
+        SELECT "userId", false AS invited FROM "LibraryEntry" WHERE "studySetId" = ${id} AND "coOwner" AND "userId" > ${after}
         UNION ALL SELECT "userId", true FROM "StudySetInvitation" WHERE "studySetId" = ${id} AND "userId" > ${after}
         ${q ? sql`` : sql`ORDER BY "userId" LIMIT ${LIST_PAGE_SIZE + 1}`}
       ) r JOIN "user" u ON u.id = r."userId"
@@ -199,7 +199,7 @@ export function registerAdmin(app: Hono<Context>, secret: string) {
             { id: string; primaryOwner: boolean; coOwner: boolean }[]
           >(sql`
             SELECT u.id, s."userId" = u.id AS "primaryOwner",
-              EXISTS (SELECT 1 FROM "StudySetCoOwner" co WHERE co."studySetId" = s.id AND co."userId" = u.id) AS "coOwner"
+              EXISTS (SELECT 1 FROM "LibraryEntry" co WHERE co."studySetId" = s.id AND co."userId" = u.id AND co."coOwner") AS "coOwner"
             FROM "user" u JOIN "StudySet" s ON s.id = ${id} WHERE ${query}
           `);
           if (!user)
@@ -212,7 +212,7 @@ export function registerAdmin(app: Hono<Context>, secret: string) {
             await tx.$executeRaw`INSERT INTO "StudySetInvitation" (id,"studySetId","userId") VALUES (${crypto.randomUUID()},${id},${user.id}) ON CONFLICT DO NOTHING`;
           else {
             await tx.$executeRaw`DELETE FROM "StudySetInvitation" WHERE "studySetId" = ${id} AND "userId" = ${user.id}`;
-            await tx.$executeRaw`INSERT INTO "StudySetCoOwner" ("studySetId","userId") VALUES (${id},${user.id}) ON CONFLICT DO NOTHING`;
+            await grantCoOwnership(tx, id, user.id);
           }
           break;
         }

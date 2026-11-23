@@ -1,4 +1,4 @@
-import { saveStudySet } from "../lib/setSave";
+import { saveStudySet, updateStudySet } from "../lib/setSave";
 import { ExistingSet, type SetMatch } from "./ExistingSet";
 import { PositionForm } from "../components/PositionForm";
 import { Selector } from "../components/Selector";
@@ -389,10 +389,7 @@ function Editor({
         }
         await finishSave(set, captured, true, practiceAfter);
       } else {
-        const set = await api<StudySet>(`/sets/${setId}`, "PUT", {
-          revision,
-          content: valid,
-        });
+        const set = await updateStudySet(user.id, setId, revision, valid);
         await finishSave(set, captured, false, practiceAfter);
       }
     } catch (e) {
@@ -1051,12 +1048,7 @@ function Editor({
             match={match}
             onOpen={() => {
               setMatch(undefined);
-              void finishSave(
-                match.set,
-                match.captured,
-                true,
-                false,
-              );
+              void finishSave(match.set, match.captured, true, false);
             }}
             onCopy={(copy) => {
               setMatch(undefined);

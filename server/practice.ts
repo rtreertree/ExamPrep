@@ -1,33 +1,17 @@
 import type { Database } from "./db";
-import type { OwnershipRole } from "../shared/sharing";
+import { lockSet } from "./setAccess";
 
 export async function markStudied(
-  db: Pick<Database, "$queryRaw" | "$executeRaw">,
+  db: Pick<Database, "$queryRaw">,
   userId: string,
   setId: string | null,
   at: Date,
-): Promise<OwnershipRole | null> {
-  if (!setId) return null;
-  const [locked] = await db.$queryRaw<{ userId: string }[]>`
-    SELECT "userId" FROM "StudySet" WHERE id = ${setId} FOR NO KEY UPDATE
-  `;
-  if (!locked) return null;
-  if (locked.userId === userId) {
-    await db.$executeRaw`
-      UPDATE "StudySet" SET "lastStudiedAt" = ${at} WHERE id = ${setId}
-      AND ("lastStudiedAt" IS NULL OR "lastStudiedAt" < ${at})
-    `;
-    return "primary";
-  }
-  const [member] = await db.$queryRaw<{ studySetId: string }[]>`
-    UPDATE "StudySetCoOwner" SET "lastStudiedAt" = GREATEST("lastStudiedAt", ${at})
+) {
+  if (!setId || !(await lockSet(db, setId))) return false;
+  const [entry] = await db.$queryRaw<{ studySetId: string }[]>`
+    UPDATE "LibraryEntry" SET "lastStudiedAt" = GREATEST("lastStudiedAt", ${at})
     WHERE "studySetId" = ${setId} AND "userId" = ${userId}
     RETURNING "studySetId"
   `;
-  if (member) return "co_owner";
-  const updated = await db.$executeRaw`
-    UPDATE "StudySetViewer" SET "lastStudiedAt" = GREATEST("lastStudiedAt", ${at})
-    WHERE "studySetId" = ${setId} AND "userId" = ${userId}
-  `;
-  return updated ? "viewer" : null;
+  return !!entry;
 }

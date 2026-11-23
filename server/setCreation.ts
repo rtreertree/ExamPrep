@@ -10,14 +10,16 @@ import type { Database } from "./db";
 import { lockLibrary } from "./libraryOrder";
 import {
   lockSet,
+  lockOwnerLibrary,
   readLibrarySet,
   readLockedLibrarySet,
   unavailableSet,
 } from "./setAccess";
 import { decodeStorage, encodeStorage } from "./storage";
+import { conflict } from "./routeHelpers";
 
 type Tx = Pick<Database, "$queryRaw" | "$executeRaw">;
-type Placement = { folderId: string | null; course: string };
+type Placement = { folderId: string | null };
 type NewSet = {
   id: string;
   content: StudyContent;
@@ -35,7 +37,10 @@ type NewSet = {
 export const exactContent = (content: ReturnType<typeof sql>) => sql`
   s."contentFingerprint" = study_content_fingerprint(${content}) AND s.content = ${content}
 `;
-export const exactMatchOrder = sql`s.archived, s."createdAt", s.id`;
+export const joinPrimaryEntry = sql`
+  JOIN "LibraryEntry" e ON e."studySetId" = s.id AND e."userId" = s."userId"
+`;
+export const exactMatchOrder = sql`e.archived, s."createdAt", s.id`;
 
 export async function insertPrivateSets(
   tx: Tx,
@@ -47,16 +52,37 @@ export async function insertPrivateSets(
     encodeStorage(sets.map((set, position) => ({ ...set, position }))),
   );
   await tx.$executeRaw`
-    INSERT INTO "StudySet" (id, "userId", title, kind, content, revision, course, "folderId",
-      pinned, archived, "reviewLimit", "lastStudiedAt", "createdAt", "updatedAt")
-    SELECT id, ${userId}, content->>'title', content->>'kind', content, COALESCE(revision, 1),
-      COALESCE(course, ''), "folderId", COALESCE(pinned, false), COALESCE(archived, false),
-      COALESCE("reviewLimit", 20), "lastStudiedAt",
+    INSERT INTO "StudySet" (id, "userId", content, revision, "createdAt", "updatedAt")
+    SELECT id, ${userId}, content, COALESCE(revision, 1),
       COALESCE("createdAt", CURRENT_TIMESTAMP), COALESCE("updatedAt", CURRENT_TIMESTAMP)
     FROM jsonb_to_recordset(${input}::jsonb) AS s(
-      id text, content jsonb, revision int, course text, "folderId" text, pinned bool, archived bool,
-      "reviewLimit" int, "lastStudiedAt" timestamp, "createdAt" timestamp, "updatedAt" timestamp, position int)
+      id text, content jsonb, revision int, "createdAt" timestamp, "updatedAt" timestamp, position int)
     ORDER BY position`;
+  const entries = sets
+    .filter(
+      (set) =>
+        set.folderId != null ||
+        set.archived ||
+        set.pinned ||
+        set.reviewLimit !== undefined ||
+        set.lastStudiedAt,
+    )
+    .map(({ id, folderId, pinned, archived, reviewLimit, lastStudiedAt }) => ({
+      id,
+      folderId,
+      pinned,
+      archived,
+      reviewLimit,
+      lastStudiedAt,
+    }));
+  if (entries.length)
+    await tx.$executeRaw`
+      UPDATE "LibraryEntry" e SET "folderId" = p."folderId", pinned = COALESCE(p.pinned, false),
+        archived = COALESCE(p.archived, false), "reviewLimit" = COALESCE(p."reviewLimit", 20),
+        "lastStudiedAt" = p."lastStudiedAt"
+      FROM jsonb_to_recordset(${JSON.stringify(entries)}::jsonb) AS p(
+        id text, "folderId" text, pinned bool, archived bool, "reviewLimit" int, "lastStudiedAt" timestamp)
+      WHERE e."studySetId" = p.id AND e."userId" = ${userId}`;
 }
 
 type Input =
@@ -73,6 +99,7 @@ type Receipt = {
   inputIdentity: string;
   setId: string | null;
   reused: boolean;
+  resultRevision: number | null;
 };
 
 function requestConflict(): never {
@@ -87,31 +114,102 @@ async function findReceipt(
   originalId: string,
   requestId: string,
 ): Promise<Receipt | undefined> {
-  const [receipt] = await tx.$queryRaw<Receipt[]>`
-    SELECT operation, "inputIdentity", "setId", reused FROM "StudySetOperation"
-    WHERE "userId" = ${userId} AND "requestId" = ${requestId}`;
-  if (receipt) return receipt;
-
-  // Catch a copy committed by the previous release after the migration ran.
-  const [legacyCopy] = await tx.$queryRaw<Receipt[]>`
-    SELECT 'copy' AS operation, regexp_replace("linkNonce", '^editable:', '') AS "inputIdentity",
-      "copyId" AS "setId", false AS reused FROM "StudySetCopyImport"
-    WHERE "userId" = ${userId} AND "requestId" = ${requestId}`;
-  if (legacyCopy) return legacyCopy;
-
   const legacyId = (key: string) =>
     createHash("sha256")
       .update(JSON.stringify(["create-set", userId, key]))
       .digest("hex");
-  const ids = [legacyId(originalId), legacyId(requestId)];
-  const [legacyCreate] = await tx.$queryRaw<Receipt[]>`
-    SELECT operation, "inputIdentity", "setId", reused FROM "StudySetOperation"
-    WHERE "userId" = ${userId} AND "requestId" IN (${ids[0]}, ${ids[1]})
-    UNION ALL
-    SELECT 'legacy-create', "contentFingerprint", id, false FROM "StudySet"
-    WHERE "userId" = ${userId} AND id IN (${ids[0]}, ${ids[1]})
+  const [receipt] = await tx.$queryRaw<Receipt[]>`
+    SELECT operation, "inputIdentity", "setId", reused, "resultRevision" FROM "StudySetOperation"
+    WHERE "userId" = ${userId} AND "requestId" IN (${requestId}, ${legacyId(originalId)}, ${legacyId(requestId)})
+    ORDER BY ("requestId" = ${requestId}) DESC, ("requestId" = ${legacyId(originalId)}) DESC
     LIMIT 1`;
-  return legacyCreate;
+  return receipt;
+}
+
+async function lockOperation(tx: Tx, userId: string, requestId: string) {
+  await tx.$queryRaw`
+    SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext('exam-prep-set-operation'), hashtext(${userId} || '/' || ${requestId}))`;
+}
+
+async function fingerprintFor(tx: Tx, document: string) {
+  const [row] = await tx.$queryRaw<{ fingerprint: string }[]>`
+    SELECT study_content_fingerprint(${document}::jsonb) AS fingerprint`;
+  return row.fingerprint;
+}
+
+async function rememberOperation(
+  tx: Tx,
+  userId: string,
+  requestId: string,
+  operation: string,
+  identity: string,
+  setId: string,
+  resultRevision: number,
+  reused = false,
+) {
+  await tx.$executeRaw`
+    INSERT INTO "StudySetOperation" ("userId", "requestId", operation, "inputIdentity", "setId", "resultRevision", reused)
+    VALUES (${userId}, ${requestId}, ${operation}, ${identity}, ${setId}, ${resultRevision}, ${reused})`;
+}
+
+export async function editStudySet(
+  db: Database,
+  userId: string,
+  id: string,
+  content: StudyContent,
+  revision: number,
+  key?: string,
+) {
+  return db.$transaction(async (tx) => {
+    const requestId = key?.toLowerCase();
+    if (requestId) await lockOperation(tx, userId, requestId);
+    const document = encodeStorage(content);
+    const identity = requestId
+      ? JSON.stringify([
+          id,
+          revision,
+          await fingerprintFor(tx, JSON.stringify(document)),
+        ])
+      : undefined;
+    const receipt =
+      requestId && (await findReceipt(tx, userId, key!, requestId));
+    if (
+      receipt &&
+      (receipt.operation !== "edit" || receipt.inputIdentity !== identity)
+    )
+      requestConflict();
+    await lockOwnerLibrary(tx, id);
+    const membership = await readLockedLibrarySet(tx, id, userId);
+    if (membership.ownershipRole === "viewer") throw unavailableSet();
+    if (receipt) {
+      return {
+        ...membership,
+        content: document,
+        title: document.title,
+        kind: document.kind,
+        revision: receipt.resultRevision!,
+      };
+    }
+    if (membership.revision !== revision) throw conflict();
+    const changed = await tx.studySet.updateMany({
+      where: { id, revision, NOT: { content: { equals: document } } },
+      data: { content: document, revision: { increment: 1 } },
+    });
+    const saved = changed.count
+      ? await readLibrarySet(tx, id, userId)
+      : membership;
+    if (requestId)
+      await rememberOperation(
+        tx,
+        userId,
+        requestId,
+        "edit",
+        identity!,
+        id,
+        saved.revision,
+      );
+    return saved;
+  });
 }
 
 export async function createStudySet(
@@ -120,26 +218,23 @@ export async function createStudySet(
   input: Input,
 ) {
   return db.$transaction(async (tx) => {
-    await lockLibrary(tx, userId);
     const requestId = input.requestId?.toLowerCase();
+    if (requestId) await lockOperation(tx, userId, requestId);
+    await lockLibrary(tx, userId);
     const document =
       "content" in input ? JSON.stringify(encodeStorage(input.content)) : null;
-    const [fingerprint] =
-      document && requestId
-        ? await tx.$queryRaw<{ fingerprint: string }[]>`
-          SELECT study_content_fingerprint(${document}::jsonb) AS fingerprint`
-        : [];
+    const fingerprint =
+      document && requestId ? await fingerprintFor(tx, document) : undefined;
     const identity =
       "content" in input
-        ? "content:" + fingerprint?.fingerprint
+        ? "content:" + fingerprint
         : input.scope + ":" + input.sourceId;
     const receipt =
       requestId && (await findReceipt(tx, userId, input.requestId!, requestId));
     if (receipt) {
       const matches =
         receipt.operation === "legacy-create"
-          ? input.operation === "reuse" &&
-            receipt.inputIdentity === fingerprint?.fingerprint
+          ? input.operation === "reuse" && receipt.inputIdentity === fingerprint
           : receipt.operation === input.operation &&
             receipt.inputIdentity === identity;
       if (!matches) requestConflict();
@@ -152,7 +247,7 @@ export async function createStudySet(
     let id: string | undefined;
     if (input.operation === "reuse" && document !== null) {
       const [match] = await tx.$queryRaw<{ id: string }[]>(sql`
-        SELECT s.id FROM "StudySet" s WHERE s."userId" = ${userId}
+        SELECT s.id FROM "StudySet" s ${joinPrimaryEntry} WHERE s."userId" = ${userId}
           AND ${exactContent(sql`${document}::jsonb`)}
         ORDER BY ${exactMatchOrder} LIMIT 1 FOR NO KEY UPDATE OF s`);
       id = match?.id;
@@ -166,11 +261,18 @@ export async function createStudySet(
           : await readCopySource(tx, userId, input.scope, input.sourceId);
       await insertPrivateSets(tx, userId, [{ id, ...draft }]);
     }
-    if (requestId)
-      await tx.$executeRaw`
-        INSERT INTO "StudySetOperation" ("userId", "requestId", operation, "inputIdentity", "setId", reused)
-        VALUES (${userId}, ${requestId}, ${input.operation}, ${identity}, ${id}, ${reused})`;
     const set = await readLibrarySet(tx, id, userId);
+    if (requestId)
+      await rememberOperation(
+        tx,
+        userId,
+        requestId,
+        input.operation,
+        identity,
+        id,
+        set.revision,
+        reused,
+      );
     return { set, created: !reused, reused };
   });
 }
@@ -195,7 +297,6 @@ async function readCopySource(
         : content;
     return {
       content: copy,
-      course: decodeStorage(source.course),
       folderId: source.folderId,
     };
   }
