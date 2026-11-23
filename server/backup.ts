@@ -26,6 +26,12 @@ import { decodeStorage, encodeStorage } from "./storage";
 import { lockLibrary } from "./libraryOrder";
 import type { LibraryFolder } from "../shared/listing";
 import { planBackupReviews, restoreBackupReviews } from "./backup-reviews";
+import {
+  backupSetCounts,
+  planBackupSets,
+  restoreBackupSets,
+  reviewSetIds,
+} from "./backup-sets";
 
 async function exportBackup(
   db: Database,
@@ -209,26 +215,36 @@ async function previewBackup(
   backup: ReturnType<typeof validateBackup>,
 ): Promise<BackupPreview> {
   const remap = backupIdMapper(userId, backup.backupId);
-  const reviewedSets = [
-    ...new Set(backup.reviews.map(({ studySetId }) => studySetId)),
-  ];
-  const setIds = new Map(
-    await Promise.all(
-      reviewedSets.map(async (id) => [id, await remap("set", id)] as const),
-    ),
+  const plan = await planBackupSets(
+    db,
+    userId,
+    backup,
+    await previousSetIds(backup, remap),
   );
   const { owned, viewers, reviewSkips } = await planBackupReviews(
     db,
     userId,
     backup,
-    setIds,
+    reviewSetIds(plan),
     false,
   );
   return {
     ...backupSummary(backup),
+    ...backupSetCounts(plan),
     reviewCount: owned.length + viewers.length - reviewSkips.unchanged,
     reviewSkips,
   };
+}
+
+async function previousSetIds(
+  backup: ReturnType<typeof validateBackup>,
+  remap: ReturnType<typeof backupIdMapper>,
+) {
+  return new Map(
+    await Promise.all(
+      backup.sets.map(async ({ id }) => [id, await remap("set", id)] as const),
+    ),
+  );
 }
 
 async function restoreBackup(
@@ -237,41 +253,41 @@ async function restoreBackup(
   backup: ReturnType<typeof validateBackup>,
 ): Promise<BackupRestoreResult> {
   const remap = backupIdMapper(userId, backup.backupId);
-  const [setIds, attemptIds, folderIds] = await Promise.all([
-    Promise.all(
-      backup.sets.map(async ({ id }) => [id, await remap("set", id)] as const),
-    ),
+  const [previousIds, attemptIds, folderIds] = await Promise.all([
+    previousSetIds(backup, remap),
     Promise.all(
       backup.attempts.map(
         async ({ id }) => [id, await remap("attempt", id)] as const,
       ),
-    ),
+    ).then((rows) => new Map(rows)),
     Promise.all(
       backup.folders.map(
         async ({ id }) => [id, await remap("folder", id)] as const,
       ),
-    ),
-  ]).then(
-    ([sets, attempts, folders]) =>
-      [new Map(sets), new Map(attempts), new Map(folders)] as const,
-  );
-  const attempts = JSON.stringify(
-    encodeStorage(
-      backup.attempts.map((attempt, restoreOrder) => ({
-        ...attempt,
-        id: attemptIds.get(attempt.id),
-        studySetId: attempt.studySetId ? setIds.get(attempt.studySetId) : null,
-        sourceAttemptId: attempt.sourceAttemptId
-          ? attemptIds.get(attempt.sourceAttemptId)
-          : null,
-        snapshotVersion: SNAPSHOT_VERSION,
-        progressContent: progressContent(attempt.snapshot),
-        restoreOrder,
-      })),
-    ),
-  );
+    ).then((rows) => new Map(rows)),
+  ]);
   return db.$transaction(async (tx) => {
     await lockLibrary(tx, userId);
+    const plan = await planBackupSets(tx, userId, backup, previousIds);
+    const setIds = reviewSetIds(plan);
+    const affected = JSON.stringify([
+      ...new Set([
+        ...backup.attempts.flatMap(({ studySetId }) =>
+          studySetId && setIds.has(studySetId) ? [setIds.get(studySetId)!] : [],
+        ),
+        ...backup.reviews.flatMap(({ studySetId }) =>
+          setIds.has(studySetId) ? [setIds.get(studySetId)!] : [],
+        ),
+        ...backup.viewerReviews.map(({ studySetId }) => studySetId),
+      ]),
+    ]);
+    // Editors, grant changes, and review starts lock the same live set rows.
+    // Lock in ID order before inserting attempts or schedules.
+    await tx.$queryRaw`
+      SELECT s.id FROM "StudySet" s
+      WHERE (s."userId" = ${userId} OR EXISTS (SELECT 1 FROM "StudySetViewer" v WHERE v."studySetId" = s.id AND v."userId" = ${userId})) AND s.id IN (SELECT jsonb_array_elements_text(${affected}::jsonb))
+      ORDER BY s.id FOR NO KEY UPDATE OF s`;
+
     const folders = JSON.stringify(
       encodeStorage(
         backup.folders.map(({ id, name }, position) => ({
@@ -303,7 +319,12 @@ async function restoreBackup(
     const legacyNames = [
       ...new Set(
         backup.sets
-          .filter((set) => set.folderId === undefined && set.course)
+          .filter(
+            (set) =>
+              plan.get(set.id)!.create &&
+              set.folderId === undefined &&
+              set.course,
+          )
           .map((set) => set.course),
       ),
     ];
@@ -327,37 +348,55 @@ async function restoreBackup(
     const legacyFolders = new Map(
       legacyRows.map(({ id, name }) => [decodeStorage(name), id]),
     );
-    const sets = JSON.stringify(
+    await restoreBackupSets(tx, userId, backup, plan, (set) => ({
+      course: set.course,
+      folderId: set.folderId
+        ? (resolvedFolders.get(folderIds.get(set.folderId)!) ?? null)
+        : set.folderId === null
+          ? null
+          : (legacyFolders.get(set.course) ?? null),
+    }));
+
+    const sourceRevisions = new Map(
+      backup.sets.map(({ id, revision }) => [id, revision]),
+    );
+    const attempts = JSON.stringify(
       encodeStorage(
-        backup.sets.map((set, restoreOrder) => ({
-          ...set,
-          id: setIds.get(set.id),
-          folderId: set.folderId
-            ? resolvedFolders.get(folderIds.get(set.folderId)!)
-            : set.folderId === null
-              ? null
-              : (legacyFolders.get(set.course) ?? null),
-          title: set.content.title,
-          kind: set.content.kind,
-          restoreOrder,
-        })),
+        backup.attempts.map((attempt, restoreOrder) => {
+          const sourceId = attempt.studySetId;
+          const destination = sourceId ? plan.get(sourceId)! : null;
+          let studySetRevision = attempt.studySetRevision;
+          if (sourceId && destination && !destination.create) {
+            // Historical revision numbers belong to the original set. Only its
+            // backed-up current version has a known destination revision.
+            studySetRevision =
+              studySetRevision === sourceRevisions.get(sourceId)
+                ? destination.revision
+                : null;
+          }
+          return {
+            ...attempt,
+            id: attemptIds.get(attempt.id),
+            studySetId: sourceId ? (setIds.get(sourceId) ?? null) : null,
+            studySetRevision,
+            sourceAttemptId: attempt.sourceAttemptId
+              ? attemptIds.get(attempt.sourceAttemptId)
+              : null,
+            snapshotVersion: SNAPSHOT_VERSION,
+            progressContent: progressContent(attempt.snapshot),
+            restoreOrder,
+          };
+        }),
       ),
     );
-    const restoredSets = await tx.$queryRaw<{ id: string }[]>`
-      INSERT INTO "StudySet" (id, "userId", title, kind, content, revision, course, "folderId", pinned,
-        archived, "reviewLimit", "lastStudiedAt", "createdAt", "updatedAt")
-      SELECT id, ${userId}, title, kind, content, revision, course, "folderId", pinned, archived,
-        "reviewLimit", "lastStudiedAt", "createdAt", "updatedAt"
-      FROM jsonb_to_recordset(${sets}::jsonb) AS s(
-        id text, title text, kind text, content jsonb, revision int, course text, "folderId" text, pinned bool,
-        archived bool, "reviewLimit" int, "lastStudiedAt" timestamp, "createdAt" timestamp, "updatedAt" timestamp, "restoreOrder" int)
-      ORDER BY "restoreOrder"
-      ON CONFLICT (id) DO NOTHING RETURNING id`;
     const restoredAttempts = await tx.$queryRaw<{ id: string }[]>`
       INSERT INTO "Attempt" (id, "userId", "studySetId", "studySetRevision", "sourceAttemptId",
         "snapshotVersion", "progressContent", snapshot, settings, "reviewMode", "fullSet", responses,
         result, status, position, "startedAt", "updatedAt", "completedAt")
-      SELECT id, ${userId}, "studySetId", "studySetRevision", "sourceAttemptId",
+      SELECT id, ${userId}, CASE WHEN a."reviewMode" AND a.status = 'in_progress' AND EXISTS (
+          SELECT 1 FROM "Attempt" existing WHERE existing."userId" = ${userId}
+            AND existing."studySetId" = a."studySetId" AND existing."reviewMode" AND existing.status = 'in_progress'
+        ) THEN NULL ELSE a."studySetId" END, "studySetRevision", "sourceAttemptId",
         "snapshotVersion", "progressContent", snapshot, settings, "reviewMode", "fullSet", responses,
         result, status, position, "startedAt", "updatedAt", "completedAt"
       FROM jsonb_to_recordset(${attempts}::jsonb) AS a(
@@ -376,7 +415,7 @@ async function restoreBackup(
               legacyRows.filter(({ created }) => created).length,
           }
         : {}),
-      setCount: restoredSets.length,
+      ...backupSetCounts(plan),
       attemptCount: restoredAttempts.length,
       ...reviewResult,
     };

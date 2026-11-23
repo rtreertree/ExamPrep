@@ -163,7 +163,7 @@ function LibrarySetActions({
         ) : null}
         {set.ownershipRole !== "viewer" && (
           <button disabled={busy} onClick={() => actions.duplicate(set)}>
-            Duplicate set
+            Make an independent copy
           </button>
         )}
         <button disabled={busy} onClick={() => actions.move(set)}>

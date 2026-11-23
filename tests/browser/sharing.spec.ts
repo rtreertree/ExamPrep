@@ -209,7 +209,7 @@ test("accepts a pending invitation and shows the co-owned set without owner-only
     .filter({ hasText: "Actions for Shared vocabulary" })
     .click();
   await expect(
-    page.getByRole("button", { name: "Duplicate set" }),
+    page.getByRole("button", { name: "Make an independent copy" }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Delete", exact: true }),

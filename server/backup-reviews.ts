@@ -20,39 +20,25 @@ export async function planBackupReviews(
     cardMismatch: 0,
   };
   const candidates = [
-    ...backup.reviews.map((review) => ({
-      ...review,
-      studySetId: setIds.get(review.studySetId)!,
-      viewer: false,
-    })),
+    ...backup.reviews.flatMap((review) => {
+      const studySetId = setIds.get(review.studySetId);
+      if (!studySetId) {
+        reviewSkips.inaccessible++;
+        return [];
+      }
+      return [{ ...review, studySetId, viewer: false }];
+    }),
     ...backup.viewerReviews.map((review) => ({ ...review, viewer: true })),
   ];
   const owned = candidates.filter(({ viewer }) => !viewer);
   const viewers = candidates.filter(({ viewer }) => viewer);
   if (!candidates.length) return { owned, viewers, reviewSkips };
-  const ownedSetIds = new Set(owned.map(({ studySetId }) => studySetId));
-  const viewerSetIds = new Set(viewers.map(({ studySetId }) => studySetId));
-  const ownedIds = JSON.stringify([...ownedSetIds]);
-  let viewerIds = JSON.stringify([...viewerSetIds]);
-
-  // Set edits and grant revocations take this same lock. Read content and access
-  // in a fresh statement after locking so a concurrent edit cannot pass preview.
-  if (restore) {
-    const locked = await db.$queryRaw<{ id: string }[]>`
-      SELECT s.id FROM "StudySet" s
-      WHERE (s."userId" = ${userId} AND s.id IN (SELECT jsonb_array_elements_text(${ownedIds}::jsonb)))
-        OR (s.id IN (SELECT jsonb_array_elements_text(${viewerIds}::jsonb)) AND EXISTS (
-          SELECT 1 FROM "StudySetViewer" v WHERE v."studySetId" = s.id AND v."userId" = ${userId}
-        ))
-      ORDER BY s.id FOR UPDATE OF s`;
-    viewerIds = JSON.stringify(
-      locked.map(({ id }) => id).filter((id) => viewerSetIds.has(id)),
-    );
-    await db.$queryRaw`
-      SELECT "studySetId" FROM "StudySetViewer" WHERE "userId" = ${userId}
-        AND "studySetId" IN (SELECT jsonb_array_elements_text(${viewerIds}::jsonb))
-      ORDER BY "studySetId" FOR KEY SHARE`;
-  }
+  const ownedIds = JSON.stringify([
+    ...new Set(owned.map(({ studySetId }) => studySetId)),
+  ]);
+  const viewerIds = JSON.stringify([
+    ...new Set(viewers.map(({ studySetId }) => studySetId)),
+  ]);
 
   const decks = await db.$queryRaw<
     { id: string; content: StudyContent | null; viewer: boolean }[]
@@ -76,8 +62,7 @@ export async function planBackupReviews(
   if (!restore) {
     for (const set of backup.sets) {
       const id = setIds.get(set.id);
-      if (!id || !ownedSetIds.has(id) || set.content.kind !== "flashcards")
-        continue;
+      if (!id || set.content.kind !== "flashcards") continue;
       const key = JSON.stringify([false, id]);
       if (!deckCards.has(key))
         deckCards.set(

@@ -30,7 +30,14 @@ const tableGrants = [
     privileges: ["SELECT", "INSERT", "DELETE"],
     tables: ['"StudySetInvitation"'],
   },
-  { privileges: ["SELECT", "INSERT"], tables: ['"StudySetCopyImport"'] },
+  {
+    privileges: ["SELECT", "INSERT"],
+    tables: [
+      '"StudySetCopyImport"',
+      '"StudySetOperation"',
+      '"BackupSetRestore"',
+    ],
+  },
   { privileges: ["SELECT"], tables: ['"LibraryMembership"'] },
 ];
 const requiredPrivileges = tableGrants.flatMap(({ privileges, tables }) =>

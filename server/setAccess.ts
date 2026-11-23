@@ -8,7 +8,7 @@ import { encodeStorage } from "./storage";
 import { folderForLegacyName, lockLibrary, readFolder } from "./libraryOrder";
 
 type QueryDb = Pick<Database, "$queryRaw">;
-export type LibrarySet = Omit<StudySet, "manualRank" | "published"> & {
+export type LibrarySet = Omit<StudySet, "manualRank" | "contentFingerprint"> & {
   ownershipRole: OwnershipRole;
   folderName: string | null;
   ownerName: string;
@@ -49,13 +49,23 @@ export const joinOwnerFolder = sql`
 
 export async function readLibrarySet(db: QueryDb, id: string, userId: string) {
   const [set] = await db.$queryRaw<LibrarySet[]>(sql`
-    SELECT s.id, s."userId", s.title, s.kind, s.content, s.revision, s."createdAt",
+    SELECT s.id, s."userId", s.title, s.kind, s.content, s.revision, s.published, s."createdAt",
       u.name AS "ownerName", s."updatedAt", ${ownershipRole}, ${ownerPreferences}
     FROM "StudySet" s JOIN "user" u ON u.id = s."userId" ${joinMembership(userId)} ${joinOwnerFolder}
     WHERE s.id = ${id} AND ${libraryAccess(userId)}
   `);
   if (!set) throw unavailableSet();
   return set;
+}
+
+export async function lockOwnerLibrary(
+  tx: Pick<Database, "$queryRaw" | "$executeRaw">,
+  id: string,
+) {
+  const [owner] = await tx.$queryRaw<{ userId: string }[]>`
+    SELECT "userId" FROM "StudySet" WHERE id = ${id}`;
+  if (!owner) throw unavailableSet();
+  await lockLibrary(tx, owner.userId);
 }
 
 export async function lockPrimarySet(db: QueryDb, id: string, userId: string) {

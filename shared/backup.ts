@@ -343,5 +343,8 @@ export type BackupReviewSkips = {
   inaccessible: number;
   cardMismatch: number;
 };
-export type BackupPreview = BackupSummary & { reviewSkips: BackupReviewSkips };
+export type BackupPreview = BackupSummary & {
+  reusedSetCount: number;
+  reviewSkips: BackupReviewSkips;
+};
 export type BackupRestoreResult = Omit<BackupPreview, "titles">;

@@ -1,3 +1,4 @@
+import { copyLibrarySet } from "../lib/setSave";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Upload, Plus, ArrowLeft, ChevronDown, Folder, X } from "lucide-react";
@@ -391,7 +392,7 @@ export function LibraryPage() {
     setBusy(true);
     setError(undefined);
     try {
-      const copy = await api<StudySet>(`/sets/${set.id}/duplicate`, "POST", {});
+      const copy = await copyLibrarySet(user!.id, set.id);
       navigate(`/sets/${copy.id}/edit`);
     } catch (e) {
       setError(e as Error);

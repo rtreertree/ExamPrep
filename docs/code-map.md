@@ -20,7 +20,8 @@ Paths start at the repository root. Open the first file for the behavior you're 
 | History and date filtering | `client/features/History.tsx` | `client/lib/historyDates.ts`, `server/history.ts`, `server/attemptRoutes.ts` | `tests/history-dates.test.ts` |
 | Sign-in and password recovery | `client/features/AuthPage.tsx` | `client/lib/auth.tsx`, `client/features/PasswordRecovery.tsx`, `server/auth.ts`, `server/resetEmail.ts` | `tests/browser/account.spec.ts`, `tests/passwords.test.ts` |
 | Account settings and reading preferences | `client/features/Account.tsx` | `client/lib/readingSize.ts`, `client/lib/auth.tsx` | `tests/browser/account.spec.ts` |
-| Backup and restore | `client/features/AccountBackup.tsx` | `server/backup.ts`, `server/backup-reviews.ts`, `shared/backup.ts` | `tests/backup.test.ts`, `tests/api.integration.test.ts`, `tests/browser/account.spec.ts` |
+| Save and independent copy | `server/setCreation.ts` | `server/setRoutes.ts`, `server/directory.ts`, `server/admin.ts`, `client/lib/setSave.ts` | `tests/api.integration.test.ts`, `tests/browser/reliability.spec.ts` |
+| Backup and restore | `client/features/AccountBackup.tsx` | `server/backup.ts`, `server/backup-sets.ts`, `server/backup-reviews.ts`, `shared/backup.ts` | `tests/backup.test.ts`, `tests/api.integration.test.ts`, `tests/browser/account.spec.ts` |
 | API and runtime entry points | `server/app.ts` | `client/lib/api.ts`, `server/node.ts`, `server/worker.ts`, `vite.config.ts` | `npm run typecheck`, `npm run worker:check` |
 | Database migrations and deployment | `prisma/schema.prisma` | `prisma/migrations/`, `wrangler.jsonc`, `.github/workflows/release.yml` | `tests/deployment.test.mjs`, `npm run worker:check` |
 | CI and production release | `.github/workflows/ci.yml` | `.github/workflows/release.yml`, `scripts/release-head.mjs`, `scripts/deploy-production.mjs`, `scripts/smoke.mjs` | `tests/deployment.test.mjs`, `npm run worker:package` |

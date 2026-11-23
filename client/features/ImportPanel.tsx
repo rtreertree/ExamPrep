@@ -17,7 +17,10 @@ import {
   buildAIRepairPrompt,
 } from "../lib/aiPrompt";
 import type { AISettings } from "../lib/aiSettings";
-import { api, type StudySet } from "../lib/api";
+import type { StudySet } from "../lib/api";
+import { useAuth } from "../lib/auth";
+import { saveStudySet } from "../lib/setSave";
+import { ExistingSet, type SetMatch } from "./ExistingSet";
 import { useUnsaved } from "../lib/hooks";
 import { unwrapPastedJSON } from "../lib/importSource";
 import { issueLabel, issuesOf, repairInstructions } from "../lib/issues";
@@ -31,6 +34,8 @@ export function ImportPanel({
   onClose: () => void;
   onSaved: (set: StudySet) => void;
 }) {
+  const { user } = useAuth();
+  const [match, setMatch] = useState<SetMatch>();
   const [mode, setMode] = useState(aiSettings ? "paste" : "file");
   const [raw, setRaw] = useState("");
   const [fileName, setFileName] = useState("");
@@ -72,10 +77,10 @@ export function ImportPanel({
           completeSetup ? aiSettings : undefined,
         )
       : undefined;
-  useUnsaved(!!raw);
+  useUnsaved(!!raw && !match);
   function close() {
     if (busy) return;
-    if (raw) setConfirmClose(true);
+    if (raw && !match) setConfirmClose(true);
     else onClose();
   }
   async function validate(source: string, read: number, pasted = false) {
@@ -121,18 +126,25 @@ export function ImportPanel({
     setSaveError(undefined);
   }
   async function save() {
-    if (!preview || readingFile || busy || blockers.length) return;
+    if (!user || !preview || readingFile || busy || blockers.length) return;
     setBusy(true);
     setSaveError(undefined);
     try {
-      const set = await api<StudySet>("/sets", "POST", preview);
-      onSaved(set);
+      const { set, reused } = await saveStudySet(user.id, preview);
+      if (reused) setMatch({ set, content: preview });
+      else onSaved(set);
     } catch (e) {
       setSaveError(e as Error);
     } finally {
       setBusy(false);
     }
   }
+  if (match)
+    return (
+      <Dialog title="Study set already saved" onClose={close}>
+        <ExistingSet match={match} onCopy={onSaved} />
+      </Dialog>
+    );
   if (confirmClose)
     return (
       <Dialog

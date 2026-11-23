@@ -650,6 +650,44 @@ test("library resumes without duplication and import has a bounded preview and e
     animations: "disabled",
   });
 });
+test("shows the archived match and preserves an independent copy request after a lost reply", async ({ page }) => {
+  const state = await fixture(page);
+  const copyKeys: (string | null)[] = [];
+  await page.route(/\/api\/sets\?requestId=/, async (route) => {
+    const url = new URL(route.request().url());
+    const saved = { ...state.set(), archived: true };
+    if (!url.searchParams.has("copy")) {
+      await route.fulfill({ status: 200, headers: { "X-Study-Set-Reused": "1" }, json: saved });
+    } else {
+      copyKeys.push(url.searchParams.get("requestId"));
+      if (copyKeys.length === 1) await route.fulfill({ status: 503, json: { error: "Copy response unavailable. Try again." } });
+      else await route.fulfill({ status: 200, json: { ...saved, id: "independent", archived: false } });
+    }
+  });
+  async function importDocument() {
+    await page.getByRole("button", { name: "Import", exact: true }).click();
+    await page.getByRole("tab", { name: "Paste JSON" }).click();
+    await page.getByLabel("Study-set JSON").fill(JSON.stringify(written));
+    await page.getByRole("button", { name: "Validate and preview" }).click();
+    await page.getByRole("button", { name: "Save to library" }).click();
+  }
+  await page.goto("/library");
+  await importDocument();
+  const match = page.getByRole("dialog", { name: "Study set already saved" });
+  await expect(match.getByText("“Reliable study” is already in your archive.")).toBeVisible();
+  await expect(match.getByRole("link", { name: "Open existing set" })).toHaveAttribute("href", "/sets/set/edit");
+  const copy = match.getByRole("button", { name: "Make an independent copy" });
+  await copy.click();
+  await expect(match.getByText("Copy response unavailable. Try again.")).toBeVisible();
+  await page.reload();
+  await importDocument();
+  await copy.click();
+  expect(copyKeys).toHaveLength(2);
+  expect(copyKeys[0]).toMatch(/^[0-9a-f-]{36}$/);
+  expect(copyKeys[1]).toBe(copyKeys[0]);
+  await expect(page.getByRole("link", { name: "Edit set", exact: true })).toHaveAttribute("href", "/sets/independent/edit");
+});
+
 test("AI settings survive closing, remain account scoped, and search filters reach the server", async ({
   page,
 }) => {
@@ -1115,7 +1153,7 @@ test("library resumes the saved snapshot and remembers the folder across practic
   ).toBeVisible();
   await actions.click();
   await page
-    .getByRole("button", { name: "Duplicate set", exact: true })
+    .getByRole("button", { name: "Make an independent copy", exact: true })
     .click();
   await expect(
     page.getByRole("heading", { name: "Copy of Reliable study", level: 1 }),

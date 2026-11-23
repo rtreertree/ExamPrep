@@ -1,3 +1,4 @@
+import { createStudySet } from "./setCreation";
 import { sqltag as sql } from "@prisma/client/runtime/wasm-compiler-edge";
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
@@ -10,10 +11,10 @@ import type {
 import { LIST_PAGE_SIZE } from "../shared/listing";
 import type { Context } from "./app";
 import type { Database } from "./db";
-import { cloneSet, page, pageInput, searchPattern } from "./directory";
+import { page, pageInput, searchPattern } from "./directory";
 import { lockLibrary } from "./libraryOrder";
 import { read, schema } from "./request";
-import { lockSet, unavailableSet } from "./setAccess";
+import { lockOwnerLibrary, lockSet, unavailableSet } from "./setAccess";
 import { revokeCoOwner, setLink, signLink } from "./sharing";
 
 type Reader = Pick<Database, "$queryRaw">;
@@ -157,14 +158,17 @@ export function registerAdmin(app: Hono<Context>, secret: string) {
       await read(c.req.raw, 1024),
     );
     await account(c.get("db"), c.req.param("id"));
-    const copy = await cloneSet(
+    const { set, created } = await createStudySet(
       c.get("db"),
       c.req.param("id"),
-      setId,
-      requestId.toLowerCase(),
-      "admin",
+      {
+        operation: "copy",
+        scope: "admin",
+        sourceId: setId,
+        requestId,
+      },
     );
-    return c.json({ id: copy.id }, copy.created ? 201 : 200);
+    return c.json({ id: set.id }, created ? 201 : 200);
   });
   app.post("/api/admin/sets/:id/access", async (c) => {
     const input = schema(action, await read(c.req.raw, 2048)),
@@ -230,6 +234,7 @@ export function registerAdmin(app: Hono<Context>, secret: string) {
       await read(c.req.raw, 1024),
     );
     await c.get("db").$transaction(async (tx) => {
+      await lockOwnerLibrary(tx, id);
       if (!(await lockSet(tx, id))) throw unavailableSet();
       const current = await access(tx, id, secret);
       if (

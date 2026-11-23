@@ -209,6 +209,7 @@ export function AccountBackup() {
                 Boolean(busy) ||
                 (preview.summary.folderCount ?? 0) +
                   preview.summary.setCount +
+                  (preview.summary.reusedSetCount ?? 0) +
                   preview.summary.attemptCount +
                   preview.summary.reviewCount ===
                   0
@@ -222,7 +223,7 @@ export function AccountBackup() {
       ) : null}
       {restored ? (
         <div className="stack">
-          <Notice tone="success">Restored {countsText(restored)}.</Notice>
+          <Notice tone="success">Restored {countsText(restored, true)}.</Notice>
           <ReviewSkipNotice skips={restored.reviewSkips} />
         </div>
       ) : null}
@@ -242,14 +243,24 @@ function ReviewSkipNotice({ skips }: { skips?: BackupReviewSkips }) {
   ) : null;
 }
 
-function countsText({
-  folderCount,
-  setCount,
-  attemptCount,
-  reviewCount,
-}: Omit<BackupSummary, "titles">) {
+function countsText(
+  {
+    folderCount,
+    setCount,
+    reusedSetCount,
+    attemptCount,
+    reviewCount,
+  }: Omit<BackupSummary, "titles"> & { reusedSetCount?: number },
+  restored = false,
+) {
   const folders = folderCount
     ? `${folderCount} ${folderCount === 1 ? "folder" : "folders"}, `
     : "";
-  return `${folders}${setCount} study ${setCount === 1 ? "set" : "sets"}, ${attemptCount} ${attemptCount === 1 ? "attempt" : "attempts"}, and ${reviewCount} scheduled ${reviewCount === 1 ? "card" : "cards"}`;
+  const sets =
+    reusedSetCount === undefined
+      ? `${setCount} study ${setCount === 1 ? "set" : "sets"}`
+      : restored
+        ? `${setCount} new ${setCount === 1 ? "set" : "sets"}, reused ${reusedSetCount}`
+        : `${setCount} ${setCount === 1 ? "set" : "sets"} to create, ${reusedSetCount} to reuse`;
+  return `${folders}${sets}, ${attemptCount} ${attemptCount === 1 ? "attempt" : "attempts"}, and ${reviewCount} scheduled ${reviewCount === 1 ? "card" : "cards"}`;
 }

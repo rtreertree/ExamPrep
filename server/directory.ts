@@ -1,6 +1,5 @@
 import { sqltag as sql } from "@prisma/client/runtime/wasm-compiler-edge";
 import type { Hono } from "hono";
-import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 import type {
   DirectoryPage,
@@ -10,9 +9,9 @@ import type {
 import { LIST_PAGE_SIZE } from "../shared/listing";
 import type { Context } from "./app";
 import type { Database } from "./db";
-import { lockLibrary } from "./libraryOrder";
 import { read, schema } from "./request";
-import { lockSet, unavailableSet } from "./setAccess";
+import { unavailableSet } from "./setAccess";
+import { createStudySet } from "./setCreation";
 import { decodeStorage, encodeStorage } from "./storage";
 
 export const pageInput = {
@@ -78,44 +77,6 @@ async function listSets(
   return page(rows.map((row) => ({ ...row, title: decodeStorage(row.title) })));
 }
 
-// Share links, Discover, and admin grants use distinct namespaces for import receipts.
-export async function cloneSet(
-  db: Database,
-  userId: string,
-  setId: string,
-  requestId: string,
-  scope: "discover" | "admin",
-) {
-  return db.$transaction(async (tx) => {
-    await lockLibrary(tx, userId);
-    if (!(await lockSet(tx, setId))) throw unavailableSet();
-    const [source] = await tx.$queryRaw<
-      { published: boolean }[]
-    >`SELECT published FROM "StudySet" WHERE id = ${setId}`;
-    if (scope === "discover" && !source.published) throw unavailableSet();
-    const legacyKey = scope + ":" + setId;
-    const key = "editable:" + legacyKey;
-    const [receipt] = await tx.$queryRaw<
-      { copyId: string | null; linkNonce: string }[]
-    >`
-      SELECT "linkNonce", "copyId" FROM "StudySetCopyImport" WHERE "userId" = ${userId} AND "requestId" = ${requestId}
-    `;
-    if (receipt) {
-      if (receipt.linkNonce !== key && receipt.linkNonce !== legacyKey)
-        throw new HTTPException(409, {
-          message: "This request was used for another copy.",
-        });
-      if (!receipt.copyId) throw unavailableSet();
-      return { id: receipt.copyId, created: false };
-    }
-    const id = crypto.randomUUID();
-    await tx.$executeRaw`INSERT INTO "StudySet" (id, "userId", kind, title, content, "updatedAt")
-      SELECT ${id}, ${userId}, kind, title, content, CURRENT_TIMESTAMP FROM "StudySet" WHERE id = ${setId}`;
-    await tx.$executeRaw`INSERT INTO "StudySetCopyImport" ("userId", "requestId", "linkNonce", "copyId")
-      VALUES (${userId}, ${requestId}, ${key}, ${id})`;
-    return { id, created: true };
-  });
-}
 export function registerDirectory(app: Hono<Context>) {
   app.get("/api/discover", async (c) =>
     c.json(await listSets(c.get("db"), c.req.query(), { type: "discover" })),
@@ -152,13 +113,16 @@ export function registerDirectory(app: Hono<Context>) {
       z.strictObject({ requestId: z.uuid() }),
       await read(c.req.raw, 1024),
     );
-    const copy = await cloneSet(
+    const { set, created } = await createStudySet(
       c.get("db"),
       c.get("userId"),
-      c.req.param("id"),
-      requestId.toLowerCase(),
-      "discover",
+      {
+        operation: "copy",
+        scope: "discover",
+        sourceId: c.req.param("id"),
+        requestId,
+      },
     );
-    return c.json({ id: copy.id }, copy.created ? 201 : 200);
+    return c.json({ id: set.id }, created ? 201 : 200);
   });
 }

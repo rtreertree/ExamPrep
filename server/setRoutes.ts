@@ -1,7 +1,6 @@
 import { readStudySuggestion } from "./studySuggestion";
 import { readInvitations } from "./sharing";
 import type { Hono } from "hono";
-import { createHash } from "node:crypto";
 import { sqltag as sql } from "@prisma/client/runtime/wasm-compiler-edge";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
@@ -32,6 +31,7 @@ import {
   joinMembership,
   joinOwnerFolder,
   readLockedLibrarySet,
+  lockOwnerLibrary,
   organizeSets,
   librarySetIds,
   ownerPreferences,
@@ -43,6 +43,7 @@ import {
   type LibrarySet,
 } from "./setAccess";
 import { encodeStorage, decodeStorage } from "./storage";
+import { createStudySet } from "./setCreation";
 
 const courseSchema = z.string().trim().max(100);
 const organizationFields = {
@@ -59,18 +60,15 @@ const oneFolderField = ({
   folderId?: string | null;
 }) => course === undefined || folderId === undefined;
 
-function publicSet({
-  manualRank: _rank,
-  ...set
-}: Awaited<ReturnType<Database["studySet"]["create"]>>) {
-  return decodeStorage({
-    ...set,
-    folderName: set.course || null,
-    ownershipRole: "primary" as const,
-  });
+function publicSet({ ownerName: _ownerName, ...set }: LibrarySet) {
+  return decodeStorage(set);
 }
 
-function ownedSetResponse({ ownerName, ...stored }: LibrarySet) {
+function ownedSetResponse({
+  ownerName,
+  published: _published,
+  ...stored
+}: LibrarySet) {
   return { ...decodeStorage(stored), ownerName };
 }
 
@@ -130,7 +128,7 @@ export function registerSetRoutes(app: Hono<Context>) {
     // Project metadata in PostgreSQL: a page must not load thirty 2-MiB documents.
     const [sets, folders] = await Promise.all([
       db.$queryRaw<
-        (Omit<LibrarySet, "content" | "ownerName"> & {
+        (Omit<LibrarySet, "content" | "ownerName" | "published"> & {
           count: number;
           manual: ManualOrder | null;
         })[]
@@ -226,34 +224,19 @@ export function registerSetRoutes(app: Hono<Context>) {
   });
   app.post("/api/sets", async (c) => {
     const content = validateContent(await read(c.req.raw, MAX_BYTES));
-    const userId = c.get("userId");
-    const requestId = c.req.query("requestId");
-    let id: string | undefined;
-    if (requestId !== undefined) {
-      const key = JSON.stringify([
-        "create-set",
-        userId,
-        schema(z.uuid(), requestId),
-      ]);
-      id = createHash("sha256").update(key).digest("hex");
-    }
-    const { set, created } = await c.get("db").$transaction(async (tx) => {
-      await lockLibrary(tx, userId);
-      if (id) {
-        const existing = await tx.studySet.findFirst({ where: { id, userId } });
-        if (existing) return { set: existing, created: false };
-      }
-      const set = await tx.studySet.create({
-        data: {
-          id,
-          userId,
-          title: encodeStorage(content.title),
-          kind: content.kind,
-          content: json(content),
-        },
-      });
-      return { set, created: true };
-    });
+    const { requestId, copy } = schema(
+      z.strictObject({
+        requestId: z.uuid().optional(),
+        copy: z.literal("1").optional(),
+      }),
+      c.req.query(),
+    );
+    const { set, created, reused } = await createStudySet(
+      c.get("db"),
+      c.get("userId"),
+      { operation: copy ? "copy" : "reuse", content, requestId },
+    );
+    if (reused) c.header("X-Study-Set-Reused", "1");
     return c.json(publicSet(set), created ? 201 : 200);
   });
   app.get("/api/sets/:id", async (c) => {
@@ -278,6 +261,7 @@ export function registerSetRoutes(app: Hono<Context>) {
     const id = c.req.param("id");
     const storedContent = json(content);
     const set = await db.$transaction(async (tx) => {
+      await lockOwnerLibrary(tx, id);
       const membership = await readLockedLibrarySet(tx, id, userId);
       if (membership.ownershipRole === "viewer") throw unavailable();
       const changed = await tx.studySet.updateMany({
@@ -321,35 +305,21 @@ export function registerSetRoutes(app: Hono<Context>) {
     return c.json({ updated: true });
   });
   app.post("/api/sets/:id/duplicate", async (c) => {
-    schema(z.strictObject({}), await read(c.req.raw));
-    const db = c.get("db");
-    const userId = c.get("userId");
-    const duplicateId = c.req.param("id");
-    const set = await db.$transaction(async (tx) => {
-      await lockLibrary(tx, userId);
-      const original = await readLibrarySet(tx, duplicateId, userId);
-      const content = validateContent(decodeStorage(original.content));
-      if (original.ownershipRole === "viewer") throw unavailable();
-      const titled = {
-        ...content,
-        title: [...`Copy of ${content.title}`].slice(0, 200).join(""),
-      };
-      const copy =
-        new TextEncoder().encode(JSON.stringify(titled)).length <= MAX_BYTES
-          ? titled
-          : content;
-      return tx.studySet.create({
-        data: {
-          userId,
-          title: encodeStorage(copy.title),
-          kind: copy.kind,
-          course: original.course,
-          folderId: original.folderId,
-          content: json(copy),
-        },
-      });
-    });
-    return c.json(publicSet(set), 201);
+    const { requestId } = schema(
+      z.strictObject({ requestId: z.uuid().optional() }),
+      await read(c.req.raw),
+    );
+    const { set, created } = await createStudySet(
+      c.get("db"),
+      c.get("userId"),
+      {
+        operation: "copy",
+        scope: "library",
+        sourceId: c.req.param("id"),
+        requestId,
+      },
+    );
+    return c.json(publicSet(set), created ? 201 : 200);
   });
   app.delete("/api/sets/:id", async (c) => {
     const input = schema(
@@ -358,13 +328,16 @@ export function registerSetRoutes(app: Hono<Context>) {
     );
     const db = c.get("db");
     const where = { id: c.req.param("id"), userId: c.get("userId") };
-    const deleted = await db.studySet.deleteMany({
-      where: { ...where, revision: input.revision },
+    await db.$transaction(async (tx) => {
+      await lockLibrary(tx, where.userId);
+      const deleted = await tx.studySet.deleteMany({
+        where: { ...where, revision: input.revision },
+      });
+      if (!deleted.count) {
+        if (!(await tx.studySet.findFirst({ where }))) throw unavailable();
+        throw conflict();
+      }
     });
-    if (!deleted.count) {
-      if (!(await db.studySet.findFirst({ where }))) throw unavailable();
-      throw conflict();
-    }
     return c.json({ deleted: true });
   });
   app.get("/api/sets/:id/export", async (c) => {

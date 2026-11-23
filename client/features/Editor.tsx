@@ -1,3 +1,5 @@
+import { saveStudySet } from "../lib/setSave";
+import { ExistingSet, type SetMatch } from "./ExistingSet";
 import { PositionForm } from "../components/PositionForm";
 import { Selector } from "../components/Selector";
 import {
@@ -178,6 +180,9 @@ function Editor({
   const itemSearchField = useRef<HTMLInputElement>(null);
   const searchTerm = useDeferredValue(itemSearch.trim().toLowerCase());
   const [movePosition, setMovePosition] = useState<string>();
+  const [match, setMatch] = useState<
+    SetMatch & { captured: StudyContent; practiceAfter: boolean }
+  >();
   const [settingUp, setSettingUp] = useState<StudySet>();
   const [mode, setMode] = useState("edit");
   const [localStatus, setLocalStatus] = useState("No local changes");
@@ -325,8 +330,47 @@ function Editor({
     setIndex(0);
     setLocalStatus("Draft restored");
   }
+  async function finishSave(
+    set: StudySet,
+    captured: StudyContent,
+    redirect: boolean,
+    practiceAfter: boolean,
+  ) {
+    setFieldIssues([]);
+    setRevision(set.revision);
+    setSetId(set.id);
+    setOwnershipRole(set.ownershipRole);
+    setBaseline(JSON.stringify(captured));
+    setConflict(false);
+    setDatabaseStatus("Saved");
+    try {
+      if (JSON.stringify(current.current) === JSON.stringify(captured))
+        await removeDraft(user!.id, draftKey);
+      else
+        await putDraft({
+          version: 1,
+          userId: user!.id,
+          key: draftKey,
+          baseRevision: set.revision,
+          content: current.current,
+          updatedAt: Date.now(),
+        });
+    } catch {
+      setStorageError(
+        new Error(
+          "Your account save succeeded, but the device draft could not be updated.",
+        ),
+      );
+    }
+    if (practiceAfter) setSettingUp(set);
+    else if (redirect) {
+      allowedLeave.current = true;
+      navigate(`/sets/${set.id}/edit`, { replace: true });
+    }
+  }
+
   async function save(asNew = false, practiceAfter = false) {
-    if (saving.current) return;
+    if (!user || saving.current) return;
     fullCheck.current = true;
     setShowIssueSummary(true);
     saving.current = true;
@@ -334,48 +378,25 @@ function Editor({
     setError(undefined);
     setDatabaseStatus("Saving…");
     const captured = structuredClone(current.current);
-    let accountSaved = false;
     try {
       const valid = validateContent(captured);
-      const set = await api<StudySet>(
-        asNew || !setId ? "/sets" : `/sets/${setId}`,
-        asNew || !setId ? "POST" : "PUT",
-        asNew || !setId ? valid : { revision, content: valid },
-      );
-      accountSaved = true;
-      setFieldIssues([]);
-      setRevision(set.revision);
-      setSetId(set.id);
-      setOwnershipRole(set.ownershipRole);
-      setBaseline(JSON.stringify(captured));
-      setConflict(false);
-      setDatabaseStatus("Saved");
-      try {
-        if (JSON.stringify(current.current) === JSON.stringify(captured))
-          await removeDraft(user!.id, draftKey);
-        else
-          await putDraft({
-            version: 1,
-            userId: user!.id,
-            key: draftKey,
-            baseRevision: set.revision,
-            content: current.current,
-            updatedAt: Date.now(),
-          });
-      } catch {
-        setStorageError(
-          new Error(
-            "Your account save succeeded, but the device draft could not be updated.",
-          ),
-        );
-      }
-      if (practiceAfter) setSettingUp(set);
-      else if (!initial.set || asNew) {
-        allowedLeave.current = true;
-        navigate(`/sets/${set.id}/edit`, { replace: true });
+      if (asNew || !setId) {
+        const { set, reused } = await saveStudySet(user.id, valid);
+        if (reused) {
+          setMatch({ set, content: valid, captured, practiceAfter });
+          setDatabaseStatus("Match found");
+          return;
+        }
+        await finishSave(set, captured, true, practiceAfter);
+      } else {
+        const set = await api<StudySet>(`/sets/${setId}`, "PUT", {
+          revision,
+          content: valid,
+        });
+        await finishSave(set, captured, false, practiceAfter);
       }
     } catch (e) {
-      setDatabaseStatus(accountSaved ? "Saved" : "Could not save");
+      setDatabaseStatus("Could not save");
       setFieldIssues(issuesOf(e as Error));
       setError(e as Error);
       if (e instanceof ApiError && [404, 409].includes(e.status))
@@ -1021,6 +1042,29 @@ function Editor({
           <div className="item-add-mobile">{addActions}</div>
         </fieldset>
       </FieldIssues.Provider>
+      {match ? (
+        <Dialog
+          title="Study set already saved"
+          onClose={() => setMatch(undefined)}
+        >
+          <ExistingSet
+            match={match}
+            onOpen={() => {
+              setMatch(undefined);
+              void finishSave(
+                match.set,
+                match.captured,
+                true,
+                false,
+              );
+            }}
+            onCopy={(copy) => {
+              setMatch(undefined);
+              void finishSave(copy, match.captured, true, match.practiceAfter);
+            }}
+          />
+        </Dialog>
+      ) : null}
       {settingUp ? (
         <PracticeSetup
           set={settingUp}

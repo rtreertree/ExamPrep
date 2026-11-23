@@ -168,7 +168,7 @@ function UserDetails({ id }: { id: string }) {
               <CloneButton
                 path={"/admin/users/" + id + "/copies"}
                 actionKey={set.id}
-                label="Add independent copy"
+                label="Make an independent copy"
                 onCreated={() => {
                   setAdding(false);
                   update((v) => v + 1);

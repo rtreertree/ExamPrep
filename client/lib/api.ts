@@ -63,6 +63,7 @@ export async function api<T>(
   path: string,
   method = "GET",
   body?: unknown,
+  inspect?: (response: Response) => void,
 ): Promise<T> {
   let response: globalThis.Response;
   try {
@@ -78,7 +79,16 @@ export async function api<T>(
       0,
     );
   }
-  const value = (await response.json().catch(() => ({}))) as T & {
+  const value = (await (response.status === 204
+    ? {}
+    : response.json().catch(() => {
+        if (response.ok)
+          throw new ApiError(
+            "The server response was incomplete. Try again.",
+            0,
+          );
+        return {};
+      }))) as T & {
     error?: string | { message?: string };
     message?: string;
     issues?: { path: string; message: string }[];
@@ -96,6 +106,7 @@ export async function api<T>(
       value.reference,
     );
   }
+  inspect?.(response);
   return value;
 }
 export function download(

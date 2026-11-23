@@ -1,8 +1,8 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import type { DirectorySet, SetReaderData } from "../../shared/directory";
 import { Button, ErrorNotice, LoadingRows, PageHeader } from "../components/ui";
-import { api, ApiError } from "../lib/api";
+import { copyDirectorySet } from "../lib/setSave";
 import { useAuth } from "../lib/auth";
 import { useResource } from "../lib/hooks";
 import { Directory, kindFilter, SetRow } from "./Directory";
@@ -21,46 +21,16 @@ export function CloneButton({
   onCreated: (id: string) => void;
 }) {
   const { user } = useAuth();
-  const key = JSON.stringify(["clone", user?.id, path, actionKey]);
-  const request = useRef<string | undefined>(undefined);
   const [error, setError] = useState<Error>();
   const [busy, setBusy] = useState(false);
-  function clearRequest() {
-    request.current = undefined;
-    try {
-      sessionStorage.removeItem(key);
-    } catch {
-      /* Device storage is optional. */
-    }
-  }
   async function clone() {
-    if (busy) return;
+    if (!user || busy) return;
     setBusy(true);
     setError(undefined);
     try {
-      try {
-        request.current ||= sessionStorage.getItem(key) || undefined;
-      } catch {
-        /* Device storage is optional. */
-      }
-      const requestId = (request.current ||= crypto.randomUUID());
-      try {
-        sessionStorage.setItem(key, requestId);
-      } catch {
-        /* Retain the key in memory. */
-      }
-      const { id } = await api<{ id: string }>(
-        path,
-        "POST",
-        path.startsWith("/admin/")
-          ? { requestId, setId: actionKey }
-          : { requestId },
-      );
-      clearRequest();
+      const { id } = await copyDirectorySet(user.id, path, actionKey);
       onCreated(id);
     } catch (err) {
-      if (err instanceof ApiError && [404, 409].includes(err.status))
-        clearRequest();
       setError(err as Error);
     } finally {
       setBusy(false);
@@ -107,7 +77,7 @@ export default function Discover() {
                     key={id}
                     path={"/discover/" + id + "/clone"}
                     actionKey={id}
-                    label="Create editable copy"
+                    label="Make an independent copy"
                     onCreated={(copy) => navigate("/sets/" + copy + "/edit")}
                   />
                 </details>

@@ -10,7 +10,10 @@ import type { StudyContent } from "../../shared/content";
 import { codePoints, itemsOf } from "../../shared/contentItems";
 import { Button, Dialog, ErrorNotice, Field } from "../components/ui";
 import { Selector } from "../components/Selector";
-import { api } from "../lib/api";
+import type { StudySet } from "../lib/api";
+import { useAuth } from "../lib/auth";
+import { saveStudySet } from "../lib/setSave";
+import { ExistingSet, type SetMatch } from "./ExistingSet";
 import { matchesItem, withItems } from "./editorItems";
 
 export function ReviewSetDialog({
@@ -73,11 +76,9 @@ export function ReviewSetDialog({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error>();
-  const [saved, setSaved] = useState<{ id: string; title: string }>();
-  const request = useRef<{
-    signature: string;
-    id: string;
-  } | null>(null);
+  const { user } = useAuth();
+  const [saved, setSaved] = useState<StudySet>();
+  const [match, setMatch] = useState<SetMatch>();
   const name = title.trim();
   const titleTooLong = codePoints(name) > 200;
   const canSave = selection.size > 0 && !!name && !titleTooLong;
@@ -90,23 +91,15 @@ export function ReviewSetDialog({
   }
 
   async function save() {
-    if (busy || !canSave) return;
+    if (!user || busy || !canSave) return;
     setBusy(true);
     setError(undefined);
     try {
       const chosen = items.filter((item) => selection.has(item.id));
-      const signature = JSON.stringify([name, chosen.map((item) => item.id)]);
-      if (request.current?.signature !== signature) {
-        request.current = { signature, id: crypto.randomUUID() };
-      }
-      const subset = withItems(content, chosen);
-      setSaved(
-        await api<{ id: string; title: string }>(
-          `/sets?requestId=${request.current.id}`,
-          "POST",
-          { ...subset, title: name },
-        ),
-      );
+      const document = { ...withItems(content, chosen), title: name };
+      const { set, reused } = await saveStudySet(user.id, document);
+      if (reused) setMatch({ set, content: document });
+      else setSaved(set);
     } catch (e) {
       setError(e as Error);
     } finally {
@@ -116,12 +109,26 @@ export function ReviewSetDialog({
 
   return (
     <Dialog
-      title={saved ? "Review set saved" : "Create a review set"}
+      title={
+        saved
+          ? "Review set saved"
+          : match
+            ? "Review set already saved"
+            : "Create a review set"
+      }
       onClose={() => {
         if (!busy) onClose();
       }}
     >
-      {saved ? (
+      {match ? (
+        <ExistingSet
+          match={match}
+          onCopy={(copy) => {
+            setMatch(undefined);
+            setSaved(copy);
+          }}
+        />
+      ) : saved ? (
         <>
           <p role="status">
             <strong>{saved.title}</strong> is in your library.

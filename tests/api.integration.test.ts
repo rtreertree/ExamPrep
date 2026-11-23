@@ -104,6 +104,78 @@ describe.skipIf(!enabled)(
         b(`/sets/${anotherUser.value.id}`, "DELETE", { revision: 1 }),
       ]);
     });
+    it("reuses exact documents across independent requests while keeping explicit copies and retries distinct", async () => {
+      const content = { ...deck, title: "Concurrent " + randomUUID() };
+      const path = () => `/sets?requestId=${randomUUID()}`;
+      const save = path();
+      const reordered = Object.fromEntries(Object.entries(content).reverse());
+      const saves = await Promise.all([a(save, "POST", content), a(path(), "POST", reordered)]);
+      expect(saves.map(({ status }) => status).sort()).toEqual([200, 201]);
+      const original = saves[0].value.id;
+      expect(saves[1].value.id).toBe(original);
+      expect((await a(save, "POST", { ...content, title: "Changed" })).status).toBe(409);
+      await a(`/sets/${original}/organization`, "PATCH", { archived: true, course: "Previously studied" });
+      const archived = await a(path(), "POST", content);
+      expect(archived.headers.get("X-Study-Set-Reused")).toBe("1");
+      expect(archived.value).toMatchObject({ id: original, archived: true, course: "Previously studied" });
+
+      const makeCopy = path() + "&copy=1";
+      const copy = await a(makeCopy, "POST", content);
+      expect(copy.status).toBe(201);
+      expect(copy.value.id).not.toBe(original);
+      expect((await a(makeCopy, "POST", reordered)).value.id).toBe(copy.value.id);
+      expect((await a(path(), "POST", content)).value.id).toBe(copy.value.id);
+      const changed = await a(path(), "POST", { ...content, cards: [...content.cards].reverse() });
+      expect(changed.status).toBe(201);
+      const other = await b(path(), "POST", content);
+      expect(other.status).toBe(201);
+      await a(`/sets/${copy.value.id}`, "DELETE", { revision: 1 });
+      expect((await a(makeCopy, "POST", content)).status).toBe(404);
+      expect((await a(path(), "POST", content)).value.id).toBe(original);
+      await a(`/sets/${original}`, "DELETE", { revision: 1 });
+      await a(`/sets/${changed.value.id}`, "DELETE", { revision: 1 });
+      await b(`/sets/${other.value.id}`, "DELETE", { revision: 1 });
+    });
+
+    it("maps intentional copies one to one across backup exports and remembers restore outcomes after edits", async () => {
+      const content = { ...exam, title: "Backup matching " + randomUUID() };
+      const original = await a("/sets", "POST", content);
+      const copy = await a(`/sets?copy=1&requestId=${randomUUID()}`, "POST", content);
+      for (const set of [original, copy]) {
+        expect((await a(`/sets/${set.value.id}/attempts`, "POST", {})).status).toBe(201);
+      }
+      const exportPair = async () => {
+        const { value } = await a("/backup?history=1");
+        const ids = [original.value.id, copy.value.id];
+        value.library.folders = [];
+        value.library.sets = value.library.sets.filter(({ id }: { id: string }) => ids.includes(id))
+          .map((set: object) => ({ ...set, folderId: null, course: "" }));
+        value.history.attempts = value.history.attempts.filter(({ studySetId }: { studySetId: string }) => ids.includes(studySetId));
+        value.history.reviews = [];
+        delete value.history.viewerReviews;
+        return value;
+      };
+      const first = await exportPair();
+      const second = await exportPair();
+      expect((await b("/backup/preview", "POST", first)).value).toMatchObject({ setCount: 2, reusedSetCount: 0 });
+      expect((await b("/backup/restore", "POST", first)).value).toMatchObject({ setCount: 2, reusedSetCount: 0, attemptCount: 2 });
+      expect((await b("/backup/preview", "POST", second)).value).toMatchObject({ setCount: 0, reusedSetCount: 2 });
+      expect((await b("/backup/restore", "POST", second)).value).toMatchObject({ setCount: 0, reusedSetCount: 2, attemptCount: 2 });
+      const restored = (await b("/backup?history=1")).value;
+      const copies = restored.library.sets.filter((set: { content: { title: string } }) => set.content.title === content.title);
+      expect(copies).toHaveLength(2);
+      for (const set of copies) {
+        expect(restored.history.attempts.filter((attempt: { studySetId: string }) => attempt.studySetId === set.id)).toHaveLength(2);
+      }
+      await b(`/sets/${copies[0].id}`, "PUT", { revision: 1, content: { ...content, title: "Edited " + randomUUID() } });
+      expect((await b("/backup/restore", "POST", first)).value).toMatchObject({ setCount: 0, reusedSetCount: 2, attemptCount: 0 });
+      expect((await b(`/sets/${copies[0].id}`)).value.revision).toBe(2);
+      for (const set of copies)
+        await b(`/sets/${set.id}`, "DELETE", { revision: set.id === copies[0].id ? 2 : 1 });
+      for (const set of [original, copy])
+        await a(`/sets/${set.value.id}`, "DELETE", { revision: 1 });
+    });
+
     it("organizes study sets without changing snapshot revisions and duplicates their content independently", async () => {
       const original = {
         ...exam,
@@ -224,7 +296,7 @@ describe.skipIf(!enabled)(
     }
     it("saves a live viewer membership, isolates practice, and revokes each grant independently", async () => {
       const b = await newLearner();
-      const { value: set } = await a("/sets", "POST", deck);
+      const { value: set } = await a("/sets?copy=1", "POST", deck);
       const path = "/sets/" + set.id,
         guest = client();
       const { value: settings } = await a(path + "/sharing/link", "PUT", {
@@ -285,7 +357,7 @@ describe.skipIf(!enabled)(
     });
     it("round-trips private viewer review schedules without granting access to a deck", async () => {
       const viewer = await newLearner();
-      const { value: set } = await a("/sets", "POST", deck);
+      const { value: set } = await a("/sets?copy=1", "POST", deck);
       const path = `/sets/${set.id}`;
       const { value: settings } = await a(path + "/sharing/link", "PUT", {
         enabled: true,
@@ -398,13 +470,13 @@ describe.skipIf(!enabled)(
     it.each(["discover", "link", "both"] as const)(
       "converts a historical clone with %s access and preserves its private study data",
       async (grant) => {
-        const { value: source } = await a("/sets", "POST", deck);
+        const { value: source } = await a("/sets?copy=1", "POST", deck);
         const nonce = grant === "discover" ? null : randomUUID();
         if (nonce)
           await db!.studySetCopyLink.create({
             data: { studySetId: source.id, nonce },
           });
-        const { value: copy } = await b("/sets", "POST", deck);
+        const { value: copy } = await b("/sets?copy=1", "POST", deck);
         const user = (await b("/auth/get-session")).value.user;
         await db!.studySetCopyImport.create({
           data: {
@@ -494,11 +566,11 @@ describe.skipIf(!enabled)(
       45000,
     );
     it("retains changed or shared copies and refuses to remap a recorded missing original", async () => {
-      const { value: source } = await a("/sets", "POST", deck);
-      const { value: replacement } = await a("/sets", "POST", deck);
+      const { value: source } = await a("/sets?copy=1", "POST", deck);
+      const { value: replacement } = await a("/sets?copy=1", "POST", deck);
       const learner = (await b("/auth/get-session")).value.user;
       const recordedCopy = async (content: unknown) => {
-        const { value: clone } = await b("/sets", "POST", content);
+        const { value: clone } = await b("/sets?copy=1", "POST", content);
         await db!.studySetCopyImport.create({ data: { copyId: clone.id, userId: learner.id,
           linkNonce: "discover:" + source.id, requestId: randomUUID() } });
         return clone;
@@ -1093,7 +1165,7 @@ describe.skipIf(!enabled)(
     }, 60000);
 
     it("persists flashcard reveal/rating, validates early completion, and selects exactly Review again", async () => {
-      const set = (await a("/sets", "POST", deck)).value;
+      const set = (await a("/sets?copy=1", "POST", deck)).value;
       let attempt = (await a(`/sets/${set.id}/attempts`, "POST", {})).value;
       const path = `/attempts/${attempt.id}`;
       expect(
@@ -1557,7 +1629,11 @@ describe.skipIf(!enabled)(
           schemaVersion: 1,
           kind: "exam-prep-library",
           backupId: randomUUID(),
-          sets: [{ ...oldSet, course: legacyCourse }],
+          sets: [{
+            ...oldSet,
+            content: { ...oldSet.content, title: "Legacy backup " + randomUUID() },
+            course: legacyCourse,
+          }],
         };
         expect(
           (await b("/backup/restore", "POST", { library: legacy })).value

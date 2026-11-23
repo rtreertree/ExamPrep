@@ -103,7 +103,7 @@ The application remains **1.0.0** and study-set files still use **schemaVersion 
 - From a completed attempt, choose **Create review set** to save selected questions or cards to your library. Start with a selection preset, search by text or item number (such as `#12`), and use **Selected only** to check your choices. The copy uses the original attempt content and includes its answer key. Your responses and study notes stay with the attempt.
 - Choose **Print worksheet** from the library menu, the saved editor preview, or directly after saving a review set. Print prompts, solutions, or both. You can choose how many lines to leave for handwritten answers. Printing both puts the answer key on a new page. Use the browser print dialog to save a PDF.
 - Use Due review for per-deck spaced repetition. Only completed due sessions update the schedule. Edits to either side reset the changed card's schedule. Daily limits reset at midnight UTC, displayed in local time.
-- Use Account → Library backup to download study sets, folders, and manual order, and optionally a separate history file with attempts, private notes, and scheduled cards. Restore previews the pair, imports copies, and skips entries already restored from that backup. Individual study-set exports still contain only study content.
+- Use Account → Library backup to download study sets, folders, and manual order, and optionally a separate history file with attempts, private notes, and scheduled cards. Restore previews how many sets it will create or reuse. It preserves current library preferences when it reuses an exact primary-owned match. Individual study-set exports still contain only study content.
 
 ### Sharing and co-ownership
 
@@ -111,7 +111,7 @@ From a saved exam or flashcard deck, choose **Share and manage access** in its e
 
 Choose **Invite an editor** and invite a registered account by email to edit the same set together. The recipient accepts in **Your library**. Each owner has private library settings, practice history, notes, and review schedules. The primary owner manages access and can delete the original for everyone. Previous attempts stay in each person's History when access ends.
 
-Backups include sets you co-own and your own study data. Restore creates independently owned copies with sharing off. Practice history also backs up your review schedules for view-only decks. To restore those schedules, save the original decks in your library before restoring. Apply the study-set sharing migration before deploying the app update. After co-ownership is in use, fix regressions forward so owners retain access during recovery.
+Backups include sets you co-own and your own study data. Restore reuses exact primary-owned matches and creates private copies for other sets. Practice history also backs up your review schedules for view-only decks. To restore those schedules, save the original decks in your library before restoring. Apply the study-set sharing migration before deploying the app update. After co-ownership is in use, fix regressions forward so owners retain access during recovery.
 
 ### Password recovery
 

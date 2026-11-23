@@ -34,6 +34,8 @@ model User {
   invitations   StudySetInvitation[]
   copyImports   StudySetCopyImport[]
   libraryFolders LibraryFolder[]
+  setOperations StudySetOperation[]
+  backupRestores BackupSetRestore[]
 
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "user_name_search")
   @@index([email(ops: raw("gin_trgm_ops"))], type: Gin, map: "user_email_search")
@@ -121,6 +123,7 @@ model StudySet {
   kind          String
   published     Boolean      @default(false)
   content       Json
+  contentFingerprint String @default(dbgenerated())
   revision      Int          @default(1)
   course        String       @default("")
   folderId      String?
@@ -145,6 +148,7 @@ model StudySet {
   @@index([published, id])
   @@index([userId, id])
   @@index([userId, updatedAt])
+  @@index([userId, contentFingerprint])
   @@index([userId, archived, pinned, lastStudiedAt])
   @@index([userId, folderId, archived, manualRank])
 }
@@ -308,4 +312,29 @@ model CloneConversion {
 model LiveSetCutover {
   id Int @id
   completedAt DateTime?
+}
+
+model StudySetOperation {
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requestId String
+  operation String
+  inputIdentity String
+  setId String?
+  reused Boolean @default(false)
+
+  @@id([userId, requestId])
+}
+
+model BackupSetRestore {
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  backupId String
+  sourceId String
+  setId String
+  contentFingerprint String
+  destinationRevision Int
+
+  @@id([userId, backupId, sourceId])
+  @@unique([userId, backupId, setId])
 }
